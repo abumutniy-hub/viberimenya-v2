@@ -4,6 +4,7 @@ import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import { healthRoutes } from "./routes/health";
 import { publicRoutes } from "./routes/public";
+import { adminRoutes } from "./routes/admin";
 import { HttpError } from "./lib/http-error";
 
 export async function buildApi() {
@@ -29,6 +30,7 @@ export async function buildApi() {
 
   await app.register(healthRoutes);
   await app.register(publicRoutes);
+  await app.register(adminRoutes);
 
   app.setNotFoundHandler(async () => {
     return {

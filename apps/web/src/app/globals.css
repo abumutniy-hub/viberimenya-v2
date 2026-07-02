@@ -734,3 +734,254 @@ a {
 .carousel-note {
   display: none !important;
 }
+
+/* Step 8 — CRM admin */
+.admin-shell {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  min-height: 100vh;
+  background: #f4efe7;
+  color: #191716;
+}
+
+.admin-sidebar {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  padding: 22px;
+  border-right: 1px solid rgba(25, 23, 22, 0.12);
+  background: rgba(251, 248, 243, 0.88);
+}
+
+.admin-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 28px;
+}
+
+.admin-brand span {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border-radius: 15px;
+  color: #fff;
+  background: #191716;
+  font-weight: 900;
+}
+
+.admin-brand strong {
+  font-size: 24px;
+  letter-spacing: -0.04em;
+}
+
+.admin-nav {
+  display: grid;
+  gap: 8px;
+}
+
+.admin-nav a {
+  padding: 13px 14px;
+  border-radius: 16px;
+  color: #746b63;
+  font-weight: 800;
+}
+
+.admin-nav a:hover {
+  color: #191716;
+  background: #fffdf9;
+}
+
+.admin-content {
+  min-width: 0;
+  padding: 22px;
+}
+
+.admin-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 22px;
+  padding: 18px 22px;
+  border: 1px solid rgba(25, 23, 22, 0.12);
+  border-radius: 24px;
+  background: rgba(255, 253, 249, 0.78);
+}
+
+.admin-topbar span,
+.admin-page-head span {
+  display: block;
+  color: #746b63;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.admin-topbar strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 20px;
+}
+
+.admin-topbar a,
+.admin-panel-head a {
+  display: inline-flex;
+  padding: 11px 16px;
+  border-radius: 999px;
+  color: #fff;
+  background: #191716;
+  font-weight: 900;
+}
+
+.admin-page {
+  display: grid;
+  gap: 20px;
+}
+
+.admin-page-head {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 8px 4px;
+}
+
+.admin-page-head h1 {
+  margin: 4px 0 0;
+  font-size: clamp(36px, 5vw, 64px);
+  line-height: 0.95;
+  letter-spacing: -0.07em;
+}
+
+.admin-page-head p {
+  color: #746b63;
+  font-weight: 800;
+}
+
+.admin-metrics {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.admin-metrics div,
+.admin-panel {
+  border: 1px solid rgba(25, 23, 22, 0.12);
+  border-radius: 24px;
+  background: rgba(255, 253, 249, 0.78);
+  box-shadow: 0 20px 55px rgba(50, 39, 30, 0.05);
+}
+
+.admin-metrics div {
+  padding: 20px;
+}
+
+.admin-metrics span {
+  color: #746b63;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.admin-metrics strong {
+  display: block;
+  margin-top: 12px;
+  font-size: 38px;
+  letter-spacing: -0.06em;
+}
+
+.admin-panel {
+  overflow: hidden;
+}
+
+.admin-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px 20px;
+  border-bottom: 1px solid rgba(25, 23, 22, 0.08);
+}
+
+.admin-panel-head h2 {
+  margin: 0;
+  font-size: 22px;
+  letter-spacing: -0.04em;
+}
+
+.admin-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 760px;
+}
+
+.admin-table th,
+.admin-table td {
+  padding: 15px 18px;
+  border-bottom: 1px solid rgba(25, 23, 22, 0.08);
+  text-align: left;
+  vertical-align: top;
+  font-size: 14px;
+}
+
+.admin-table th {
+  color: #746b63;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.admin-table td {
+  color: #191716;
+}
+
+.admin-empty {
+  padding: 28px 20px;
+  color: #746b63;
+}
+
+@media (max-width: 940px) {
+  .admin-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-sidebar {
+    position: static;
+    height: auto;
+    padding: 14px;
+    border-right: 0;
+    border-bottom: 1px solid rgba(25, 23, 22, 0.12);
+  }
+
+  .admin-brand {
+    margin-bottom: 14px;
+  }
+
+  .admin-nav {
+    display: flex;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+
+  .admin-nav a {
+    white-space: nowrap;
+  }
+
+  .admin-content {
+    padding: 14px;
+  }
+
+  .admin-topbar,
+  .admin-page-head {
+    display: grid;
+  }
+
+  .admin-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
