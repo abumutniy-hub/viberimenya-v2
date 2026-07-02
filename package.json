@@ -1,0 +1,27 @@
+{
+  "name": "viberimenya-v2",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ВЫБЕРИ МЕНЯ v2 — интернет-магазин цветов, CRM, Telegram-бот и SaaS-ready платформа",
+  "scripts": {
+    "dev": "pnpm -r --parallel dev",
+    "build": "pnpm -r build",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "format": "prettier --write .",
+    "check": "pnpm lint && pnpm typecheck",
+    "db:generate": "pnpm --filter @viberimenya/db db:generate",
+    "db:migrate": "pnpm --filter @viberimenya/db db:migrate",
+    "db:studio": "pnpm --filter @viberimenya/db db:studio"
+  },
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=11.0.0"
+  },
+  "packageManager": "pnpm@11.9.0",
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.2"
+  }
+}

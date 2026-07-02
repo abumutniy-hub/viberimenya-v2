@@ -1,0 +1,15 @@
+{
+  "name": "@viberimenya/db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "echo \"db lint ok\"",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "db:generate": "echo \"DB schema will be added in Step 5\"",
+    "db:migrate": "echo \"DB migrations will be added in Step 5\"",
+    "db:studio": "echo \"DB studio will be added later\""
+  }
+}

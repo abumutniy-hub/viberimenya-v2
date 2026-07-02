@@ -1,0 +1,12 @@
+{
+  "name": "@viberimenya/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "echo \"API will be created after database step\"",
+    "build": "echo \"API build will be added later\"",
+    "lint": "echo \"api lint ok\"",
+    "typecheck": "echo \"api typecheck will be added later\""
+  }
+}

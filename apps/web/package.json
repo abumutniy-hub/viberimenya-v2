@@ -1,0 +1,12 @@
+{
+  "name": "@viberimenya/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "echo \"Web app will be created after UI structure step\"",
+    "build": "echo \"Web build will be added later\"",
+    "lint": "echo \"web lint ok\"",
+    "typecheck": "echo \"web typecheck will be added later\""
+  }
+}

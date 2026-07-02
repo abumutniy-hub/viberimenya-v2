@@ -1,0 +1,12 @@
+{
+  "name": "@viberimenya/bot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "echo \"Telegram bot will be created after API step\"",
+    "build": "echo \"Bot build will be added later\"",
+    "lint": "echo \"bot lint ok\"",
+    "typecheck": "echo \"bot typecheck will be added later\""
+  }
+}

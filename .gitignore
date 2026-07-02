@@ -1,0 +1,36 @@
+# dependencies
+node_modules
+.pnpm-store
+
+# builds
+.next
+dist
+build
+.turbo
+.cache
+coverage
+
+# env
+.env
+.env.*
+!.env.example
+
+# logs
+logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# system
+.DS_Store
+Thumbs.db
+
+# storage
+storage/uploads/*
+storage/private/*
+!storage/uploads/.gitkeep
+!storage/private/.gitkeep
+
+# backups
+backups/*
+!backups/.gitkeep
