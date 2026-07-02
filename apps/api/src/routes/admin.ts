@@ -281,6 +281,20 @@ export async function adminRoutes(app: FastifyInstance) {
         });
       }
 
+      if (order.status === "new") {
+        return reply.status(400).send({
+          ok: false,
+          message: "Сначала подтвердите заказ, затем отметьте оплату"
+        });
+      }
+
+      if (order.status === "cancelled") {
+        return reply.status(400).send({
+          ok: false,
+          message: "Отменённый заказ нельзя отметить оплаченным"
+        });
+      }
+
       if (!order.customer_id) {
         return reply.status(400).send({
           ok: false,
@@ -297,10 +311,6 @@ export async function adminRoutes(app: FastifyInstance) {
       await client`
         UPDATE orders
         SET payment_status = 'paid',
-            status = CASE
-              WHEN status = 'new' THEN 'confirmed'
-              ELSE status
-            END,
             bonus_earned = CASE
               WHEN bonus_earned > 0 THEN bonus_earned
               ELSE ${bonusAmount}

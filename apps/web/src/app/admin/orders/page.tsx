@@ -31,7 +31,18 @@ export default async function AdminOrdersPage() {
             { key: "delivery_date", label: "Дата доставки" },
             { key: "payment_status", label: "Оплата" },
             { key: "total_amount", label: "Сумма" },
-            { key: "created_at", label: "Создан", type: "date" }
+            { key: "created_at", label: "Создан", type: "date" },
+            {
+              key: "actions",
+              label: "Действия",
+              render: (row) => (
+                <OrderActions
+                  orderId={String(row.id)}
+                  status={String(row.status)}
+                  paymentStatus={String(row.payment_status)}
+                />
+              )
+            }
           ]}
         />
       </section>
