@@ -1,6 +1,12 @@
 export const dynamic = "force-dynamic";
 
+type Shop = {
+  name: string;
+};
+
 type ShopSettings = {
+  heroTitle?: string | null;
+  heroSubtitle?: string | null;
   phone?: string | null;
   whatsapp?: string | null;
   telegram?: string | null;
@@ -9,10 +15,24 @@ type ShopSettings = {
   workHours?: string | null;
 };
 
+type Category = {
+  id?: string;
+  slug: string;
+  name: string;
+  description?: string | null;
+};
+
 type HomeResponse = {
+  shop: Shop;
   settings: ShopSettings | null;
   sections: {
+    hero: {
+      title: string;
+      subtitle: string;
+    };
     occasions: string[];
+    categories: Category[];
+    featuredProducts: unknown[];
   };
 };
 
@@ -27,8 +47,19 @@ type DeliveryResponse = {
   }>;
   intervals: Array<{
     name: string;
+    startsAt: string;
+    endsAt: string;
   }>;
 };
+
+const fallbackCategories: Category[] = [
+  { slug: "bukety", name: "Букеты", description: "Готовые композиции для любого повода" },
+  { slug: "tsvety-po-shtuchno", name: "Цветы поштучно", description: "Соберите свой букет из любимых цветов" },
+  { slug: "korziny", name: "Корзины", description: "Объёмные композиции для особенных случаев" },
+  { slug: "podarki", name: "Подарки", description: "Дополнения к букету и приятные мелочи" },
+  { slug: "otkrytki", name: "Открытки", description: "Добавьте тёплые слова к заказу" },
+  { slug: "aktsii", name: "Акции", description: "Выгодные предложения и сезонные подборки" }
+];
 
 async function fetchJson<T>(path: string): Promise<T | null> {
   const baseUrl = process.env.API_INTERNAL_URL ?? "http://127.0.0.1:4001";
@@ -38,41 +69,15 @@ async function fetchJson<T>(path: string): Promise<T | null> {
       cache: "no-store"
     });
 
-    if (!response.ok) return null;
+    if (!response.ok) {
+      return null;
+    }
 
     return (await response.json()) as T;
   } catch {
     return null;
   }
 }
-
-const categories = [
-  "Букеты",
-  "Цветы поштучно",
-  "Корзины",
-  "Подарки",
-  "Открытки",
-  "Акции",
-  "Подписка на цветы",
-  "Подписка домой",
-  "Подписка в офис",
-  "Парфюм"
-];
-
-const previewCards = [
-  {
-    title: "Букеты",
-    text: "Свежие композиции для свидания, дня рождения и важных событий."
-  },
-  {
-    title: "Подарки",
-    text: "Дополнения к букету: открытки, наборы и приятные детали."
-  },
-  {
-    title: "Подписка",
-    text: "Регулярная доставка цветов домой, в офис или в подарок."
-  }
-];
 
 export default async function HomePage() {
   const [home, delivery] = await Promise.all([
@@ -81,120 +86,147 @@ export default async function HomePage() {
   ]);
 
   const settings = home?.settings ?? null;
+  const title = home?.sections.hero.title ?? "Цветы, которые говорят за вас";
+  const subtitle =
+    home?.sections.hero.subtitle ??
+    "Собираем стильные букеты, отправляем фото перед доставкой и бережно доставляем получателю.";
+  const categories =
+    home?.sections.categories && home.sections.categories.length > 0
+      ? home.sections.categories
+      : fallbackCategories;
   const occasions =
     home?.sections.occasions && home.sections.occasions.length > 0
       ? home.sections.occasions
       : ["Любимой", "Маме", "День рождения", "Без повода", "Свадьба", "Учителю"];
 
-  const zones = delivery?.zones ?? [];
+  const deliveryZones = delivery?.zones ?? [];
   const intervals = delivery?.intervals ?? [];
 
   return (
-    <main className="site">
-      <header className="header">
-        <a href="/" className="logo" aria-label="Выбери Меня">
-          <span className="logo-icon">🌿</span>
+    <main className="page-shell">
+      <header className="topbar">
+        <a href="/" className="brand" aria-label="ВЫБЕРИ МЕНЯ">
+          <span className="brand-mark">ВМ</span>
           <span>
-            <strong>Выбери Меня</strong>
-            <small>Flowers & Gifts</small>
+            <strong>ВЫБЕРИ МЕНЯ</strong>
+            <small>цветы с доставкой</small>
           </span>
         </a>
 
-        <nav className="nav" aria-label="Главное меню">
+        <nav className="desktop-nav" aria-label="Основное меню">
           <a href="#catalog">Каталог</a>
-          <a href="#subscription">Подписка</a>
           <a href="#delivery">Доставка</a>
+          <a href="#process">Как заказать</a>
           <a href="#contacts">Контакты</a>
         </nav>
 
-        <div className="header-actions">
-          <a href="/cart" className="light-button">Корзина</a>
-          <a href="/account" className="dark-button">Кабинет</a>
-        </div>
+        <a className="topbar-cta" href="/catalog">
+          Выбрать букет
+        </a>
       </header>
 
       <section className="hero">
-        <div className="hero-text">
-          <span className="pill">Москва и Московская область</span>
-          <h1>Цветы, которые хочется выбрать</h1>
-          <p>
-            Премиальные букеты, подарки и цветочные подписки с доставкой в удобный день.
-          </p>
+        <div className="hero-copy">
+          <div className="eyebrow">Цветочная мастерская</div>
+          <h1>{title}</h1>
+          <p>{subtitle}</p>
 
           <div className="hero-actions">
-            <a href="/catalog" className="dark-button big">Выбрать букет</a>
-            <a href="#subscription" className="light-button big">Оформить подписку</a>
+            <a className="primary-button" href="/catalog">
+              Перейти в каталог
+            </a>
+            <a className="secondary-button" href="#delivery">
+              Условия доставки
+            </a>
+          </div>
+
+          <div className="hero-points" aria-label="Преимущества">
+            <span>Фото букета перед доставкой</span>
+            <span>Свежая сборка</span>
+            <span>Удобные интервалы</span>
           </div>
         </div>
 
-        <div className="hero-visual" aria-label="Букет">
-          <div className="photo-badge top">Фото букета перед доставкой</div>
-          <div className="flower-card">
-            <span className="stem stem-one" />
-            <span className="stem stem-two" />
-            <span className="stem stem-three" />
-            <span className="minimal-flower f1" />
-            <span className="minimal-flower f2" />
-            <span className="minimal-flower f3" />
-            <span className="minimal-flower f4" />
-            <span className="minimal-flower f5" />
+        <div className="hero-card" aria-label="Витрина букета">
+          <div className="bouquet-visual">
+            <span className="flower flower-one" />
+            <span className="flower flower-two" />
+            <span className="flower flower-three" />
+            <span className="flower flower-four" />
+            <span className="flower flower-five" />
           </div>
-          <div className="photo-badge bottom">Доставка сегодня по Москве и МО</div>
+          <div className="hero-card-info">
+            <strong>Букет дня</strong>
+            <span>Нежная сезонная композиция</span>
+          </div>
+        </div>
+      </section>
+
+      <section className="section">
+        <div className="section-heading">
+          <span>Быстрый выбор</span>
+          <h2>Подберите букет по поводу</h2>
+        </div>
+
+        <div className="occasion-grid">
+          {occasions.map((occasion) => (
+            <a key={occasion} href={`/catalog?occasion=${encodeURIComponent(occasion)}`}>
+              {occasion}
+            </a>
+          ))}
         </div>
       </section>
 
       <section id="catalog" className="section">
-        <div className="section-kicker">Popular</div>
-        <div className="section-head">
-          <h2>Популярные разделы</h2>
-          <a href="/catalog">Открыть каталог</a>
+        <div className="section-heading">
+          <span>Каталог</span>
+          <h2>Основные разделы</h2>
+          <p>Категории можно будет редактировать из CRM.</p>
         </div>
 
-        <div className="category-pills">
+        <div className="category-grid">
           {categories.map((category) => (
-            <a key={category} href={`/catalog?category=${encodeURIComponent(category)}`}>
-              {category}
+            <a className="category-card" key={category.slug} href={`/catalog?category=${category.slug}`}>
+              <span className="category-icon">✦</span>
+              <strong>{category.name}</strong>
+              <small>{category.description ?? "Подборка букетов и композиций"}</small>
             </a>
           ))}
         </div>
-
-        <div className="preview-grid">
-          {previewCards.map((card) => (
-            <article key={card.title} className="preview-card">
-              <div className="preview-image" />
-              <div className="preview-body">
-                <span>Раздел</span>
-                <h3>{card.title}</h3>
-                <p>{card.text}</p>
-                <a href="/catalog">Открыть</a>
-              </div>
-            </article>
-          ))}
-        </div>
       </section>
 
-      <section id="subscription" className="section split">
-        <div>
-          <div className="section-kicker">Subscription</div>
-          <h2>Цветочная подписка без лишних действий</h2>
-        </div>
-        <div className="text-panel">
+      <section className="section product-preview">
+        <div className="section-heading">
+          <span>Витрина</span>
+          <h2>Хиты продаж появятся из CRM</h2>
           <p>
-            Клиент выбирает периодичность, стиль букета и адрес. CRM будет сама вести такие заказы:
-            напоминания, даты, интервалы и статусы.
+            Сейчас мы подготовили место для карточек товаров. После добавления букетов в CRM они появятся
+            здесь автоматически.
           </p>
-          <a href="/catalog">Скоро подключим в CRM</a>
+        </div>
+
+        <div className="empty-product-card">
+          <div>
+            <strong>Следующий шаг</strong>
+            <p>Добавим админку, каталог, фото, цены и остатки без тестового мусора.</p>
+          </div>
+          <a href="/catalog">Открыть будущий каталог</a>
         </div>
       </section>
 
-      <section id="delivery" className="section split">
+      <section id="delivery" className="section split-section">
         <div>
-          <div className="section-kicker">Delivery</div>
-          <h2>Доставка сегодня и удобные интервалы</h2>
+          <div className="section-heading">
+            <span>Доставка</span>
+            <h2>Удобные зоны и интервалы</h2>
+            <p>
+              Доставка уже заложена в базе: зоны, стоимость, бесплатная доставка от суммы и срочный тариф.
+            </p>
+          </div>
         </div>
 
-        <div className="delivery-box">
-          {zones.map((zone) => (
+        <div className="delivery-panel">
+          {deliveryZones.map((zone) => (
             <div className="delivery-row" key={zone.name}>
               <div>
                 <strong>{zone.name}</strong>
@@ -212,53 +244,81 @@ export default async function HomePage() {
         </div>
       </section>
 
-      <section className="section process">
-        <div className="section-kicker">Process</div>
-        <h2>Как проходит заказ</h2>
+      <section id="process" className="section">
+        <div className="section-heading">
+          <span>Как проходит заказ</span>
+          <h2>Прозрачно для клиента и удобно для команды</h2>
+        </div>
 
-        <div className="process-grid">
+        <div className="steps-grid">
           <div>
             <span>01</span>
-            <strong>Выбор</strong>
+            <strong>Выбор букета</strong>
             <p>Клиент выбирает букет, дату, интервал и способ связи.</p>
           </div>
           <div>
             <span>02</span>
             <strong>Подтверждение</strong>
-            <p>Менеджер проверяет детали и переводит заказ в работу.</p>
+            <p>Менеджер проверяет заказ и согласовывает детали.</p>
           </div>
           <div>
             <span>03</span>
             <strong>Сборка</strong>
-            <p>Флорист собирает букет и добавляет фото перед доставкой.</p>
+            <p>Флорист собирает букет и прикладывает фото перед доставкой.</p>
           </div>
           <div>
             <span>04</span>
             <strong>Доставка</strong>
-            <p>Курьер видит маршрут, адрес, телефон и меняет статус.</p>
+            <p>Курьер видит маршрут, адрес, время и меняет статус заказа.</p>
           </div>
         </div>
       </section>
 
+      <section className="section trust-section">
+        <div>
+          <span>CRM-ready</span>
+          <h2>Сайт уже связан с будущей CRM</h2>
+        </div>
+        <p>
+          Главная, каталог, доставка, заказы, сотрудники, бонусы, отзывы и Telegram-бот будут работать на
+          одной базе данных.
+        </p>
+      </section>
+
       <footer id="contacts" className="footer">
         <div>
-          <strong>Выбери Меня</strong>
-          <p>Цветы, подарки и CRM для аккуратной работы с каждым заказом.</p>
+          <strong>ВЫБЕРИ МЕНЯ</strong>
+          <p>Цветы с доставкой и заботой о каждом заказе.</p>
         </div>
 
-        <div className="footer-info">
-          <span>{settings?.phone || "Телефон добавим в CRM"}</span>
-          <span>{settings?.address || "Адрес добавим в CRM"}</span>
-          <span>{settings?.workHours || "График добавим в CRM"}</span>
+        <div className="footer-contacts">
+          {settings?.phone ? <span>{settings.phone}</span> : <span>Телефон добавим в CRM</span>}
+          {settings?.address ? <span>{settings.address}</span> : <span>Адрес добавим в CRM</span>}
+          {settings?.workHours ? <span>{settings.workHours}</span> : <span>График добавим в CRM</span>}
         </div>
       </footer>
 
       <nav className="mobile-tabbar" aria-label="Мобильное меню">
-        <a href="/">Главная</a>
-        <a href="/catalog">Каталог</a>
-        <a href="/cart">Корзина</a>
-        <a href="/orders">Заказы</a>
-        <a href="/account">Профиль</a>
+        <a href="/">
+          <span>🏠</span>
+          Главная
+        </a>
+        <a href="/catalog">
+          <span>🌸</span>
+          Каталог
+        </a>
+        <a href="/cart">
+          <span>🛒</span>
+          Корзина
+        </a>
+        <a href="/orders">
+          <span>📦</span>
+          Заказы
+        </a>
+        <a href="/account">
+          <span>👤</span>
+          Профиль
+        </a>
       </nav>
     </main>
   );
