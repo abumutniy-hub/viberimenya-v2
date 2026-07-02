@@ -521,7 +521,7 @@ export async function publicRoutes(app: FastifyInstance) {
       `;
 
       const orders = await client`
-        SELECT order_number, status, payment_status, total, bonus_spent, bonus_earned, created_at
+        SELECT order_number, status, payment_status, total, bonus_spent, bonus_earned, tracking_token, created_at
         FROM orders
         WHERE customer_id = ${session.customer_id}
         ORDER BY created_at DESC

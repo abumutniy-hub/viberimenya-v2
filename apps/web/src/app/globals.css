@@ -2177,3 +2177,15 @@ button.dark-button,
     flex-direction: column;
   }
 }
+
+/* Step 12.1G — order tracking links in account */
+.account-order-link {
+  color: #3f2b21;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.account-order-link:hover {
+  text-decoration: underline;
+}
+

@@ -20,6 +20,7 @@ type Order = {
   total: number;
   bonus_spent: number;
   bonus_earned: number;
+  tracking_token: string | null;
   created_at: string;
 };
 
@@ -268,7 +269,13 @@ export function AccountClient() {
             {orders.map((order) => (
               <article key={order.order_number} className="account-list-item">
                 <div>
-                  <strong>{order.order_number}</strong>
+                  {order.tracking_token ? (
+                    <a href={`/order/track/${order.tracking_token}`} className="account-order-link">
+                      {order.order_number}
+                    </a>
+                  ) : (
+                    <strong>{order.order_number}</strong>
+                  )}
                   <span>{dateText(order.created_at)}</span>
                 </div>
 
