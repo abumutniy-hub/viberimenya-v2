@@ -202,8 +202,7 @@ export default async function HomePage() {
           <span>Витрина</span>
           <h2>Букеты для особенных моментов</h2>
           <p>
-            Сейчас мы подготовили место для карточек товаров. После добавления букетов в CRM они появятся
-            здесь автоматически.
+            Нежные композиции, подарки и цветы для случаев, когда хочется сказать больше, чем словами.
           </p>
         </div>
 
@@ -250,12 +249,11 @@ export default async function HomePage() {
 
       <section className="section trust-section">
         <div>
-          <span>CRM-ready</span>
+          <span>Заботливый сервис</span>
           <h2>Каждый заказ проходит аккуратный путь</h2>
         </div>
         <p>
-          Главная, каталог, доставка, заказы, сотрудники, бонусы, отзывы и Telegram-бот будут работать на
-          одной базе данных.
+          От выбора букета до доставки: подтверждение, сборка, фото перед отправкой и понятный статус заказа.
         </p>
       </section>
 
@@ -273,28 +271,6 @@ export default async function HomePage() {
         </div>
       </footer>
 
-      <nav className="mobile-tabbar" aria-label="Мобильное меню">
-        <a href="/">
-          <span>🏠</span>
-          Главная
-        </a>
-        <a href="/catalog">
-          <span>🌸</span>
-          Каталог
-        </a>
-        <a href="/cart">
-          <span>🛒</span>
-          Корзина
-        </a>
-        <a href="/orders">
-          <span>📦</span>
-          Заказы
-        </a>
-        <a href="/account">
-          <span>👤</span>
-          Профиль
-        </a>
-      </nav>
     </main>
   );
 }

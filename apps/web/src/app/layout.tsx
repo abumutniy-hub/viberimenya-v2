@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import { MobileTabbar } from "./components/mobile-tabbar";
 
 export const metadata: Metadata = {
   title: "ВЫБЕРИ МЕНЯ — цветы с доставкой",
@@ -19,7 +20,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="ru">
-      <body>{children}</body>
+      <body>{children}<MobileTabbar /></body>
     </html>
   );
 }

@@ -83,8 +83,7 @@ export default async function CatalogPage({ searchParams }: CatalogPageProps) {
           <span>Каталог</span>
           <h1>Букеты и подарки</h1>
           <p>
-            Выберите композицию под повод, настроение и получателя. Товары добавляются и обновляются
-            через CRM.
+            Выберите композицию под повод, настроение и получателя. Выберите композицию под повод, настроение и получателя.
           </p>
         </div>
       </section>
@@ -140,9 +139,9 @@ export default async function CatalogPage({ searchParams }: CatalogPageProps) {
             </div>
           ) : (
             <div className="catalog-empty">
-              <h3>В этом разделе пока нет товаров</h3>
-              <p>Добавьте товары в CRM — они автоматически появятся здесь.</p>
-              <a href="/admin/catalog">Открыть CRM</a>
+              <h3>В этом разделе скоро появятся товары</h3>
+              <p>Скоро здесь появятся новые композиции и подарочные позиции.</p>
+              <a href="/">Вернуться на главную</a>
             </div>
           )}
         </section>
