@@ -66,6 +66,40 @@ function calculateDiscount(params: {
   return Math.min(params.subtotal, params.discountValue);
 }
 
+const CUSTOMER_SESSION_COOKIE = "vm_customer_session";
+
+function createLoginCode() {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+function createSessionToken() {
+  return crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
+}
+
+function getCookieValue(cookieHeader: string | undefined, name: string) {
+  if (!cookieHeader) return "";
+
+  const parts = cookieHeader.split(";").map((item) => item.trim());
+
+  for (const part of parts) {
+    const [key, ...rest] = part.split("=");
+
+    if (key === name) {
+      return decodeURIComponent(rest.join("="));
+    }
+  }
+
+  return "";
+}
+
+function buildCustomerSessionCookie(token: string) {
+  return `${CUSTOMER_SESSION_COOKIE}=${encodeURIComponent(token)}; HttpOnly; Path=/; SameSite=Lax; Max-Age=2592000`;
+}
+
+function clearCustomerSessionCookie() {
+  return `${CUSTOMER_SESSION_COOKIE}=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0`;
+}
+
 
 
 async function getShopContext() {
@@ -251,6 +285,292 @@ export async function publicRoutes(app: FastifyInstance) {
       await client.end();
     }
   });
+
+  app.post("/api/public/account/request-code", async (request, reply) => {
+    const schema = z.object({
+      phone: z.string().min(5),
+      name: z.string().optional().default("")
+    });
+
+    const body = schema.parse(request.body ?? {});
+    const phone = body.phone.trim();
+    const { client } = createDb();
+
+    try {
+      const shopRows = await client<{ id: string }[]>`
+        SELECT id
+        FROM shops
+        WHERE slug = ${env.DEFAULT_SHOP_SLUG}
+        LIMIT 1
+      `;
+
+      const shop = shopRows[0];
+
+      if (!shop) {
+        throw new HttpError(404, "Shop not found");
+      }
+
+      const customerRows = await client<{ id: string }[]>`
+        SELECT id
+        FROM customers
+        WHERE shop_id = ${shop.id}
+          AND phone = ${phone}
+        LIMIT 1
+      `;
+
+      const customer = customerRows[0];
+
+      if (!customer) {
+        return reply.status(404).send({
+          ok: false,
+          message: "Клиент с таким телефоном не найден. Оформите первый заказ или проверьте номер."
+        });
+      }
+
+      const code = createLoginCode();
+
+      await client`
+        INSERT INTO customer_login_codes (
+          shop_id,
+          customer_id,
+          phone,
+          code,
+          expires_at,
+          created_at
+        )
+        VALUES (
+          ${shop.id},
+          ${customer.id},
+          ${phone},
+          ${code},
+          NOW() + INTERVAL '10 minutes',
+          NOW()
+        )
+      `;
+
+      console.log(`[account-login] phone=${phone} code=${code}`);
+
+      return {
+        ok: true,
+        message: "Код подтверждения создан"
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.post("/api/public/account/verify-code", async (request, reply) => {
+    const schema = z.object({
+      phone: z.string().min(5),
+      code: z.string().min(4).max(12)
+    });
+
+    const body = schema.parse(request.body ?? {});
+    const phone = body.phone.trim();
+    const code = body.code.trim();
+    const { client } = createDb();
+
+    try {
+      const shopRows = await client<{ id: string }[]>`
+        SELECT id
+        FROM shops
+        WHERE slug = ${env.DEFAULT_SHOP_SLUG}
+        LIMIT 1
+      `;
+
+      const shop = shopRows[0];
+
+      if (!shop) {
+        throw new HttpError(404, "Shop not found");
+      }
+
+      const loginRows = await client<{
+        id: string;
+        customer_id: string;
+        code: string;
+        attempts: number;
+      }[]>`
+        SELECT id, customer_id, code, attempts
+        FROM customer_login_codes
+        WHERE shop_id = ${shop.id}
+          AND phone = ${phone}
+          AND consumed_at IS NULL
+          AND expires_at > NOW()
+        ORDER BY created_at DESC
+        LIMIT 1
+      `;
+
+      const login = loginRows[0];
+
+      if (!login) {
+        return reply.status(400).send({
+          ok: false,
+          message: "Код не найден или срок действия истёк"
+        });
+      }
+
+      if (Number(login.attempts) >= 5) {
+        return reply.status(400).send({
+          ok: false,
+          message: "Слишком много попыток. Запросите новый код."
+        });
+      }
+
+      if (login.code !== code) {
+        await client`
+          UPDATE customer_login_codes
+          SET attempts = attempts + 1
+          WHERE id = ${login.id}
+        `;
+
+        return reply.status(400).send({
+          ok: false,
+          message: "Неверный код"
+        });
+      }
+
+      const token = createSessionToken();
+
+      await client`
+        UPDATE customer_login_codes
+        SET consumed_at = NOW()
+        WHERE id = ${login.id}
+      `;
+
+      await client`
+        INSERT INTO customer_sessions (
+          shop_id,
+          customer_id,
+          token,
+          user_agent,
+          expires_at,
+          last_seen_at,
+          created_at
+        )
+        VALUES (
+          ${shop.id},
+          ${login.customer_id},
+          ${token},
+          ${String(request.headers["user-agent"] ?? "")},
+          NOW() + INTERVAL '30 days',
+          NOW(),
+          NOW()
+        )
+      `;
+
+      const customerRows = await client`
+        SELECT id, phone, name, email, bonus_balance, total_orders, total_spent, last_order_at
+        FROM customers
+        WHERE id = ${login.customer_id}
+        LIMIT 1
+      `;
+
+      reply.header("Set-Cookie", buildCustomerSessionCookie(token));
+
+      return {
+        ok: true,
+        customer: customerRows[0]
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.get("/api/public/account/me", async (request, reply) => {
+    const token = getCookieValue(request.headers.cookie, CUSTOMER_SESSION_COOKIE);
+
+    if (!token) {
+      return reply.status(401).send({
+        ok: false,
+        message: "Требуется вход"
+      });
+    }
+
+    const { client } = createDb();
+
+    try {
+      const sessionRows = await client<{ customer_id: string }[]>`
+        SELECT customer_id
+        FROM customer_sessions
+        WHERE token = ${token}
+          AND revoked_at IS NULL
+          AND expires_at > NOW()
+        LIMIT 1
+      `;
+
+      const session = sessionRows[0];
+
+      if (!session) {
+        return reply.status(401).send({
+          ok: false,
+          message: "Сессия истекла"
+        });
+      }
+
+      await client`
+        UPDATE customer_sessions
+        SET last_seen_at = NOW()
+        WHERE token = ${token}
+      `;
+
+      const customerRows = await client`
+        SELECT id, phone, name, email, telegram_username, bonus_balance, total_orders, total_spent, last_order_at
+        FROM customers
+        WHERE id = ${session.customer_id}
+        LIMIT 1
+      `;
+
+      const orders = await client`
+        SELECT order_number, status, payment_status, total, bonus_spent, bonus_earned, created_at
+        FROM orders
+        WHERE customer_id = ${session.customer_id}
+        ORDER BY created_at DESC
+        LIMIT 20
+      `;
+
+      const bonuses = await client`
+        SELECT type, amount, balance_after, comment, created_at
+        FROM bonus_transactions
+        WHERE customer_id = ${session.customer_id}
+        ORDER BY created_at DESC
+        LIMIT 20
+      `;
+
+      return {
+        ok: true,
+        customer: customerRows[0],
+        orders,
+        bonuses
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.post("/api/public/account/logout", async (request, reply) => {
+    const token = getCookieValue(request.headers.cookie, CUSTOMER_SESSION_COOKIE);
+
+    if (token) {
+      const { client } = createDb();
+
+      try {
+        await client`
+          UPDATE customer_sessions
+          SET revoked_at = NOW()
+          WHERE token = ${token}
+        `;
+      } finally {
+        await client.end();
+      }
+    }
+
+    reply.header("Set-Cookie", clearCustomerSessionCookie());
+
+    return {
+      ok: true
+    };
+  });
+
 
   app.post("/api/public/bonus/check", async (_request, reply) => {
     return reply.status(403).send({

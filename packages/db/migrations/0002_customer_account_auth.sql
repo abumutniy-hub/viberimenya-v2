@@ -33,3 +33,6 @@ CREATE INDEX IF NOT EXISTS customer_sessions_customer_idx
 
 CREATE INDEX IF NOT EXISTS customer_sessions_token_idx
   ON customer_sessions (token);
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON customer_login_codes TO viberimenya_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON customer_sessions TO viberimenya_app;
