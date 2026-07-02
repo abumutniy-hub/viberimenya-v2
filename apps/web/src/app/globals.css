@@ -2012,3 +2012,34 @@ button.dark-button,
     grid-template-columns: 1fr;
   }
 }
+
+/* Step 11.9E — logged-in bonus spending in cart */
+.bonus-discount {
+  color: #6d4f2d;
+}
+
+.bonus-box > div {
+  display: grid;
+  gap: 4px;
+}
+
+.bonus-box strong {
+  font-size: 14px;
+}
+
+.bonus-box p {
+  margin: 0;
+}
+
+.bonus-login-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 12px 16px;
+  background: #3f2b21;
+  color: #fff;
+  text-decoration: none;
+  font-size: 14px;
+}
+

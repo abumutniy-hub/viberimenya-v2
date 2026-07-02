@@ -15,6 +15,13 @@ type DeliveryData = {
   intervals: Array<{ id: string; name: string }>;
 };
 
+type AccountCustomer = {
+  id: string;
+  phone: string;
+  name: string | null;
+  bonus_balance: number;
+};
+
 function money(value: number) {
   return `${Number(value || 0).toLocaleString("ru-RU")} ₽`;
 }
@@ -40,6 +47,12 @@ export function CartClient() {
   const [promoCode, setPromoCode] = useState("");
   const [promoMessage, setPromoMessage] = useState("");
   const [discountTotal, setDiscountTotal] = useState(0);
+  const [account, setAccount] = useState<AccountCustomer | null>(null);
+  const [customerName, setCustomerName] = useState("");
+  const [customerPhone, setCustomerPhone] = useState("");
+  const [bonusBalance, setBonusBalance] = useState(0);
+  const [bonusToSpend, setBonusToSpend] = useState(0);
+  const [bonusMessage, setBonusMessage] = useState("");
   const [success, setSuccess] = useState<{ orderNumber: string; totalAmount: number } | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -57,7 +70,8 @@ export function CartClient() {
   );
 
   const deliveryPrice = Number(delivery.zones.find((zone) => zone.id === zoneId)?.price ?? 0);
-  const total = Math.max(0, subtotal + deliveryPrice - discountTotal);
+  const amountBeforeBonus = Math.max(0, subtotal + deliveryPrice - discountTotal);
+  const total = Math.max(0, amountBeforeBonus - bonusToSpend);
 
   function updateQty(productId: string, quantity: number) {
     const next = items
@@ -107,6 +121,57 @@ export function CartClient() {
     } catch {
       setDiscountTotal(0);
       setPromoMessage("Не удалось проверить промокод");
+    }
+  }
+
+
+  async function checkBonus() {
+    if (!account) {
+      setBonusMessage("Войдите в личный кабинет, чтобы использовать бонусы");
+      return;
+    }
+
+    if (customerPhone.trim() !== account.phone) {
+      setBonusToSpend(0);
+      setBonusMessage("Для списания бонусов укажите телефон из личного кабинета");
+      return;
+    }
+
+    if (amountBeforeBonus <= 0) {
+      setBonusMessage("Сначала добавьте товары в корзину");
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/public/bonus/check", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ amount: amountBeforeBonus })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.ok) {
+        setBonusToSpend(0);
+        setBonusMessage(data?.message || "Не удалось проверить бонусы");
+        return;
+      }
+
+      const balance = Number(data.bonus.balance || 0);
+      const maxSpend = Number(data.bonus.maxSpend || 0);
+
+      setBonusBalance(balance);
+      setBonusToSpend(maxSpend);
+
+      if (maxSpend > 0) {
+        setBonusMessage(`Будет списано ${money(maxSpend)}`);
+      } else {
+        setBonusMessage("Доступных бонусов для списания пока нет");
+      }
+    } catch {
+      setBonusToSpend(0);
+      setBonusMessage("Не удалось проверить бонусы");
     }
   }
 
