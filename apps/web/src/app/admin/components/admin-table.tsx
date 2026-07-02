@@ -1,9 +1,11 @@
+import type { ReactNode } from "react";
 import { displayDate, displayValue, type AdminRow } from "../lib/admin-api";
 
 type Column = {
   key: string;
   label: string;
   type?: "date";
+  render?: (row: AdminRow) => ReactNode;
 };
 
 export function AdminTable({
@@ -34,7 +36,11 @@ export function AdminTable({
             <tr key={String(row.id ?? index)}>
               {columns.map((column) => (
                 <td key={column.key}>
-                  {column.type === "date" ? displayDate(row[column.key]) : displayValue(row[column.key])}
+                  {column.render
+                    ? column.render(row)
+                    : column.type === "date"
+                      ? displayDate(row[column.key])
+                      : displayValue(row[column.key])}
                 </td>
               ))}
             </tr>

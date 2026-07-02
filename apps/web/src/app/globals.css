@@ -1821,3 +1821,34 @@ button.dark-button,
     grid-template-columns: 1fr;
   }
 }
+
+/* Step 11.6I — admin order actions */
+.admin-action-button,
+.admin-paid-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 8px 13px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.admin-action-button {
+  border: 0;
+  color: #fff;
+  background: #191716;
+  cursor: pointer;
+}
+
+.admin-action-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.admin-paid-badge {
+  color: #3f6d3a;
+  background: rgba(91, 133, 76, 0.14);
+}

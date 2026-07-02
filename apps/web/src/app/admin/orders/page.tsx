@@ -1,5 +1,6 @@
 import { AdminTable } from "../components/admin-table";
 import { fetchAdmin, type AdminRow } from "../lib/admin-api";
+import { OrderActions } from "./order-actions";
 
 export const dynamic = "force-dynamic";
 
