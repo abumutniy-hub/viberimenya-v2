@@ -1,11 +1,11 @@
-export default function Page() {
+import { CartClient } from "./components/cart-client";
+
+export const dynamic = "force-dynamic";
+
+export default function CartPage() {
   return (
-    <main className="simple-page">
-      <section className="simple-card">
-        <h1>Корзина</h1>
-        <p>Здесь будут выбранные букеты, дата доставки, адрес получателя и детали заказа.</p>
-        <a href="/catalog">Перейти в каталог</a>
-      </section>
+    <main className="cart-page">
+      <CartClient />
     </main>
   );
 }

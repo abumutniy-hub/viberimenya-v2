@@ -1,3 +1,4 @@
+import { AddToCartButton } from "../../components/add-to-cart-button";
 export const dynamic = "force-dynamic";
 
 type Product = {
@@ -82,7 +83,7 @@ export default async function ProductPage({ params }: ProductPageProps) {
           <div className="product-price">{money(product.price)}</div>
 
           <div className="product-actions">
-            <a href="/cart" className="dark-button">Добавить в корзину</a>
+            <AddToCartButton product={{ id: product.id, slug: product.slug, name: product.name, price: product.price }} />
             <a href="/catalog" className="light-button">Продолжить выбор</a>
           </div>
 
