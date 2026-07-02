@@ -572,11 +572,81 @@ export async function publicRoutes(app: FastifyInstance) {
   });
 
 
-  app.post("/api/public/bonus/check", async (_request, reply) => {
-    return reply.status(403).send({
-      ok: false,
-      message: "Бонусы доступны только после подтверждения телефона в личном кабинете"
+  app.post("/api/public/bonus/check", async (request, reply) => {
+    const schema = z.object({
+      amount: z.coerce.number().int().min(0)
     });
+
+    const body = schema.parse(request.body ?? {});
+    const token = getCookieValue(request.headers.cookie, CUSTOMER_SESSION_COOKIE);
+
+    if (!token) {
+      return reply.status(401).send({
+        ok: false,
+        message: "Войдите в личный кабинет, чтобы использовать бонусы"
+      });
+    }
+
+    const { client } = createDb();
+
+    try {
+      const sessionRows = await client<{ customer_id: string }[]>`
+        SELECT customer_id
+        FROM customer_sessions
+        WHERE token = ${token}
+          AND revoked_at IS NULL
+          AND expires_at > NOW()
+        LIMIT 1
+      `;
+
+      const session = sessionRows[0];
+
+      if (!session) {
+        return reply.status(401).send({
+          ok: false,
+          message: "Сессия истекла. Войдите снова."
+        });
+      }
+
+      const customerRows = await client<{
+        id: string;
+        phone: string;
+        name: string | null;
+        bonus_balance: number;
+      }[]>`
+        SELECT id, phone, name, bonus_balance
+        FROM customers
+        WHERE id = ${session.customer_id}
+        LIMIT 1
+      `;
+
+      const customer = customerRows[0];
+
+      if (!customer) {
+        return reply.status(404).send({
+          ok: false,
+          message: "Покупатель не найден"
+        });
+      }
+
+      const balance = Number(customer.bonus_balance || 0);
+      const maxSpend = Math.min(balance, Math.floor(body.amount * 0.3), body.amount);
+
+      return {
+        ok: true,
+        customer: {
+          id: customer.id,
+          phone: customer.phone,
+          name: customer.name
+        },
+        bonus: {
+          balance,
+          maxSpend
+        }
+      };
+    } finally {
+      await client.end();
+    }
   });
 
   app.post("/api/public/promocodes/check", async (request, reply) => {
@@ -779,8 +849,8 @@ export async function publicRoutes(app: FastifyInstance) {
       }
 
       const amountBeforeBonus = Math.max(0, subtotalAmount + deliveryPrice - discountTotal);
-      const bonusSpent = 0;
-      const totalAmount = amountBeforeBonus;
+      let bonusSpent = 0;
+      let totalAmount = amountBeforeBonus;
       const orderNumber = createOrderNumber();
       const trackingToken = createTrackingToken();
 
@@ -816,6 +886,44 @@ export async function publicRoutes(app: FastifyInstance) {
 
       if (!customer?.id) {
         throw new HttpError(500, "Customer was not created");
+      }
+
+      const requestedBonusSpend = Math.max(0, Math.floor(Number(body.bonusToSpend || 0)));
+
+      if (requestedBonusSpend > 0) {
+        const token = getCookieValue(request.headers.cookie, CUSTOMER_SESSION_COOKIE);
+
+        if (!token) {
+          throw new HttpError(401, "Войдите в личный кабинет, чтобы использовать бонусы");
+        }
+
+        const sessionRows = await client<{ customer_id: string }[]>`
+          SELECT customer_id
+          FROM customer_sessions
+          WHERE token = ${token}
+            AND revoked_at IS NULL
+            AND expires_at > NOW()
+          LIMIT 1
+        `;
+
+        const session = sessionRows[0];
+
+        if (!session || session.customer_id !== customer.id) {
+          throw new HttpError(403, "Бонусы можно списать только со своего профиля");
+        }
+
+        const freshCustomerRows = await client<{ bonus_balance: number }[]>`
+          SELECT bonus_balance
+          FROM customers
+          WHERE id = ${customer.id}
+          LIMIT 1
+        `;
+
+        const balance = Number(freshCustomerRows[0]?.bonus_balance || 0);
+        const maxBonusSpend = Math.min(balance, Math.floor(amountBeforeBonus * 0.3), amountBeforeBonus);
+
+        bonusSpent = Math.min(requestedBonusSpend, maxBonusSpend);
+        totalAmount = Math.max(0, amountBeforeBonus - bonusSpent);
       }
 
       const orderRows = await client<{ id: string }[]>`
@@ -926,14 +1034,41 @@ export async function publicRoutes(app: FastifyInstance) {
         `;
       }
 
-      await client`
+      const updatedCustomerRows = await client<{ bonus_balance: number }[]>`
         UPDATE customers
         SET total_orders = total_orders + 1,
             total_spent = total_spent + ${totalAmount},
+            bonus_balance = bonus_balance - ${bonusSpent},
             last_order_at = NOW(),
             updated_at = NOW()
         WHERE id = ${customer.id}
+        RETURNING bonus_balance
       `;
+
+      if (bonusSpent > 0) {
+        await client`
+          INSERT INTO bonus_transactions (
+            shop_id,
+            customer_id,
+            order_id,
+            type,
+            amount,
+            balance_after,
+            comment,
+            created_at
+          )
+          VALUES (
+            ${shop.id},
+            ${customer.id},
+            ${order.id},
+            'spend',
+            ${-bonusSpent},
+            ${Number(updatedCustomerRows[0]?.bonus_balance ?? 0)},
+            ${`Списание бонусов в заказе ${orderNumber}`},
+            NOW()
+          )
+        `;
+      }
 
       return reply.status(201).send({
         ok: true,
