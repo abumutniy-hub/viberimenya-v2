@@ -252,65 +252,12 @@ export async function publicRoutes(app: FastifyInstance) {
     }
   });
 
-  app.post("/api/public/bonus/check", async (request, reply) => {
-    const schema = z.object({
-      phone: z.string().min(5),
-      amount: z.coerce.number().int().min(0)
+  app.post("/api/public/bonus/check", async (_request, reply) => {
+    return reply.status(403).send({
+      ok: false,
+      message: "Бонусы доступны только после подтверждения телефона в личном кабинете"
     });
-
-    const body = schema.parse(request.body ?? {});
-    const { client } = createDb();
-
-    try {
-      const shopRows = await client<{ id: string }[]>`
-        SELECT id
-        FROM shops
-        WHERE slug = ${env.DEFAULT_SHOP_SLUG}
-        LIMIT 1
-      `;
-
-      const shop = shopRows[0];
-
-      if (!shop) {
-        throw new HttpError(404, "Shop not found");
-      }
-
-      const customerRows = await client<{
-        id: string;
-        name: string | null;
-        phone: string;
-        bonus_balance: number;
-      }[]>`
-        SELECT id, name, phone, bonus_balance
-        FROM customers
-        WHERE shop_id = ${shop.id}
-          AND phone = ${body.phone}
-        LIMIT 1
-      `;
-
-      const customer = customerRows[0];
-      const balance = Number(customer?.bonus_balance ?? 0);
-      const maxSpend = Math.min(balance, Math.floor(body.amount * 0.3), body.amount);
-
-      return {
-        ok: true,
-        customer: customer
-          ? {
-              id: customer.id,
-              name: customer.name,
-              phone: customer.phone
-            }
-          : null,
-        bonus: {
-          balance,
-          maxSpend
-        }
-      };
-    } finally {
-      await client.end();
-    }
   });
-
 
   app.post("/api/public/promocodes/check", async (request, reply) => {
     const schema = z.object({
@@ -512,9 +459,8 @@ export async function publicRoutes(app: FastifyInstance) {
       }
 
       const amountBeforeBonus = Math.max(0, subtotalAmount + deliveryPrice - discountTotal);
-      const requestedBonusSpend = Math.max(0, Math.floor(Number(body.bonusToSpend || 0)));
-      let bonusSpent = 0;
-      let totalAmount = amountBeforeBonus;
+      const bonusSpent = 0;
+      const totalAmount = amountBeforeBonus;
       const orderNumber = createOrderNumber();
       const trackingToken = createTrackingToken();
 
@@ -551,15 +497,6 @@ export async function publicRoutes(app: FastifyInstance) {
       if (!customer?.id) {
         throw new HttpError(500, "Customer was not created");
       }
-
-      const maxBonusSpend = Math.min(
-        Number(customer.bonus_balance || 0),
-        Math.floor(amountBeforeBonus * 0.3),
-        amountBeforeBonus
-      );
-
-      bonusSpent = Math.min(requestedBonusSpend, maxBonusSpend);
-      totalAmount = Math.max(0, amountBeforeBonus - bonusSpent);
 
       const orderRows = await client<{ id: string }[]>`
         INSERT INTO orders (
@@ -669,41 +606,14 @@ export async function publicRoutes(app: FastifyInstance) {
         `;
       }
 
-      const updatedCustomerRows = await client<{ bonus_balance: number }[]>`
+      await client`
         UPDATE customers
         SET total_orders = total_orders + 1,
             total_spent = total_spent + ${totalAmount},
-            bonus_balance = bonus_balance - ${bonusSpent},
             last_order_at = NOW(),
             updated_at = NOW()
         WHERE id = ${customer.id}
-        RETURNING bonus_balance
       `;
-
-      if (bonusSpent > 0) {
-        await client`
-          INSERT INTO bonus_transactions (
-            shop_id,
-            customer_id,
-            order_id,
-            type,
-            amount,
-            balance_after,
-            comment,
-            created_at
-          )
-          VALUES (
-            ${shop.id},
-            ${customer.id},
-            ${order.id},
-            'spend',
-            ${-bonusSpent},
-            ${Number(updatedCustomerRows[0]?.bonus_balance ?? 0)},
-            ${`Списание бонусов в заказе ${orderNumber}`},
-            NOW()
-          )
-        `;
-      }
 
       return reply.status(201).send({
         ok: true,
