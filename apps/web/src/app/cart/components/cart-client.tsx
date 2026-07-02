@@ -37,6 +37,9 @@ export function CartClient() {
   const [items, setItems] = useState<CartItem[]>([]);
   const [delivery, setDelivery] = useState<DeliveryData>({ zones: [], intervals: [] });
   const [zoneId, setZoneId] = useState("");
+  const [promoCode, setPromoCode] = useState("");
+  const [promoMessage, setPromoMessage] = useState("");
+  const [discountTotal, setDiscountTotal] = useState(0);
   const [success, setSuccess] = useState<{ orderNumber: string; totalAmount: number } | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -54,15 +57,57 @@ export function CartClient() {
   );
 
   const deliveryPrice = Number(delivery.zones.find((zone) => zone.id === zoneId)?.price ?? 0);
-  const total = subtotal + deliveryPrice;
+  const total = Math.max(0, subtotal + deliveryPrice - discountTotal);
 
   function updateQty(productId: string, quantity: number) {
     const next = items
       .map((item) => (item.productId === productId ? { ...item, quantity } : item))
       .filter((item) => item.quantity > 0);
 
+    setDiscountTotal(0);
+    setPromoMessage("");
     setItems(next);
     writeCart(next);
+  }
+
+
+  async function checkPromo() {
+    const code = promoCode.trim();
+
+    if (!code) {
+      setDiscountTotal(0);
+      setPromoMessage("Введите промокод");
+      return;
+    }
+
+    if (subtotal <= 0) {
+      setDiscountTotal(0);
+      setPromoMessage("Сначала добавьте товары в корзину");
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/public/promocodes/check", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code, subtotal })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.ok) {
+        setDiscountTotal(0);
+        setPromoMessage(data?.message || "Промокод не применён");
+        return;
+      }
+
+      setDiscountTotal(Number(data.promo.discountTotal || 0));
+      setPromoCode(data.promo.code);
+      setPromoMessage(`Промокод применён: −${money(Number(data.promo.discountTotal || 0))}`);
+    } catch {
+      setDiscountTotal(0);
+      setPromoMessage("Не удалось проверить промокод");
+    }
   }
 
   async function submitOrder(event: React.FormEvent<HTMLFormElement>) {
@@ -89,6 +134,7 @@ export function CartClient() {
           deliveryZoneId: form.get("deliveryZoneId"),
           paymentMethod: form.get("paymentMethod"),
           customerComment: form.get("customerComment"),
+          promoCode,
           items: items.map((item) => ({
             productId: item.productId,
             quantity: item.quantity
@@ -167,6 +213,35 @@ export function CartClient() {
         <div className="checkout-total">
           <span>Итого</span>
           <strong>{money(total)}</strong>
+        </div>
+
+
+        {discountTotal > 0 ? (
+          <div className="checkout-discount">
+            <span>Скидка</span>
+            <strong>−{money(discountTotal)}</strong>
+          </div>
+        ) : null}
+
+        <div className="promo-box">
+          <label>
+            <span>Промокод</span>
+            <input
+              value={promoCode}
+              onChange={(event) => {
+                setPromoCode(event.target.value);
+                setDiscountTotal(0);
+                setPromoMessage("");
+              }}
+              placeholder="Введите промокод"
+            />
+          </label>
+
+          <button type="button" onClick={checkPromo} disabled={items.length === 0}>
+            Применить
+          </button>
+
+          {promoMessage ? <p>{promoMessage}</p> : null}
         </div>
 
         <label><span>Ваше имя</span><input name="customerName" required /></label>

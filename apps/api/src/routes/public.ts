@@ -27,6 +27,7 @@ const createOrderSchema = z.object({
   deliveryZoneId: z.string().uuid().optional().or(z.literal("")).default(""),
   paymentMethod: z.enum(["cash_on_delivery", "transfer_after_confirm", "online_card", "sbp"]).default("transfer_after_confirm"),
   customerComment: z.string().optional().default(""),
+  promoCode: z.string().optional().default(""),
   items: z.array(
     z.object({
       productId: z.string().uuid(),
@@ -42,6 +43,28 @@ function createOrderNumber() {
 function createTrackingToken() {
   return crypto.randomUUID().replace(/-/g, "");
 }
+
+function normalizePromoCode(code: string) {
+  return code.trim().toUpperCase();
+}
+
+function calculateDiscount(params: {
+  subtotal: number;
+  discountType: string;
+  discountValue: number;
+}) {
+  if (params.subtotal <= 0) return 0;
+
+  if (params.discountType === "percent") {
+    return Math.min(
+      params.subtotal,
+      Math.floor((params.subtotal * params.discountValue) / 100)
+    );
+  }
+
+  return Math.min(params.subtotal, params.discountValue);
+}
+
 
 
 async function getShopContext() {
@@ -228,6 +251,93 @@ export async function publicRoutes(app: FastifyInstance) {
     }
   });
 
+  app.post("/api/public/promocodes/check", async (request, reply) => {
+    const schema = z.object({
+      code: z.string().min(1),
+      subtotal: z.coerce.number().int().min(0)
+    });
+
+    const body = schema.parse(request.body ?? {});
+    const code = normalizePromoCode(body.code);
+    const { client } = createDb();
+
+    try {
+      const shopRows = await client<{ id: string }[]>`
+        SELECT id
+        FROM shops
+        WHERE slug = ${env.DEFAULT_SHOP_SLUG}
+        LIMIT 1
+      `;
+
+      const shop = shopRows[0];
+
+      if (!shop) {
+        throw new HttpError(404, "Shop not found");
+      }
+
+      const rows = await client<{
+        id: string;
+        code: string;
+        discount_type: string;
+        discount_value: number;
+        min_order_amount: number | null;
+        usage_limit: number | null;
+        used_count: number;
+      }[]>`
+        SELECT id, code, discount_type, discount_value, min_order_amount, usage_limit, used_count
+        FROM promocodes
+        WHERE shop_id = ${shop.id}
+          AND UPPER(code) = ${code}
+          AND is_active = true
+          AND (starts_at IS NULL OR starts_at <= NOW())
+          AND (ends_at IS NULL OR ends_at >= NOW())
+        LIMIT 1
+      `;
+
+      const promo = rows[0];
+
+      if (!promo) {
+        return reply.status(404).send({
+          ok: false,
+          message: "Промокод не найден или уже не действует"
+        });
+      }
+
+      if (promo.usage_limit !== null && promo.used_count >= promo.usage_limit) {
+        return reply.status(400).send({
+          ok: false,
+          message: "Лимит использования промокода исчерпан"
+        });
+      }
+
+      if (promo.min_order_amount !== null && body.subtotal < promo.min_order_amount) {
+        return reply.status(400).send({
+          ok: false,
+          message: `Минимальная сумма заказа для промокода — ${promo.min_order_amount} ₽`
+        });
+      }
+
+      const discountTotal = calculateDiscount({
+        subtotal: body.subtotal,
+        discountType: promo.discount_type,
+        discountValue: Number(promo.discount_value)
+      });
+
+      return {
+        ok: true,
+        promo: {
+          id: promo.id,
+          code: promo.code,
+          discountType: promo.discount_type,
+          discountValue: promo.discount_value,
+          discountTotal
+        }
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
   app.post("/api/public/orders", async (request, reply) => {
     const body = createOrderSchema.parse(request.body ?? {});
     const { client } = createDb();
@@ -288,7 +398,52 @@ export async function publicRoutes(app: FastifyInstance) {
         deliveryPrice = Number(zoneRows[0]?.price ?? 0);
       }
 
-      const totalAmount = subtotalAmount + deliveryPrice;
+      let discountTotal = 0;
+      let promoId: string | null = null;
+      const promoCode = normalizePromoCode(body.promoCode || "");
+
+      if (promoCode) {
+        const promoRows = await client<{
+          id: string;
+          discount_type: string;
+          discount_value: number;
+          min_order_amount: number | null;
+          usage_limit: number | null;
+          used_count: number;
+        }[]>`
+          SELECT id, discount_type, discount_value, min_order_amount, usage_limit, used_count
+          FROM promocodes
+          WHERE shop_id = ${shop.id}
+            AND UPPER(code) = ${promoCode}
+            AND is_active = true
+            AND (starts_at IS NULL OR starts_at <= NOW())
+            AND (ends_at IS NULL OR ends_at >= NOW())
+          LIMIT 1
+        `;
+
+        const promo = promoRows[0];
+
+        if (!promo) {
+          throw new HttpError(400, "Промокод не найден или уже не действует");
+        }
+
+        if (promo.usage_limit !== null && promo.used_count >= promo.usage_limit) {
+          throw new HttpError(400, "Лимит использования промокода исчерпан");
+        }
+
+        if (promo.min_order_amount !== null && subtotalAmount < promo.min_order_amount) {
+          throw new HttpError(400, `Минимальная сумма заказа для промокода — ${promo.min_order_amount} ₽`);
+        }
+
+        promoId = promo.id;
+        discountTotal = calculateDiscount({
+          subtotal: subtotalAmount,
+          discountType: promo.discount_type,
+          discountValue: Number(promo.discount_value)
+        });
+      }
+
+      const totalAmount = Math.max(0, subtotalAmount + deliveryPrice - discountTotal);
       const orderNumber = createOrderNumber();
       const trackingToken = createTrackingToken();
 
@@ -311,10 +466,10 @@ export async function publicRoutes(app: FastifyInstance) {
           delivery_interval_text,
           delivery_zone_id,
           delivery_price,
-          subtotal_amount,
-          discount_amount,
-          bonus_spent_amount,
-          total_amount,
+          subtotal,
+          discount_total,
+          bonus_spent,
+          total,
           customer_comment,
           source,
           tracking_token,
@@ -339,7 +494,7 @@ export async function publicRoutes(app: FastifyInstance) {
           ${body.deliveryZoneId || null},
           ${deliveryPrice},
           ${subtotalAmount},
-          0,
+          ${discountTotal},
           0,
           ${totalAmount},
           ${body.customerComment},
@@ -395,6 +550,15 @@ export async function publicRoutes(app: FastifyInstance) {
         `;
       }
 
+      if (promoId) {
+        await client`
+          UPDATE promocodes
+          SET used_count = used_count + 1,
+              updated_at = NOW()
+          WHERE id = ${promoId}
+        `;
+      }
+
       await client`COMMIT`;
 
       return reply.status(201).send({
@@ -404,6 +568,8 @@ export async function publicRoutes(app: FastifyInstance) {
           orderNumber,
           status: "new",
           totalAmount,
+          discountTotal,
+          promoCode,
           trackingToken
         }
       });
