@@ -28,6 +28,7 @@ const createOrderSchema = z.object({
   paymentMethod: z.enum(["cash_on_delivery", "transfer_after_confirm", "online_card", "sbp"]).default("transfer_after_confirm"),
   customerComment: z.string().optional().default(""),
   promoCode: z.string().optional().default(""),
+  bonusToSpend: z.coerce.number().int().min(0).optional().default(0),
   items: z.array(
     z.object({
       productId: z.string().uuid(),
@@ -251,6 +252,66 @@ export async function publicRoutes(app: FastifyInstance) {
     }
   });
 
+  app.post("/api/public/bonus/check", async (request, reply) => {
+    const schema = z.object({
+      phone: z.string().min(5),
+      amount: z.coerce.number().int().min(0)
+    });
+
+    const body = schema.parse(request.body ?? {});
+    const { client } = createDb();
+
+    try {
+      const shopRows = await client<{ id: string }[]>`
+        SELECT id
+        FROM shops
+        WHERE slug = ${env.DEFAULT_SHOP_SLUG}
+        LIMIT 1
+      `;
+
+      const shop = shopRows[0];
+
+      if (!shop) {
+        throw new HttpError(404, "Shop not found");
+      }
+
+      const customerRows = await client<{
+        id: string;
+        name: string | null;
+        phone: string;
+        bonus_balance: number;
+      }[]>`
+        SELECT id, name, phone, bonus_balance
+        FROM customers
+        WHERE shop_id = ${shop.id}
+          AND phone = ${body.phone}
+        LIMIT 1
+      `;
+
+      const customer = customerRows[0];
+      const balance = Number(customer?.bonus_balance ?? 0);
+      const maxSpend = Math.min(balance, Math.floor(body.amount * 0.3), body.amount);
+
+      return {
+        ok: true,
+        customer: customer
+          ? {
+              id: customer.id,
+              name: customer.name,
+              phone: customer.phone
+            }
+          : null,
+        bonus: {
+          balance,
+          maxSpend
+        }
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
+
   app.post("/api/public/promocodes/check", async (request, reply) => {
     const schema = z.object({
       code: z.string().min(1),
@@ -450,11 +511,14 @@ export async function publicRoutes(app: FastifyInstance) {
         });
       }
 
-      const totalAmount = Math.max(0, subtotalAmount + deliveryPrice - discountTotal);
+      const amountBeforeBonus = Math.max(0, subtotalAmount + deliveryPrice - discountTotal);
+      const requestedBonusSpend = Math.max(0, Math.floor(Number(body.bonusToSpend || 0)));
+      let bonusSpent = 0;
+      let totalAmount = amountBeforeBonus;
       const orderNumber = createOrderNumber();
       const trackingToken = createTrackingToken();
 
-      const customerRows = await client<{ id: string }[]>`
+      const customerRows = await client<{ id: string; bonus_balance: number }[]>`
         INSERT INTO customers (
           shop_id,
           phone,
@@ -479,7 +543,7 @@ export async function publicRoutes(app: FastifyInstance) {
         DO UPDATE SET
           name = COALESCE(NULLIF(EXCLUDED.name, ''), customers.name),
           updated_at = NOW()
-        RETURNING id
+        RETURNING id, bonus_balance
       `;
 
       const customer = customerRows[0];
@@ -487,6 +551,15 @@ export async function publicRoutes(app: FastifyInstance) {
       if (!customer?.id) {
         throw new HttpError(500, "Customer was not created");
       }
+
+      const maxBonusSpend = Math.min(
+        Number(customer.bonus_balance || 0),
+        Math.floor(amountBeforeBonus * 0.3),
+        amountBeforeBonus
+      );
+
+      bonusSpent = Math.min(requestedBonusSpend, maxBonusSpend);
+      totalAmount = Math.max(0, amountBeforeBonus - bonusSpent);
 
       const orderRows = await client<{ id: string }[]>`
         INSERT INTO orders (
@@ -533,7 +606,7 @@ export async function publicRoutes(app: FastifyInstance) {
           ${subtotalAmount},
           ${discountTotal},
           ${deliveryPrice},
-          0,
+          ${bonusSpent},
           0,
           ${totalAmount},
           ${trackingToken},
@@ -596,14 +669,41 @@ export async function publicRoutes(app: FastifyInstance) {
         `;
       }
 
-      await client`
+      const updatedCustomerRows = await client<{ bonus_balance: number }[]>`
         UPDATE customers
         SET total_orders = total_orders + 1,
             total_spent = total_spent + ${totalAmount},
+            bonus_balance = bonus_balance - ${bonusSpent},
             last_order_at = NOW(),
             updated_at = NOW()
         WHERE id = ${customer.id}
+        RETURNING bonus_balance
       `;
+
+      if (bonusSpent > 0) {
+        await client`
+          INSERT INTO bonus_transactions (
+            shop_id,
+            customer_id,
+            order_id,
+            type,
+            amount,
+            balance_after,
+            comment,
+            created_at
+          )
+          VALUES (
+            ${shop.id},
+            ${customer.id},
+            ${order.id},
+            'spend',
+            ${-bonusSpent},
+            ${Number(updatedCustomerRows[0]?.bonus_balance ?? 0)},
+            ${`Списание бонусов в заказе ${orderNumber}`},
+            NOW()
+          )
+        `;
+      }
 
       return reply.status(201).send({
         ok: true,
@@ -613,6 +713,7 @@ export async function publicRoutes(app: FastifyInstance) {
           status: "new",
           totalAmount,
           discountTotal,
+          bonusSpent,
           promoCode,
           trackingToken
         }
