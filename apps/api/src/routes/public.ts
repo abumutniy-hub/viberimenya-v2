@@ -736,6 +736,151 @@ export async function publicRoutes(app: FastifyInstance) {
     }
   });
 
+  app.get("/api/public/orders/track/:token", async (request, reply) => {
+    const params = z.object({
+      token: z.string().min(16)
+    }).parse(request.params ?? {});
+
+    const { client } = createDb();
+
+    try {
+      const orderRows = await client<{
+        id: string;
+        order_number: string;
+        status: string;
+        payment_status: string;
+        payment_method: string;
+        delivery_type: string;
+        delivery_date: string | null;
+        delivery_address_text: string | null;
+        delivery_comment: string | null;
+        recipient_name: string | null;
+        recipient_phone: string | null;
+        customer_comment: string | null;
+        subtotal: number;
+        discount_total: number;
+        delivery_price: number;
+        bonus_spent: number;
+        bonus_earned: number;
+        total: number;
+        tracking_token: string;
+        bouquet_photo_url: string | null;
+        created_at: string;
+        updated_at: string;
+        customer_name: string | null;
+        customer_phone: string | null;
+      }[]>`
+        SELECT
+          o.id,
+          o.order_number,
+          o.status,
+          o.payment_status,
+          o.payment_method,
+          o.delivery_type,
+          o.delivery_date,
+          o.delivery_address_text,
+          o.delivery_comment,
+          o.recipient_name,
+          o.recipient_phone,
+          o.customer_comment,
+          o.subtotal,
+          o.discount_total,
+          o.delivery_price,
+          o.bonus_spent,
+          o.bonus_earned,
+          o.total,
+          o.tracking_token,
+          o.bouquet_photo_url,
+          o.created_at,
+          o.updated_at,
+          c.name AS customer_name,
+          c.phone AS customer_phone
+        FROM orders o
+        LEFT JOIN customers c ON c.id = o.customer_id
+        WHERE o.tracking_token = ${params.token}
+        LIMIT 1
+      `;
+
+      const order = orderRows[0];
+
+      if (!order) {
+        return reply.status(404).send({
+          ok: false,
+          message: "Заказ не найден"
+        });
+      }
+
+      const items = await client`
+        SELECT
+          product_id,
+          product_name,
+          quantity,
+          price,
+          total
+        FROM order_items
+        WHERE order_id = ${order.id}
+        ORDER BY created_at ASC
+      `;
+
+      const payments = await client`
+        SELECT
+          provider,
+          method,
+          status,
+          amount,
+          currency,
+          payment_url,
+          paid_at,
+          created_at
+        FROM payments
+        WHERE order_id = ${order.id}
+        ORDER BY created_at DESC
+        LIMIT 1
+      `;
+
+      return {
+        ok: true,
+        order: {
+          id: order.id,
+          orderNumber: order.order_number,
+          status: order.status,
+          paymentStatus: order.payment_status,
+          paymentMethod: order.payment_method,
+          deliveryType: order.delivery_type,
+          deliveryDate: order.delivery_date,
+          deliveryInterval: order.delivery_comment,
+          deliveryAddress: order.delivery_address_text,
+          recipientName: order.recipient_name,
+          recipientPhone: order.recipient_phone,
+          customerName: order.customer_name,
+          customerPhone: order.customer_phone,
+          customerComment: order.customer_comment,
+          subtotal: Number(order.subtotal || 0),
+          discountTotal: Number(order.discount_total || 0),
+          deliveryPrice: Number(order.delivery_price || 0),
+          bonusSpent: Number(order.bonus_spent || 0),
+          bonusEarned: Number(order.bonus_earned || 0),
+          total: Number(order.total || 0),
+          trackingToken: order.tracking_token,
+          bouquetPhotoUrl: order.bouquet_photo_url,
+          createdAt: order.created_at,
+          updatedAt: order.updated_at
+        },
+        items: items.map((item: any) => ({
+          productId: item.product_id,
+          name: item.product_name,
+          quantity: Number(item.quantity || 0),
+          price: Number(item.price || 0),
+          total: Number(item.total || 0)
+        })),
+        payment: payments[0] || null
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
+
   app.post("/api/public/orders", async (request, reply) => {
     const body = createOrderSchema.parse(request.body ?? {});
     const { client } = createDb();
