@@ -8,8 +8,19 @@
     "build": "tsc -p tsconfig.json",
     "lint": "echo \"db lint ok\"",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "db:generate": "echo \"DB schema will be added in Step 5\"",
-    "db:migrate": "echo \"DB migrations will be added in Step 5\"",
-    "db:studio": "echo \"DB studio will be added later\""
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:push": "drizzle-kit push",
+    "db:seed": "tsx scripts/seed-initial-shop.ts",
+    "db:check": "tsx scripts/check-db.ts"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "drizzle-orm": "^0.45.1",
+    "postgres": "^3.4.7"
+  },
+  "devDependencies": {
+    "drizzle-kit": "^0.31.8",
+    "tsx": "^4.20.6"
   }
 }

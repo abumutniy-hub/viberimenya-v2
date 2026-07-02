@@ -12,7 +12,10 @@
     "check": "pnpm lint && pnpm typecheck",
     "db:generate": "pnpm --filter @viberimenya/db db:generate",
     "db:migrate": "pnpm --filter @viberimenya/db db:migrate",
-    "db:studio": "pnpm --filter @viberimenya/db db:studio"
+    "db:studio": "pnpm --filter @viberimenya/db db:studio",
+    "db:push": "pnpm --filter @viberimenya/db db:push",
+    "db:seed": "pnpm --filter @viberimenya/db db:seed",
+    "db:check": "pnpm --filter @viberimenya/db db:check"
   },
   "engines": {
     "node": ">=22.0.0",
