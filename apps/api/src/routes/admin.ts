@@ -246,6 +246,105 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
 
+  app.post("/api/admin/orders/:id/payment-link", async (request, reply) => {
+    const params = z.object({
+      id: z.string().uuid()
+    }).parse(request.params ?? {});
+
+    const body = z.object({
+      paymentUrl: z.string().url()
+    }).parse(request.body ?? {});
+
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+
+      const orderRows = await client<{
+        id: string;
+        order_number: string;
+        status: string;
+        payment_status: string;
+        payment_method: string;
+        total: number;
+      }[]>`
+        SELECT id, order_number, status, payment_status, payment_method, total
+        FROM orders
+        WHERE shop_id = ${shop.id}
+          AND id = ${params.id}
+        LIMIT 1
+      `;
+
+      const order = orderRows[0];
+
+      if (!order) {
+        return reply.status(404).send({
+          ok: false,
+          message: "Заказ не найден"
+        });
+      }
+
+      if (order.status !== "confirmed") {
+        return reply.status(400).send({
+          ok: false,
+          message: "Ссылку на оплату можно добавить только после подтверждения заказа"
+        });
+      }
+
+      if (order.payment_status === "paid") {
+        return reply.status(400).send({
+          ok: false,
+          message: "Заказ уже оплачен"
+        });
+      }
+
+      const paymentRows = await client`
+        INSERT INTO payments (
+          shop_id,
+          order_id,
+          provider,
+          method,
+          status,
+          amount,
+          currency,
+          payment_url,
+          raw_payload,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          ${shop.id},
+          ${order.id},
+          'manual',
+          ${order.payment_method},
+          'pending',
+          ${Number(order.total || 0)},
+          'RUB',
+          ${body.paymentUrl},
+          ${JSON.stringify({ source: "admin_manual_link" })},
+          NOW(),
+          NOW()
+        )
+        RETURNING *
+      `;
+
+      await client`
+        UPDATE orders
+        SET payment_status = 'pending',
+            updated_at = NOW()
+        WHERE id = ${order.id}
+      `;
+
+      return {
+        ok: true,
+        payment: paymentRows[0]
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
+
   app.post("/api/admin/orders/:id/mark-paid", async (request, reply) => {
     const params = z.object({
       id: z.string().uuid()
