@@ -1,3 +1,5 @@
+import { ProcessCarousel } from "./components/process-carousel";
+
 export const dynamic = "force-dynamic";
 
 type Shop = {
@@ -244,35 +246,7 @@ export default async function HomePage() {
         </div>
       </section>
 
-      <section id="process" className="section">
-        <div className="section-heading">
-          <span>Как проходит заказ</span>
-          <h2>Прозрачно для клиента и удобно для команды</h2>
-        </div>
-
-        <div className="steps-grid">
-          <div>
-            <span>01</span>
-            <strong>Выбор букета</strong>
-            <p>Клиент выбирает букет, дату, интервал и способ связи.</p>
-          </div>
-          <div>
-            <span>02</span>
-            <strong>Подтверждение</strong>
-            <p>Менеджер проверяет заказ и согласовывает детали.</p>
-          </div>
-          <div>
-            <span>03</span>
-            <strong>Сборка</strong>
-            <p>Флорист собирает букет и прикладывает фото перед доставкой.</p>
-          </div>
-          <div>
-            <span>04</span>
-            <strong>Доставка</strong>
-            <p>Курьер видит маршрут, адрес, время и меняет статус заказа.</p>
-          </div>
-        </div>
-      </section>
+      <ProcessCarousel />
 
       <section className="section trust-section">
         <div>
