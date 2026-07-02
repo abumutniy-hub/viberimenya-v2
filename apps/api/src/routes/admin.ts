@@ -148,6 +148,132 @@ export async function adminRoutes(app: FastifyInstance) {
     }
   });
 
+  app.post("/api/admin/orders/:id/mark-paid", async (request, reply) => {
+    const params = z.object({
+      id: z.string().uuid()
+    }).parse(request.params ?? {});
+
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+
+      const orderRows = await client<{
+        id: string;
+        customer_id: string | null;
+        order_number: string;
+        status: string;
+        payment_status: string;
+        total: number;
+        bonus_earned: number;
+      }[]>`
+        SELECT id, customer_id, order_number, status, payment_status, total, bonus_earned
+        FROM orders
+        WHERE shop_id = ${shop.id}
+          AND id = ${params.id}
+        LIMIT 1
+      `;
+
+      const order = orderRows[0];
+
+      if (!order) {
+        return reply.status(404).send({
+          ok: false,
+          message: "Заказ не найден"
+        });
+      }
+
+      if (!order.customer_id) {
+        return reply.status(400).send({
+          ok: false,
+          message: "У заказа нет клиента для начисления бонусов"
+        });
+      }
+
+      const wasAlreadyPaid = order.payment_status === "paid";
+      const alreadyEarned = Number(order.bonus_earned || 0) > 0;
+      const bonusAmount = wasAlreadyPaid || alreadyEarned
+        ? 0
+        : Math.floor(Number(order.total || 0) * 0.05);
+
+      await client`
+        UPDATE orders
+        SET payment_status = 'paid',
+            status = CASE
+              WHEN status = 'new' THEN 'confirmed'
+              ELSE status
+            END,
+            bonus_earned = CASE
+              WHEN bonus_earned > 0 THEN bonus_earned
+              ELSE ${bonusAmount}
+            END,
+            updated_at = NOW()
+        WHERE id = ${order.id}
+      `;
+
+      let balanceAfter: number | null = null;
+
+      if (bonusAmount > 0) {
+        const customerRows = await client<{ bonus_balance: number }[]>`
+          UPDATE customers
+          SET bonus_balance = bonus_balance + ${bonusAmount},
+              updated_at = NOW()
+          WHERE id = ${order.customer_id}
+          RETURNING bonus_balance
+        `;
+
+        balanceAfter = Number(customerRows[0]?.bonus_balance ?? 0);
+
+        await client`
+          INSERT INTO bonus_transactions (
+            shop_id,
+            customer_id,
+            order_id,
+            type,
+            amount,
+            balance_after,
+            comment,
+            created_at
+          )
+          VALUES (
+            ${shop.id},
+            ${order.customer_id},
+            ${order.id},
+            'earn',
+            ${bonusAmount},
+            ${balanceAfter},
+            ${`Начисление 5% за оплаченный заказ ${order.order_number}`},
+            NOW()
+          )
+        `;
+      }
+
+      const updatedRows = await client`
+        SELECT
+          o.*,
+          c.phone AS customer_phone,
+          c.name AS customer_name,
+          o.total AS total_amount
+        FROM orders o
+        LEFT JOIN customers c ON c.id = o.customer_id
+        WHERE o.id = ${order.id}
+        LIMIT 1
+      `;
+
+      return {
+        ok: true,
+        order: updatedRows[0],
+        bonus: {
+          earnedNow: bonusAmount,
+          balanceAfter
+        }
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
+
   app.get("/api/admin/catalog", async () => {
     const { client } = createDb();
 
