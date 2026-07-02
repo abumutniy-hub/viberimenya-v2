@@ -1,4 +1,5 @@
 import { AdminTable } from "../components/admin-table";
+import { SettingsForm } from "../components/admin-forms";
 import { fetchAdmin, type AdminRow } from "../lib/admin-api";
 
 export const dynamic = "force-dynamic";
@@ -23,15 +24,23 @@ export default async function AdminSettingsPage() {
 
       <section className="admin-panel">
         <div className="admin-panel-head">
+          <h2>Редактирование</h2>
+        </div>
+        <SettingsForm settings={data?.settings ?? null} />
+      </section>
+
+      <section className="admin-panel">
+        <div className="admin-panel-head">
           <h2>Основные настройки</h2>
         </div>
         <AdminTable
           rows={settingsRows}
           emptyText="Настройки магазина пока не заполнены."
           columns={[
-            { key: "primary_color", label: "Основной цвет" },
-            { key: "accent_color", label: "Акцент" },
             { key: "phone", label: "Телефон" },
+            { key: "whatsapp", label: "WhatsApp" },
+            { key: "telegram", label: "Telegram" },
+            { key: "instagram", label: "Instagram" },
             { key: "address", label: "Адрес" },
             { key: "work_hours", label: "График" }
           ]}

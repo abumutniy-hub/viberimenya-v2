@@ -985,3 +985,90 @@ a {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* Step 9 — admin forms */
+.admin-form {
+  padding: 20px;
+}
+
+.admin-form-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.admin-form label {
+  display: grid;
+  gap: 7px;
+}
+
+.admin-form label.wide {
+  grid-column: 1 / -1;
+}
+
+.admin-form label span {
+  color: #746b63;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.admin-form input,
+.admin-form select,
+.admin-form textarea {
+  width: 100%;
+  min-height: 46px;
+  padding: 12px 14px;
+  border: 1px solid rgba(25, 23, 22, 0.14);
+  border-radius: 15px;
+  outline: none;
+  background: #fffdf9;
+  color: #191716;
+  font: inherit;
+}
+
+.admin-form textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+
+.admin-form input:focus,
+.admin-form select:focus,
+.admin-form textarea:focus {
+  border-color: #191716;
+}
+
+.admin-form button {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 48px;
+  margin-top: 16px;
+  padding: 0 22px;
+  border: 0;
+  border-radius: 999px;
+  color: #fff;
+  background: #191716;
+  font: inherit;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.admin-form button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.checkbox-label {
+  align-content: end;
+}
+
+.checkbox-label input {
+  width: 22px;
+  min-height: 22px;
+}
+
+@media (max-width: 940px) {
+  .admin-form-grid {
+    grid-template-columns: 1fr;
+  }
+}

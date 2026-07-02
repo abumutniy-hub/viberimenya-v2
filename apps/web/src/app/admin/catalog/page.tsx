@@ -1,4 +1,5 @@
 import { AdminTable } from "../components/admin-table";
+import { CategoryForm, ProductForm } from "../components/admin-forms";
 import { fetchAdmin, type AdminRow } from "../lib/admin-api";
 
 export const dynamic = "force-dynamic";
@@ -10,6 +11,13 @@ type Response = {
 
 export default async function AdminCatalogPage() {
   const data = await fetchAdmin<Response>("/api/admin/catalog");
+  const categories = data?.categories ?? [];
+  const productCategories = categories
+    .filter((category) => typeof category.id === "string" && typeof category.name === "string")
+    .map((category) => ({
+      id: String(category.id),
+      name: String(category.name)
+    }));
 
   return (
     <div className="admin-page">
@@ -22,10 +30,24 @@ export default async function AdminCatalogPage() {
 
       <section className="admin-panel">
         <div className="admin-panel-head">
+          <h2>Добавить категорию</h2>
+        </div>
+        <CategoryForm />
+      </section>
+
+      <section className="admin-panel">
+        <div className="admin-panel-head">
+          <h2>Добавить товар</h2>
+        </div>
+        <ProductForm categories={productCategories} />
+      </section>
+
+      <section className="admin-panel">
+        <div className="admin-panel-head">
           <h2>Категории</h2>
         </div>
         <AdminTable
-          rows={data?.categories ?? []}
+          rows={categories}
           emptyText="Категории пока не добавлены."
           columns={[
             { key: "name", label: "Название" },
@@ -48,7 +70,8 @@ export default async function AdminCatalogPage() {
             { key: "slug", label: "Slug" },
             { key: "status", label: "Статус" },
             { key: "price", label: "Цена" },
-            { key: "stock_quantity", label: "Остаток" }
+            { key: "stock_quantity", label: "Остаток" },
+            { key: "is_featured", label: "Хит" }
           ]}
         />
       </section>
