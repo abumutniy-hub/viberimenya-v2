@@ -344,7 +344,10 @@ export async function publicRoutes(app: FastifyInstance) {
 
     try {
       const shopRows = await client<{ id: string }[]>`
-        SELECT id FROM shops WHERE slug = ${env.DEFAULT_SHOP_SLUG} LIMIT 1
+        SELECT id
+        FROM shops
+        WHERE slug = ${env.DEFAULT_SHOP_SLUG}
+        LIMIT 1
       `;
 
       const shop = shopRows[0];
@@ -353,7 +356,11 @@ export async function publicRoutes(app: FastifyInstance) {
         throw new HttpError(404, "Shop not found");
       }
 
-      const productsMap = new Map<string, { id: string; name: string; price: number }>();
+      const productsMap = new Map<string, {
+        id: string;
+        name: string;
+        price: number;
+      }>();
 
       for (const item of body.items) {
         const rows = await client<{ id: string; name: string; price: number }[]>`
@@ -447,31 +454,62 @@ export async function publicRoutes(app: FastifyInstance) {
       const orderNumber = createOrderNumber();
       const trackingToken = createTrackingToken();
 
-      await client`BEGIN`;
+      const customerRows = await client<{ id: string }[]>`
+        INSERT INTO customers (
+          shop_id,
+          phone,
+          name,
+          total_orders,
+          total_spent,
+          last_order_at,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          ${shop.id},
+          ${body.customerPhone},
+          ${body.customerName},
+          0,
+          0,
+          NOW(),
+          NOW(),
+          NOW()
+        )
+        ON CONFLICT (shop_id, phone)
+        DO UPDATE SET
+          name = COALESCE(NULLIF(EXCLUDED.name, ''), customers.name),
+          updated_at = NOW()
+        RETURNING id
+      `;
 
-      const orderRows = await client`
+      const customer = customerRows[0];
+
+      if (!customer?.id) {
+        throw new HttpError(500, "Customer was not created");
+      }
+
+      const orderRows = await client<{ id: string }[]>`
         INSERT INTO orders (
           shop_id,
+          customer_id,
           order_number,
           status,
           payment_status,
           payment_method,
           delivery_type,
-          customer_name,
-          customer_phone,
+          delivery_zone_id,
+          delivery_date,
+          delivery_address_text,
+          delivery_comment,
           recipient_name,
           recipient_phone,
-          delivery_address,
-          delivery_date,
-          delivery_interval_text,
-          delivery_zone_id,
-          delivery_price,
+          customer_comment,
           subtotal,
           discount_total,
+          delivery_price,
           bonus_spent,
+          bonus_earned,
           total,
-          customer_comment,
-          source,
           tracking_token,
           metadata,
           created_at,
@@ -479,32 +517,31 @@ export async function publicRoutes(app: FastifyInstance) {
         )
         VALUES (
           ${shop.id},
+          ${customer.id},
           ${orderNumber},
           'new',
           'pending',
           ${body.paymentMethod},
           ${body.deliveryType},
-          ${body.customerName},
-          ${body.customerPhone},
+          ${body.deliveryZoneId || null},
+          ${body.deliveryDate || null},
+          ${body.deliveryAddress},
+          ${body.deliveryIntervalText},
           ${body.recipientName || body.customerName},
           ${body.recipientPhone || body.customerPhone},
-          ${body.deliveryAddress},
-          ${body.deliveryDate || null},
-          ${body.deliveryIntervalText},
-          ${body.deliveryZoneId || null},
-          ${deliveryPrice},
+          ${body.customerComment},
           ${subtotalAmount},
           ${discountTotal},
+          ${deliveryPrice},
+          0,
           0,
           ${totalAmount},
-          ${body.customerComment},
-          'site',
           ${trackingToken},
-          ${JSON.stringify({})},
+          ${JSON.stringify({ promoCode: promoCode || null })},
           NOW(),
           NOW()
         )
-        RETURNING *
+        RETURNING id
       `;
 
       const order = orderRows[0];
@@ -513,8 +550,6 @@ export async function publicRoutes(app: FastifyInstance) {
         throw new HttpError(500, "Order was not created");
       }
 
-      const orderId = String(order.id);
-
       for (const item of body.items) {
         const product = productsMap.get(item.productId);
 
@@ -522,7 +557,7 @@ export async function publicRoutes(app: FastifyInstance) {
 
         const quantity = item.quantity;
         const unitPrice = Number(product.price);
-        const totalPrice = unitPrice * quantity;
+        const itemTotal = unitPrice * quantity;
 
         await client`
           INSERT INTO order_items (
@@ -530,20 +565,22 @@ export async function publicRoutes(app: FastifyInstance) {
             order_id,
             product_id,
             product_name,
+            product_snapshot,
             quantity,
-            unit_price,
-            total_price,
+            price,
+            total,
             created_at,
             updated_at
           )
           VALUES (
             ${shop.id},
-            ${orderId},
+            ${order.id},
             ${product.id},
             ${product.name},
+            ${JSON.stringify({ id: product.id, name: product.name, price: unitPrice })},
             ${quantity},
             ${unitPrice},
-            ${totalPrice},
+            ${itemTotal},
             NOW(),
             NOW()
           )
@@ -559,12 +596,19 @@ export async function publicRoutes(app: FastifyInstance) {
         `;
       }
 
-      await client`COMMIT`;
+      await client`
+        UPDATE customers
+        SET total_orders = total_orders + 1,
+            total_spent = total_spent + ${totalAmount},
+            last_order_at = NOW(),
+            updated_at = NOW()
+        WHERE id = ${customer.id}
+      `;
 
       return reply.status(201).send({
         ok: true,
         order: {
-          id: orderId,
+          id: order.id,
           orderNumber,
           status: "new",
           totalAmount,
@@ -574,7 +618,6 @@ export async function publicRoutes(app: FastifyInstance) {
         }
       });
     } catch (error) {
-      await client`ROLLBACK`.catch(() => undefined);
       throw error;
     } finally {
       await client.end();
