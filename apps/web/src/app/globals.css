@@ -2189,3 +2189,39 @@ button.dark-button,
   text-decoration: underline;
 }
 
+
+/* Step 13.1B — admin order actions */
+.admin-order-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.admin-action-button.secondary {
+  background: rgba(63, 43, 33, 0.08);
+  color: #3f2b21;
+}
+
+.admin-status-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 8px 10px;
+  background: rgba(109, 79, 45, 0.1);
+  color: #5d402a;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.admin-muted-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 8px 10px;
+  background: rgba(63, 43, 33, 0.06);
+  color: rgba(63, 43, 33, 0.58);
+  font-size: 13px;
+  font-weight: 700;
+}
+

@@ -135,10 +135,15 @@ export async function adminRoutes(app: FastifyInstance) {
       const shop = await getShop(client);
 
       const items = await client`
-        SELECT *
-        FROM orders
-        WHERE shop_id = ${shop.id}
-        ORDER BY created_at DESC
+        SELECT
+          o.*,
+          c.phone AS customer_phone,
+          c.name AS customer_name,
+          o.total AS total_amount
+        FROM orders o
+        LEFT JOIN customers c ON c.id = o.customer_id
+        WHERE o.shop_id = ${shop.id}
+        ORDER BY o.created_at DESC
         LIMIT 100
       `;
 
@@ -147,6 +152,99 @@ export async function adminRoutes(app: FastifyInstance) {
       await client.end();
     }
   });
+
+  app.post("/api/admin/orders/:id/confirm", async (request, reply) => {
+    const params = z.object({
+      id: z.string().uuid()
+    }).parse(request.params ?? {});
+
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+
+      const orderRows = await client<{
+        id: string;
+        order_number: string;
+        status: string;
+      }[]>`
+        SELECT id, order_number, status
+        FROM orders
+        WHERE shop_id = ${shop.id}
+          AND id = ${params.id}
+        LIMIT 1
+      `;
+
+      const order = orderRows[0];
+
+      if (!order) {
+        return reply.status(404).send({
+          ok: false,
+          message: "Заказ не найден"
+        });
+      }
+
+      if (order.status === "cancelled") {
+        return reply.status(400).send({
+          ok: false,
+          message: "Отменённый заказ нельзя подтвердить"
+        });
+      }
+
+      if (order.status !== "new") {
+        return {
+          ok: true,
+          message: "Заказ уже обработан"
+        };
+      }
+
+      await client`
+        UPDATE orders
+        SET status = 'confirmed',
+            updated_at = NOW()
+        WHERE id = ${order.id}
+      `;
+
+      await client`
+        INSERT INTO order_status_history (
+          shop_id,
+          order_id,
+          from_status,
+          to_status,
+          comment,
+          created_at
+        )
+        VALUES (
+          ${shop.id},
+          ${order.id},
+          ${order.status},
+          'confirmed',
+          'Заказ подтверждён менеджером',
+          NOW()
+        )
+      `;
+
+      const updatedRows = await client`
+        SELECT
+          o.*,
+          c.phone AS customer_phone,
+          c.name AS customer_name,
+          o.total AS total_amount
+        FROM orders o
+        LEFT JOIN customers c ON c.id = o.customer_id
+        WHERE o.id = ${order.id}
+        LIMIT 1
+      `;
+
+      return {
+        ok: true,
+        order: updatedRows[0]
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
 
   app.post("/api/admin/orders/:id/mark-paid", async (request, reply) => {
     const params = z.object({
