@@ -143,13 +143,13 @@ export function TrackClient({ token }: { token: string }) {
         <article className="track-card">
           <h2>Оплата</h2>
 
-          {payment?.payment_url ? (
+          {order.paymentStatus === "paid" ? (
+            <p>Заказ оплачен. Спасибо!</p>
+          ) : payment?.payment_url ? (
             <>
               <p>Заказ подтверждён. Можно перейти к оплате.</p>
               <a href={payment.payment_url} className="track-dark-link">Оплатить заказ</a>
             </>
-          ) : order.paymentStatus === "paid" ? (
-            <p>Заказ оплачен. Спасибо!</p>
           ) : (
             <p>После подтверждения менеджером здесь появится ссылка на оплату.</p>
           )}

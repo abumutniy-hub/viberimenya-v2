@@ -426,6 +426,15 @@ export async function adminRoutes(app: FastifyInstance) {
         WHERE id = ${order.id}
       `;
 
+      await client`
+        UPDATE payments
+        SET status = 'paid',
+            paid_at = COALESCE(paid_at, NOW()),
+            updated_at = NOW()
+        WHERE order_id = ${order.id}
+          AND status <> 'paid'
+      `;
+
       let balanceAfter: number | null = null;
 
       if (bonusAmount > 0) {
