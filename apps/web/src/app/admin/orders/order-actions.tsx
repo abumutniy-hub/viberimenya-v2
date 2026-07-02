@@ -5,16 +5,21 @@ import { useState } from "react";
 export function OrderActions({
   orderId,
   status,
-  paymentStatus
+  paymentStatus,
+  paymentUrl
 }: {
   orderId: string;
   status: string;
   paymentStatus: string;
+  paymentUrl?: string;
 }) {
   const [isConfirming, setIsConfirming] = useState(false);
   const [isPaying, setIsPaying] = useState(false);
+  const [isSavingLink, setIsSavingLink] = useState(false);
+  const [link, setLink] = useState(paymentUrl || "");
 
   const canMarkPaid = status !== "new" && status !== "cancelled" && paymentStatus !== "paid";
+  const canAddPaymentLink = status === "confirmed" && paymentStatus !== "paid";
 
   async function confirmOrder() {
     const confirmed = window.confirm("Подтвердить заказ?");
@@ -38,6 +43,35 @@ export function OrderActions({
     } catch (error) {
       alert(error instanceof Error ? error.message : "Не удалось подтвердить заказ");
       setIsConfirming(false);
+    }
+  }
+
+  async function savePaymentLink() {
+    const paymentUrlToSave = link.trim();
+
+    if (!paymentUrlToSave) {
+      alert("Вставьте ссылку на оплату");
+      return;
+    }
+
+    setIsSavingLink(true);
+
+    try {
+      const response = await fetch(`/api/admin/orders/${orderId}/payment-link`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paymentUrl: paymentUrlToSave })
+      });
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        throw new Error(data?.message || "Не удалось сохранить ссылку");
+      }
+
+      window.location.reload();
+    } catch (error) {
+      alert(error instanceof Error ? error.message : "Не удалось сохранить ссылку");
+      setIsSavingLink(false);
     }
   }
 
@@ -80,6 +114,24 @@ export function OrderActions({
       ) : (
         <span className="admin-status-badge">{status === "confirmed" ? "Подтверждён" : status}</span>
       )}
+
+      {canAddPaymentLink ? (
+        <div className="admin-payment-link-box">
+          <input
+            value={link}
+            onChange={(event) => setLink(event.target.value)}
+            placeholder="Ссылка оплаты"
+          />
+          <button
+            type="button"
+            className="admin-action-button secondary"
+            disabled={isSavingLink}
+            onClick={savePaymentLink}
+          >
+            {isSavingLink ? "..." : paymentUrl ? "Обновить ссылку" : "Добавить ссылку"}
+          </button>
+        </div>
+      ) : null}
 
       {paymentStatus === "paid" ? (
         <span className="admin-paid-badge">Оплачен</span>

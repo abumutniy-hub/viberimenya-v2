@@ -2225,3 +2225,21 @@ button.dark-button,
   font-weight: 700;
 }
 
+/* Step 14.1D — admin manual payment link */
+.admin-payment-link-box {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.admin-payment-link-box input {
+  min-width: 220px;
+  border: 1px solid rgba(88, 62, 43, 0.18);
+  border-radius: 999px;
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 13px;
+  background: #fff;
+}
+

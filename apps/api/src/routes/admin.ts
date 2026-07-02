@@ -139,9 +139,17 @@ export async function adminRoutes(app: FastifyInstance) {
           o.*,
           c.phone AS customer_phone,
           c.name AS customer_name,
-          o.total AS total_amount
+          o.total AS total_amount,
+          p.payment_url AS payment_url
         FROM orders o
         LEFT JOIN customers c ON c.id = o.customer_id
+        LEFT JOIN LATERAL (
+          SELECT payment_url
+          FROM payments
+          WHERE order_id = o.id
+          ORDER BY created_at DESC
+          LIMIT 1
+        ) p ON true
         WHERE o.shop_id = ${shop.id}
         ORDER BY o.created_at DESC
         LIMIT 100
