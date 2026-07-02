@@ -4,9 +4,21 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "echo \"Web app will be created after UI structure step\"",
-    "build": "echo \"Web build will be added later\"",
+    "dev": "next dev -H 127.0.0.1 -p 3000",
+    "build": "next build",
+    "start": "next start -H 127.0.0.1 -p 3000",
     "lint": "echo \"web lint ok\"",
-    "typecheck": "echo \"web typecheck will be added later\""
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "next": "16.2.9",
+    "react": "19.2.3",
+    "react-dom": "19.2.3"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.0",
+    "@types/react": "19.2.7",
+    "@types/react-dom": "19.2.3",
+    "typescript": "5.9.3"
   }
 }

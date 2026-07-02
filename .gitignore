@@ -34,3 +34,9 @@ storage/private/*
 # backups
 backups/*
 !backups/.gitkeep
+
+# TypeScript cache
+*.tsbuildinfo
+
+# TypeScript cache
+*.tsbuildinfo

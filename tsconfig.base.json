@@ -11,11 +11,10 @@
     "resolveJsonModule": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
-    "baseUrl": ".",
     "paths": {
-      "@viberimenya/db": ["packages/db/src"],
-      "@viberimenya/ui": ["packages/ui/src"],
-      "@viberimenya/config": ["packages/config/src"]
+      "@viberimenya/db": ["./packages/db/src/index.ts"],
+      "@viberimenya/ui": ["./packages/ui/src/index.ts"],
+      "@viberimenya/config": ["./packages/config/src/index.ts"]
     }
   }
 }

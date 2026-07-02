@@ -4,3 +4,7 @@ packages:
 
 allowBuilds:
   esbuild: true
+  sharp: true
+
+overrides:
+  typescript: 5.9.3
