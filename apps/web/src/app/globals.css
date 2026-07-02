@@ -729,3 +729,8 @@ a {
     flex-basis: 86%;
   }
 }
+
+/* Step 7.8 — no public helper hints */
+.carousel-note {
+  display: none !important;
+}

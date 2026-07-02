@@ -72,7 +72,6 @@ export function ProcessCarousel() {
         ))}
       </div>
 
-      <div className="carousel-note">На телефоне карточки можно листать пальцем</div>
     </section>
   );
 }

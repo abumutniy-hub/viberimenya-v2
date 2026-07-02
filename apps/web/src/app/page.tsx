@@ -183,7 +183,7 @@ export default async function HomePage() {
         <div className="section-heading">
           <span>Каталог</span>
           <h2>Основные разделы</h2>
-          <p>Категории можно будет редактировать из CRM.</p>
+          <p>Подберите формат букета под повод, настроение и адресата.</p>
         </div>
 
         <div className="category-grid">
@@ -200,7 +200,7 @@ export default async function HomePage() {
       <section className="section product-preview">
         <div className="section-heading">
           <span>Витрина</span>
-          <h2>Хиты продаж появятся из CRM</h2>
+          <h2>Букеты для особенных моментов</h2>
           <p>
             Сейчас мы подготовили место для карточек товаров. После добавления букетов в CRM они появятся
             здесь автоматически.
@@ -209,10 +209,10 @@ export default async function HomePage() {
 
         <div className="empty-product-card">
           <div>
-            <strong>Следующий шаг</strong>
-            <p>Добавим админку, каталог, фото, цены и остатки без тестового мусора.</p>
+            <strong>Индивидуальная сборка</strong>
+            <p>Соберём букет под настроение, повод и пожелания к цветам.</p>
           </div>
-          <a href="/catalog">Открыть будущий каталог</a>
+          <a href="/catalog">Выбрать букет</a>
         </div>
       </section>
 
@@ -251,7 +251,7 @@ export default async function HomePage() {
       <section className="section trust-section">
         <div>
           <span>CRM-ready</span>
-          <h2>Сайт уже связан с будущей CRM</h2>
+          <h2>Каждый заказ проходит аккуратный путь</h2>
         </div>
         <p>
           Главная, каталог, доставка, заказы, сотрудники, бонусы, отзывы и Telegram-бот будут работать на
@@ -266,9 +266,10 @@ export default async function HomePage() {
         </div>
 
         <div className="footer-contacts">
-          {settings?.phone ? <span>{settings.phone}</span> : <span>Телефон добавим в CRM</span>}
-          {settings?.address ? <span>{settings.address}</span> : <span>Адрес добавим в CRM</span>}
-          {settings?.workHours ? <span>{settings.workHours}</span> : <span>График добавим в CRM</span>}
+          <span>Онлайн-заказ на сайте</span>
+          {settings?.phone ? <span>{settings.phone}</span> : null}
+          {settings?.address ? <span>{settings.address}</span> : null}
+          {settings?.workHours ? <span>{settings.workHours}</span> : null}
         </div>
       </footer>
 
