@@ -53,7 +53,11 @@ export function CartClient() {
   const [bonusBalance, setBonusBalance] = useState(0);
   const [bonusToSpend, setBonusToSpend] = useState(0);
   const [bonusMessage, setBonusMessage] = useState("");
-  const [success, setSuccess] = useState<{ orderNumber: string; totalAmount: number } | null>(null);
+  const [success, setSuccess] = useState<{
+    orderNumber: string;
+    totalAmount: number;
+    trackingToken?: string;
+  } | null>(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -232,7 +236,13 @@ export function CartClient() {
         <strong>{money(success.totalAmount)}</strong>
         <div className="cart-success-actions">
           <a href="/catalog" className="light-button">Вернуться в каталог</a>
-          <a href="/orders" className="dark-button">Мои заказы</a>
+          {success.trackingToken ? (
+            <a href={`/order/track/${success.trackingToken}`} className="dark-button">
+              Отследить заказ
+            </a>
+          ) : (
+            <a href="/account" className="dark-button">Личный кабинет</a>
+          )}
         </div>
       </section>
     );
