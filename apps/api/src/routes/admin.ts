@@ -243,6 +243,43 @@ export async function adminRoutes(app: FastifyInstance) {
         WHERE o.id = ${order.id}
         LIMIT 1
       `;
+        const updatedOrder = updatedRows[0] as Record<string, any> | undefined;
+
+        await client`
+          INSERT INTO notification_events (
+            shop_id,
+            order_id,
+            type,
+            channel,
+            recipient_type,
+            status,
+            payload,
+            created_at,
+            updated_at
+          )
+          VALUES (
+            ${shop.id},
+            ${order.id},
+            'order_confirmed',
+            'telegram',
+            'staff',
+            'pending',
+            ${JSON.stringify({
+              orderId: order.id,
+              orderNumber: updatedOrder?.order_number ?? null,
+              previousStatus: order.status,
+              status: "confirmed",
+              paymentStatus: updatedOrder?.payment_status ?? null,
+              totalAmount: updatedOrder?.total_amount ?? updatedOrder?.total ?? null,
+              customerPhone: updatedOrder?.customer_phone ?? null,
+              trackingToken: updatedOrder?.tracking_token ?? null,
+              trackingUrl: updatedOrder?.tracking_token ? `/order/track/${updatedOrder.tracking_token}` : null
+            })},
+            NOW(),
+            NOW()
+          )
+        `;
+
 
       return {
         ok: true,
@@ -342,6 +379,41 @@ export async function adminRoutes(app: FastifyInstance) {
             updated_at = NOW()
         WHERE id = ${order.id}
       `;
+        const payment = paymentRows[0] as Record<string, any> | undefined;
+
+        await client`
+          INSERT INTO notification_events (
+            shop_id,
+            order_id,
+            type,
+            channel,
+            recipient_type,
+            status,
+            payload,
+            created_at,
+            updated_at
+          )
+          VALUES (
+            ${shop.id},
+            ${order.id},
+            'payment_link_added',
+            'telegram',
+            'staff',
+            'pending',
+            ${JSON.stringify({
+              orderId: order.id,
+              orderNumber: order.order_number,
+              status: order.status,
+              paymentStatus: order.payment_status,
+              amount: order.total,
+              paymentUrl: body.paymentUrl,
+              paymentId: payment?.id ?? null
+            })},
+            NOW(),
+            NOW()
+          )
+        `;
+
 
       return {
         ok: true,
@@ -471,6 +543,41 @@ export async function adminRoutes(app: FastifyInstance) {
           )
         `;
       }
+        if (!wasAlreadyPaid) {
+          await client`
+            INSERT INTO notification_events (
+              shop_id,
+              order_id,
+              type,
+              channel,
+              recipient_type,
+              status,
+              payload,
+              created_at,
+              updated_at
+            )
+            VALUES (
+              ${shop.id},
+              ${order.id},
+              'order_paid',
+              'telegram',
+              'staff',
+              'pending',
+              ${JSON.stringify({
+                orderId: order.id,
+                orderNumber: order.order_number,
+                status: order.status,
+                paymentStatus: "paid",
+                totalAmount: order.total,
+                bonusEarned: bonusAmount,
+                balanceAfter
+              })},
+              NOW(),
+              NOW()
+            )
+          `;
+        }
+
 
       const updatedRows = await client`
         SELECT

@@ -1215,6 +1215,46 @@ export async function publicRoutes(app: FastifyInstance) {
         `;
       }
 
+        await client`
+          INSERT INTO notification_events (
+            shop_id,
+            order_id,
+            type,
+            channel,
+            recipient_type,
+            status,
+            payload,
+            created_at,
+            updated_at
+          )
+          VALUES (
+            ${shop.id},
+            ${order.id},
+            'order_created',
+            'telegram',
+            'staff',
+            'pending',
+            ${JSON.stringify({
+              orderId: order.id,
+              orderNumber,
+              status: "new",
+              customerName: body.customerName,
+              customerPhone: body.customerPhone,
+              recipientName: body.recipientName || body.customerName,
+              recipientPhone: body.recipientPhone || body.customerPhone,
+              totalAmount,
+              discountTotal,
+              bonusSpent,
+              deliveryType: body.deliveryType,
+              deliveryDate: body.deliveryDate || null,
+              trackingToken,
+              trackingUrl: `/order/track/${trackingToken}`
+            })},
+            NOW(),
+            NOW()
+          )
+        `;
+
       return reply.status(201).send({
         ok: true,
         order: {
