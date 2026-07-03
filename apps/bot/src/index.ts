@@ -843,6 +843,686 @@ async function handleCart(chatId: number, messageId?: number) {
   );
 }
 
+
+type TelegramCheckoutStep =
+  | "customer_name"
+  | "customer_phone"
+  | "recipient_name"
+  | "recipient_phone"
+  | "delivery_date"
+  | "delivery_interval"
+  | "delivery_address"
+  | "comment"
+  | "confirm";
+
+type TelegramCheckoutData = {
+  customerName?: string;
+  customerPhone?: string;
+  recipientName?: string;
+  recipientPhone?: string;
+  deliveryDateText?: string;
+  deliveryInterval?: string;
+  deliveryAddress?: string;
+  comment?: string;
+};
+
+type TelegramCheckoutSession = {
+  step: TelegramCheckoutStep;
+  data: TelegramCheckoutData;
+};
+
+type CreatedTelegramOrder = {
+  id: string;
+  orderNumber: string;
+  trackingToken: string;
+  total: number;
+};
+
+function normalizeInput(value: string) {
+  return value.trim().replace(/\s+/g, " ");
+}
+
+function normalizePhone(value: string) {
+  return value.trim().replace(/[^\d+]/g, "");
+}
+
+function createTelegramOrderNumber() {
+  return `VM-${Date.now()}`;
+}
+
+function createTelegramTrackingToken() {
+  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`;
+}
+
+function parseDeliveryDateInput(value: string): Date | null {
+  const text = value.trim();
+
+  const ruMatch = text.match(/^(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{2}|\d{4})$/);
+  if (ruMatch) {
+    const day = Number(ruMatch[1]);
+    const month = Number(ruMatch[2]);
+    const rawYear = Number(ruMatch[3]);
+    const year = rawYear < 100 ? 2000 + rawYear : rawYear;
+    const date = new Date(Date.UTC(year, month - 1, day, 9, 0, 0));
+
+    if (date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day) {
+      return date;
+    }
+  }
+
+  const isoMatch = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (isoMatch) {
+    const year = Number(isoMatch[1]);
+    const month = Number(isoMatch[2]);
+    const day = Number(isoMatch[3]);
+    const date = new Date(Date.UTC(year, month - 1, day, 9, 0, 0));
+
+    if (date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day) {
+      return date;
+    }
+  }
+
+  return null;
+}
+
+function checkoutCancelKeyboard() {
+  return inlineKeyboard([
+    [{ text: "❌ Отменить заказ", callback_data: "checkout:cancel" }]
+  ]);
+}
+
+async function getCheckoutSession(chatId: number): Promise<TelegramCheckoutSession | null> {
+  const shopId = await getDefaultShopId();
+
+  if (!shopId) {
+    return null;
+  }
+
+  const rows = await sql<TelegramCheckoutSession[]>`
+    SELECT step, data
+    FROM telegram_checkout_sessions
+    WHERE shop_id = ${shopId}
+      AND telegram_chat_id = ${chatId}
+    LIMIT 1
+  `;
+
+  return rows[0] || null;
+}
+
+async function setCheckoutSession(chatId: number, step: TelegramCheckoutStep, data: TelegramCheckoutData) {
+  const shopId = await getDefaultShopId();
+
+  if (!shopId) {
+    return;
+  }
+
+  await sql`
+    INSERT INTO telegram_checkout_sessions (shop_id, telegram_chat_id, step, data)
+    VALUES (${shopId}, ${chatId}, ${step}, ${JSON.stringify(data)})
+    ON CONFLICT (shop_id, telegram_chat_id)
+    DO UPDATE SET step = EXCLUDED.step,
+                  data = EXCLUDED.data,
+                  updated_at = NOW()
+  `;
+}
+
+async function clearCheckoutSession(chatId: number) {
+  const shopId = await getDefaultShopId();
+
+  if (!shopId) {
+    return;
+  }
+
+  await sql`
+    DELETE FROM telegram_checkout_sessions
+    WHERE shop_id = ${shopId}
+      AND telegram_chat_id = ${chatId}
+  `;
+}
+
+async function askCheckoutQuestion(chatId: number, text: string) {
+  await sendTelegramMessage(chatId, text, {
+    reply_markup: checkoutCancelKeyboard()
+  });
+}
+
+async function handleCheckoutStart(chatId: number) {
+  const cartRows = await getTelegramCartRows(chatId);
+
+  if (cartRows.length === 0) {
+    await handleCart(chatId);
+    return;
+  }
+
+  await setCheckoutSession(chatId, "customer_name", {});
+
+  await askCheckoutQuestion(
+    chatId,
+    [
+      "✅ Оформление заказа",
+      "",
+      "Шаг 1 из 8.",
+      "Введите ваше имя:"
+    ].join("\n")
+  );
+}
+
+async function showCheckoutConfirm(chatId: number, data: TelegramCheckoutData) {
+  const cartRows = await getTelegramCartRows(chatId);
+
+  if (cartRows.length === 0) {
+    await clearCheckoutSession(chatId);
+    await handleCart(chatId);
+    return;
+  }
+
+  let total = 0;
+  const productLines = cartRows.map((item, index) => {
+    const itemTotal = Number(item.price || 0) * Number(item.quantity || 0);
+    total += itemTotal;
+    return `${index + 1}. ${item.name} — ${item.quantity} шт. × ${money(item.price)} = ${money(itemTotal)}`;
+  });
+
+  await setCheckoutSession(chatId, "confirm", data);
+
+  await sendTelegramMessage(
+    chatId,
+    [
+      "📋 Проверьте заказ",
+      "",
+      ...productLines,
+      "",
+      `Итого: ${money(total)}`,
+      "",
+      `Имя клиента: ${data.customerName || ""}`,
+      `Телефон клиента: ${data.customerPhone || ""}`,
+      `Получатель: ${data.recipientName || data.customerName || ""}`,
+      `Телефон получателя: ${data.recipientPhone || data.customerPhone || ""}`,
+      `Дата доставки: ${data.deliveryDateText || ""}`,
+      `Интервал: ${data.deliveryInterval || ""}`,
+      `Адрес: ${data.deliveryAddress || ""}`,
+      data.comment ? `Комментарий: ${data.comment}` : "Комментарий: нет",
+      "",
+      "Если всё верно, подтвердите заказ."
+    ].join("\n"),
+    {
+      reply_markup: inlineKeyboard([
+        [{ text: "✅ Подтвердить заказ", callback_data: "checkout:confirm" }],
+        [{ text: "❌ Отменить заказ", callback_data: "checkout:cancel" }]
+      ])
+    }
+  );
+}
+
+async function handleCheckoutMessage(message: TelegramMessage, text: string): Promise<boolean> {
+  const session = await getCheckoutSession(message.chat.id);
+
+  if (!session) {
+    return false;
+  }
+
+  const value = normalizeInput(text);
+
+  if (value === "/cancel" || value === "❌ Отменить заказ") {
+    await clearCheckoutSession(message.chat.id);
+    await sendTelegramMessage(message.chat.id, "Оформление заказа отменено.");
+    return true;
+  }
+
+  const data: TelegramCheckoutData = {
+    ...(session.data || {})
+  };
+
+  if (session.step === "customer_name") {
+    if (value.length < 2) {
+      await askCheckoutQuestion(message.chat.id, "Введите имя клиента:");
+      return true;
+    }
+
+    data.customerName = value;
+    await setCheckoutSession(message.chat.id, "customer_phone", data);
+    await askCheckoutQuestion(
+      message.chat.id,
+      [
+        "Шаг 2 из 8.",
+        "Введите ваш телефон:",
+        "",
+        "Например: +7 999 123-45-67"
+      ].join("\n")
+    );
+    return true;
+  }
+
+  if (session.step === "customer_phone") {
+    const phone = normalizePhone(value);
+
+    if (phone.length < 10) {
+      await askCheckoutQuestion(message.chat.id, "Введите корректный номер телефона:");
+      return true;
+    }
+
+    data.customerPhone = phone;
+    await setCheckoutSession(message.chat.id, "recipient_name", data);
+    await askCheckoutQuestion(
+      message.chat.id,
+      [
+        "Шаг 3 из 8.",
+        "Введите имя получателя.",
+        "Если получатель тот же, отправьте знак минус: -"
+      ].join("\n")
+    );
+    return true;
+  }
+
+  if (session.step === "recipient_name") {
+    data.recipientName = value === "-" ? data.customerName : value;
+    await setCheckoutSession(message.chat.id, "recipient_phone", data);
+    await askCheckoutQuestion(
+      message.chat.id,
+      [
+        "Шаг 4 из 8.",
+        "Введите телефон получателя.",
+        "Если телефон тот же, отправьте знак минус: -"
+      ].join("\n")
+    );
+    return true;
+  }
+
+  if (session.step === "recipient_phone") {
+    if (value === "-") {
+      data.recipientPhone = data.customerPhone;
+    } else {
+      const phone = normalizePhone(value);
+
+      if (phone.length < 10) {
+        await askCheckoutQuestion(message.chat.id, "Введите корректный телефон получателя:");
+        return true;
+      }
+
+      data.recipientPhone = phone;
+    }
+
+    await setCheckoutSession(message.chat.id, "delivery_date", data);
+    await askCheckoutQuestion(
+      message.chat.id,
+      [
+        "Шаг 5 из 8.",
+        "Введите дату доставки:",
+        "",
+        "Например: 04.07.2026"
+      ].join("\n")
+    );
+    return true;
+  }
+
+  if (session.step === "delivery_date") {
+    data.deliveryDateText = value;
+    await setCheckoutSession(message.chat.id, "delivery_interval", data);
+    await askCheckoutQuestion(
+      message.chat.id,
+      [
+        "Шаг 6 из 8.",
+        "Введите удобный интервал доставки:",
+        "",
+        "Например: 10:00-13:00"
+      ].join("\n")
+    );
+    return true;
+  }
+
+  if (session.step === "delivery_interval") {
+    data.deliveryInterval = value;
+    await setCheckoutSession(message.chat.id, "delivery_address", data);
+    await askCheckoutQuestion(
+      message.chat.id,
+      [
+        "Шаг 7 из 8.",
+        "Введите адрес доставки:",
+        "",
+        "Город, улица, дом, квартира/офис."
+      ].join("\n")
+    );
+    return true;
+  }
+
+  if (session.step === "delivery_address") {
+    if (value.length < 5) {
+      await askCheckoutQuestion(message.chat.id, "Введите адрес доставки подробнее:");
+      return true;
+    }
+
+    data.deliveryAddress = value;
+    await setCheckoutSession(message.chat.id, "comment", data);
+    await askCheckoutQuestion(
+      message.chat.id,
+      [
+        "Шаг 8 из 8.",
+        "Добавьте комментарий к заказу.",
+        "Если комментария нет, отправьте знак минус: -"
+      ].join("\n")
+    );
+    return true;
+  }
+
+  if (session.step === "comment") {
+    if (value !== "-") {
+      data.comment = value;
+    }
+
+    await showCheckoutConfirm(message.chat.id, data);
+    return true;
+  }
+
+  if (session.step === "confirm") {
+    await sendTelegramMessage(
+      message.chat.id,
+      "Пожалуйста, нажмите кнопку «✅ Подтвердить заказ» или «❌ Отменить заказ» под сообщением с заказом."
+    );
+    return true;
+  }
+
+  return false;
+}
+
+async function createOrderFromTelegramCheckout(chatId: number, data: TelegramCheckoutData): Promise<CreatedTelegramOrder | null> {
+  const shopId = await getDefaultShopId();
+
+  if (!shopId) {
+    throw new Error("Shop not found");
+  }
+
+  const cartRows = await getTelegramCartRows(chatId);
+
+  if (cartRows.length === 0) {
+    return null;
+  }
+
+  const subtotal = cartRows.reduce((sum, item) => {
+    return sum + Number(item.price || 0) * Number(item.quantity || 0);
+  }, 0);
+
+  const total = subtotal;
+  const orderNumber = createTelegramOrderNumber();
+  const trackingToken = createTelegramTrackingToken();
+  const deliveryDate = data.deliveryDateText ? parseDeliveryDateInput(data.deliveryDateText) : null;
+  const customerName = data.customerName || "Клиент Telegram";
+  const customerPhone = data.customerPhone || String(chatId);
+  const recipientName = data.recipientName || customerName;
+  const recipientPhone = data.recipientPhone || customerPhone;
+  const deliveryComment = [
+    data.deliveryInterval ? `Интервал: ${data.deliveryInterval}` : "",
+    data.comment ? `Комментарий: ${data.comment}` : ""
+  ].filter(Boolean).join("\n");
+
+  const customerRows = await sql<{ id: string; bonus_balance: number }[]>`
+    INSERT INTO customers (
+      shop_id,
+      phone,
+      name,
+      total_orders,
+      total_spent,
+      last_order_at,
+      created_at,
+      updated_at
+    )
+    VALUES (
+      ${shopId},
+      ${customerPhone},
+      ${customerName},
+      0,
+      0,
+      NOW(),
+      NOW(),
+      NOW()
+    )
+    ON CONFLICT (shop_id, phone)
+    DO UPDATE SET
+      name = COALESCE(NULLIF(EXCLUDED.name, ''), customers.name),
+      updated_at = NOW()
+    RETURNING id, bonus_balance
+  `;
+
+  const customer = customerRows[0];
+
+  if (!customer?.id) {
+    throw new Error("Customer was not created");
+  }
+
+  const orderRows = await sql<{ id: string }[]>`
+    INSERT INTO orders (
+      shop_id,
+      customer_id,
+      order_number,
+      status,
+      payment_status,
+      payment_method,
+      delivery_type,
+      delivery_date,
+      delivery_address_text,
+      delivery_comment,
+      recipient_name,
+      recipient_phone,
+      customer_comment,
+      subtotal,
+      discount_total,
+      delivery_price,
+      bonus_spent,
+      bonus_earned,
+      total,
+      tracking_token,
+      metadata,
+      created_at,
+      updated_at
+    )
+    VALUES (
+      ${shopId},
+      ${customer.id},
+      ${orderNumber},
+      'new',
+      'pending',
+      'transfer_after_confirm',
+      'delivery',
+      ${deliveryDate},
+      ${data.deliveryAddress || ""},
+      ${deliveryComment},
+      ${recipientName},
+      ${recipientPhone},
+      ${data.comment || ""},
+      ${subtotal},
+      0,
+      0,
+      0,
+      0,
+      ${total},
+      ${trackingToken},
+      ${JSON.stringify({
+        source: "telegram",
+        telegramChatId: chatId,
+        requestedDeliveryDate: data.deliveryDateText || null,
+        requestedDeliveryInterval: data.deliveryInterval || null
+      })},
+      NOW(),
+      NOW()
+    )
+    RETURNING id
+  `;
+
+  const order = orderRows[0];
+
+  if (!order?.id) {
+    throw new Error("Order was not created");
+  }
+
+  for (const item of cartRows) {
+    const price = Number(item.price || 0);
+    const quantity = Number(item.quantity || 0);
+    const itemTotal = price * quantity;
+
+    await sql`
+      INSERT INTO order_items (
+        shop_id,
+        order_id,
+        product_id,
+        product_name,
+        product_snapshot,
+        quantity,
+        price,
+        total,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        ${shopId},
+        ${order.id},
+        ${item.product_id},
+        ${item.name},
+        ${JSON.stringify({ id: item.product_id, name: item.name, price })},
+        ${quantity},
+        ${price},
+        ${itemTotal},
+        NOW(),
+        NOW()
+      )
+    `;
+  }
+
+  await sql`
+    UPDATE customers
+    SET total_orders = total_orders + 1,
+        total_spent = total_spent + ${total},
+        last_order_at = NOW(),
+        updated_at = NOW()
+    WHERE id = ${customer.id}
+  `;
+
+  await sql`
+    INSERT INTO order_status_history (
+      shop_id,
+      order_id,
+      from_status,
+      to_status,
+      comment,
+      created_at
+    )
+    VALUES (
+      ${shopId},
+      ${order.id},
+      NULL,
+      'new',
+      'Заказ создан через Telegram-бот',
+      NOW()
+    )
+  `;
+
+  await sql`
+    INSERT INTO notification_events (
+      shop_id,
+      order_id,
+      type,
+      channel,
+      recipient_type,
+      status,
+      payload,
+      created_at,
+      updated_at
+    )
+    VALUES (
+      ${shopId},
+      ${order.id},
+      'order_created',
+      'telegram',
+      'staff',
+      'pending',
+      ${JSON.stringify({
+        orderId: order.id,
+        orderNumber,
+        status: "new",
+        customerName,
+        customerPhone,
+        recipientName,
+        recipientPhone,
+        totalAmount: total,
+        discountTotal: 0,
+        bonusSpent: 0,
+        deliveryType: "delivery",
+        deliveryDate: data.deliveryDateText || null,
+        trackingToken,
+        trackingUrl: `/order/track/${trackingToken}`
+      })},
+      NOW(),
+      NOW()
+    )
+  `;
+
+  await clearTelegramCart(chatId);
+  await clearCheckoutSession(chatId);
+
+  return {
+    id: order.id,
+    orderNumber,
+    trackingToken,
+    total
+  };
+}
+
+async function handleCheckoutConfirm(chatId: number) {
+  const session = await getCheckoutSession(chatId);
+
+  if (!session) {
+    await sendTelegramMessage(chatId, "Оформление заказа не найдено. Откройте корзину и начните заново.");
+    return;
+  }
+
+  if (session.step !== "confirm") {
+    await sendTelegramMessage(chatId, "Сначала заполните данные для оформления заказа.");
+    return;
+  }
+
+  try {
+    const order = await createOrderFromTelegramCheckout(chatId, session.data || {});
+
+    if (!order) {
+      await sendTelegramMessage(chatId, "Корзина пустая. Добавьте товар и попробуйте снова.");
+      return;
+    }
+
+    await sendTelegramMessage(
+      chatId,
+      [
+        "✅ Заказ создан",
+        "",
+        `Номер заказа: ${order.orderNumber}`,
+        `Сумма: ${money(order.total)}`,
+        "",
+        "Менеджер проверит заказ и отправит ссылку на оплату после подтверждения.",
+        "",
+        `Отследить заказ: ${absoluteUrl(`/order/track/${order.trackingToken}`)}`
+      ].join("\n"),
+      {
+        reply_markup: await mainKeyboardForChat(chatId)
+      }
+    );
+  } catch (error) {
+    console.error("[bot-worker] telegram checkout failed", error);
+
+    await sendTelegramMessage(
+      chatId,
+      [
+        "Не удалось создать заказ.",
+        "Попробуйте ещё раз или напишите менеджеру."
+      ].join("\n")
+    );
+  }
+}
+
+async function handleCheckoutCancel(chatId: number) {
+  await clearCheckoutSession(chatId);
+  await sendTelegramMessage(chatId, "Оформление заказа отменено.", {
+    reply_markup: await mainKeyboardForChat(chatId)
+  });
+}
+
+
 async function handleOrders(chatId: number) {
   const replyMarkup = await mainKeyboardForChat(chatId);
 
@@ -979,17 +1659,22 @@ async function handleCallbackQuery(callbackQuery: TelegramCallbackQuery) {
     return;
   }
 
+
   if (data === "checkout:start") {
     await answerCallbackQuery(callbackQuery.id);
-    await sendTelegramMessage(
-      chatId,
-      [
-        "✅ Оформление заказа",
-        "",
-        "Корзина уже работает в боте.",
-        "Следующим блоком добавим пошаговое оформление: имя, телефон, получатель, дата, интервал и адрес доставки."
-      ].join("\n")
-    );
+    await handleCheckoutStart(chatId);
+    return;
+  }
+
+  if (data === "checkout:confirm") {
+    await answerCallbackQuery(callbackQuery.id, "Создаю заказ");
+    await handleCheckoutConfirm(chatId);
+    return;
+  }
+
+  if (data === "checkout:cancel") {
+    await answerCallbackQuery(callbackQuery.id, "Оформление отменено");
+    await handleCheckoutCancel(chatId);
     return;
   }
 
@@ -1013,6 +1698,11 @@ async function handleUpdate(update: TelegramUpdate) {
 
   if (text === "/start" || text === "👤 Профиль") {
     await handleStart(update);
+    return;
+  }
+
+  const checkoutHandled = await handleCheckoutMessage(message, text);
+  if (checkoutHandled) {
     return;
   }
 
