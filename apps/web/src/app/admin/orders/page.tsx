@@ -41,6 +41,7 @@ export default async function AdminOrdersPage() {
                   status={String(row.status)}
                   paymentStatus={String(row.payment_status)}
                   paymentUrl={String(row.payment_url || "")}
+                  trackingToken={String(row.tracking_token || "")}
                 />
               )
             }

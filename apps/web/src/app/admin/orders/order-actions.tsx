@@ -6,12 +6,14 @@ export function OrderActions({
   orderId,
   status,
   paymentStatus,
-  paymentUrl
+  paymentUrl,
+  trackingToken
 }: {
   orderId: string;
   status: string;
   paymentStatus: string;
   paymentUrl?: string;
+  trackingToken?: string;
 }) {
   const [isConfirming, setIsConfirming] = useState(false);
   const [isPaying, setIsPaying] = useState(false);
@@ -20,6 +22,20 @@ export function OrderActions({
 
   const canMarkPaid = status !== "new" && status !== "cancelled" && paymentStatus !== "paid";
   const canAddPaymentLink = status === "confirmed" && paymentStatus !== "paid";
+  const trackingUrl = trackingToken ? `/order/track/${trackingToken}` : "";
+
+  async function copyTrackingLink() {
+    if (!trackingToken) return;
+
+    const absoluteUrl = `${window.location.origin}${trackingUrl}`;
+
+    try {
+      await navigator.clipboard.writeText(absoluteUrl);
+      alert("Ссылка заказа скопирована");
+    } catch {
+      window.prompt("Скопируйте ссылку заказа", absoluteUrl);
+    }
+  }
 
   async function confirmOrder() {
     const confirmed = window.confirm("Подтвердить заказ?");
@@ -102,6 +118,17 @@ export function OrderActions({
 
   return (
     <div className="admin-order-actions">
+      {trackingToken ? (
+        <div className="admin-order-link-actions">
+          <a className="admin-small-link" href={trackingUrl} target="_blank" rel="noreferrer">
+            Открыть заказ
+          </a>
+          <button type="button" className="admin-copy-link" onClick={copyTrackingLink}>
+            Копировать ссылку
+          </button>
+        </div>
+      ) : null}
+
       {status === "new" ? (
         <button
           type="button"

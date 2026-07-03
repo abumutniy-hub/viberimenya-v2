@@ -2243,3 +2243,25 @@ button.dark-button,
   background: #fff;
 }
 
+/* Step 14.2B — admin order tracking link */
+.admin-order-link-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.admin-small-link,
+.admin-copy-link {
+  border: 0;
+  border-radius: 999px;
+  padding: 8px 10px;
+  background: rgba(63, 43, 33, 0.08);
+  color: #3f2b21;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  text-decoration: none;
+  cursor: pointer;
+}
+
