@@ -15,34 +15,56 @@ type NotificationEvent = {
   created_at: string;
 };
 
+type TelegramUser = {
+  id: number;
+  is_bot?: boolean;
+  first_name?: string;
+  last_name?: string;
+  username?: string;
+};
+
+type TelegramChat = {
+  id: number;
+  type: string;
+  first_name?: string;
+  last_name?: string;
+  username?: string;
+};
+
+type TelegramMessage = {
+  message_id: number;
+  text?: string;
+  from?: TelegramUser;
+  chat: TelegramChat;
+};
+
+type TelegramCallbackQuery = {
+  id: string;
+  from: TelegramUser;
+  data?: string;
+  message?: TelegramMessage;
+};
+
 type TelegramUpdate = {
   update_id: number;
-  message?: {
-    message_id: number;
-    text?: string;
-    from?: {
-      id: number;
-      is_bot?: boolean;
-      first_name?: string;
-      last_name?: string;
-      username?: string;
-    };
-    chat: {
-      id: number;
-      type: string;
-      first_name?: string;
-      last_name?: string;
-      username?: string;
-    };
-  };
+  message?: TelegramMessage;
+  callback_query?: TelegramCallbackQuery;
+};
+
+type TelegramInlineKeyboardButton = {
+  text: string;
+  callback_data?: string;
+  url?: string;
 };
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
 const DRY_RUN = process.env.BOT_DRY_RUN !== "false";
 const RUN_ONCE = process.env.BOT_RUN_ONCE === "true";
-const POLL_INTERVAL_MS = Number(process.env.BOT_POLL_INTERVAL_MS || 15000);
+const POLL_INTERVAL_MS = envNumber("BOT_POLL_INTERVAL_MS", 1000, 300, 2000);
+const TELEGRAM_UPDATES_TIMEOUT_SECONDS = envNumber("BOT_GET_UPDATES_TIMEOUT_SECONDS", 5, 1, 25);
 const SITE_URL = process.env.PUBLIC_SITE_URL || process.env.NEXT_PUBLIC_SITE_URL || "http://viberimenya.ru";
+const DEFAULT_SHOP_SLUG = process.env.DEFAULT_SHOP_SLUG || "viberimenya";
 
 if (!DATABASE_URL) {
   throw new Error("DATABASE_URL is required");
@@ -60,6 +82,17 @@ const sql = postgres(DATABASE_URL, {
 let isStopping = false;
 let telegramOffset = 0;
 
+function envNumber(name: string, fallback: number, min: number, max: number): number {
+  const raw = process.env[name];
+  const value = raw ? Number(raw) : fallback;
+
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
 function valueToText(value: unknown): string {
   return value === null || value === undefined ? "" : String(value);
 }
@@ -74,6 +107,49 @@ function absoluteUrl(value: unknown): string {
   if (!url) return "";
   if (url.startsWith("http://") || url.startsWith("https://")) return url;
   return `${SITE_URL}${url.startsWith("/") ? "" : "/"}${url}`;
+}
+
+function chunkRows<T>(items: T[], size: number): T[][] {
+  const rows: T[][] = [];
+
+  for (let index = 0; index < items.length; index += size) {
+    rows.push(items.slice(index, index + size));
+  }
+
+  return rows;
+}
+
+function inlineKeyboard(rows: TelegramInlineKeyboardButton[][]) {
+  return {
+    inline_keyboard: rows
+  };
+}
+
+function openMenuInlineKeyboard() {
+  return inlineKeyboard([
+    [{ text: "🔼 Открыть меню", callback_data: "menu:open" }],
+    [{ text: "❌ Скрыть это сообщение", callback_data: "msg:delete" }]
+  ]);
+}
+
+function buildCatalogUrl(path = "") {
+  return absoluteUrl(`/catalog${path}`);
+}
+
+function buildProductUrl(slug: string) {
+  return absoluteUrl(`/product/${slug}`);
+}
+
+async function getDefaultShopId() {
+  const rows = await sql<{ id: string }[]>`
+    SELECT id
+    FROM shops
+    WHERE slug = ${DEFAULT_SHOP_SLUG}
+      AND status = 'active'
+    LIMIT 1
+  `;
+
+  return rows[0]?.id || "";
 }
 
 async function telegramApi<T>(method: string, body?: Record<string, unknown>): Promise<T> {
@@ -113,12 +189,105 @@ async function sendTelegramMessage(chatId: string | number, message: string, ext
   });
 }
 
+async function sendTelegramPhoto(chatId: string | number, photoUrl: string, caption: string, extra?: Record<string, unknown>) {
+  if (DRY_RUN) {
+    console.log(`[bot-worker] dry-run send photo chat=${chatId} photo=${photoUrl}`);
+    console.log(caption);
+    return;
+  }
+
+  const payload: Record<string, unknown> = {
+    chat_id: chatId,
+    photo: photoUrl,
+    caption
+  };
+
+  if (extra) {
+    Object.assign(payload, extra);
+  }
+
+  await telegramApi("sendPhoto", payload);
+}
+
+async function editTelegramMessageText(chatId: string | number, messageId: number, message: string, extra?: Record<string, unknown>) {
+  if (DRY_RUN) {
+    console.log(`[bot-worker] dry-run edit chat=${chatId} message=${messageId}`);
+    console.log(message);
+    return;
+  }
+
+  const payload: Record<string, unknown> = {
+    chat_id: chatId,
+    message_id: messageId,
+    text: message,
+    disable_web_page_preview: true
+  };
+
+  if (extra) {
+    Object.assign(payload, extra);
+  }
+
+  await telegramApi("editMessageText", payload);
+}
+
+async function deleteTelegramMessage(chatId: string | number, messageId: number) {
+  if (DRY_RUN) {
+    console.log(`[bot-worker] dry-run delete chat=${chatId} message=${messageId}`);
+    return;
+  }
+
+  await telegramApi("deleteMessage", {
+    chat_id: chatId,
+    message_id: messageId
+  });
+}
+
+async function sendOrEditTelegramMessage(
+  chatId: string | number,
+  message: string,
+  extra: Record<string, unknown>,
+  messageId?: number
+) {
+  if (messageId) {
+    try {
+      await editTelegramMessageText(chatId, messageId, message, extra);
+      return;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+
+      if (errorMessage.includes("message is not modified")) {
+        return;
+      }
+
+      console.warn(`[bot-worker] edit failed, sending new message instead: ${errorMessage}`);
+    }
+  }
+
+  await sendTelegramMessage(chatId, message, extra);
+}
+
+async function answerCallbackQuery(callbackQueryId: string, text?: string) {
+  if (DRY_RUN) {
+    return;
+  }
+
+  const body: Record<string, unknown> = {
+    callback_query_id: callbackQueryId
+  };
+
+  if (text) {
+    body.text = text;
+  }
+
+  await telegramApi("answerCallbackQuery", body);
+}
+
 function clientMainKeyboard() {
   return {
     keyboard: [
       [{ text: "🛍 Каталог" }, { text: "🧺 Корзина" }],
       [{ text: "📦 Мои заказы" }, { text: "🎁 Бонусы" }],
-      [{ text: "☎️ Связь" }]
+      [{ text: "☎️ Связь" }, { text: "🔽 Скрыть меню" }]
     ],
     resize_keyboard: true,
     is_persistent: true
@@ -142,6 +311,8 @@ function staffMainKeyboard(role: string) {
   if (["owner", "admin", "courier"].includes(role)) {
     rows.push([{ text: "🚚 Доставка" }]);
   }
+
+  rows.push([{ text: "🔽 Скрыть меню" }]);
 
   return {
     keyboard: rows,
@@ -209,7 +380,10 @@ async function handleStart(update: TelegramUpdate) {
   const message = update.message;
   if (!message) return;
 
-  const chatId = message.chat.id;
+  await handleOpenMenu(message.chat.id, true);
+}
+
+async function handleOpenMenu(chatId: number, isStart = false) {
   const telegramId = String(chatId);
   const profile = await getTelegramProfile(telegramId);
 
@@ -224,7 +398,7 @@ async function handleStart(update: TelegramUpdate) {
         "Вы вошли как сотрудник магазина.",
         `Роль: ${role}`,
         "",
-        "Выберите нужный раздел:"
+        isStart ? "Выберите нужный раздел:" : "Меню открыто. Выберите нужный раздел:"
       ].join("\n"),
       {
         reply_markup: staffMainKeyboard(role)
@@ -239,8 +413,8 @@ async function handleStart(update: TelegramUpdate) {
     [
       "🌸 ВЫБЕРИ МЕНЯ",
       "",
-      "Добро пожаловать в магазин цветов.",
-      "Здесь можно выбрать букет, оформить заказ, отслеживать доставку и пользоваться бонусами.",
+      isStart ? "Добро пожаловать в магазин цветов." : "Меню открыто.",
+      isStart ? "Здесь можно выбрать букет, оформить заказ, отслеживать доставку и пользоваться бонусами." : "Выберите нужный раздел ниже.",
       "",
       "Выберите раздел:"
     ].join("\n"),
@@ -250,15 +424,43 @@ async function handleStart(update: TelegramUpdate) {
   );
 }
 
-async function handleCatalog(chatId: number) {
-  const categories = await sql<{ name: string; slug: string }[]>`
-    SELECT name, slug
-    FROM categories
-    WHERE is_active = true
-    ORDER BY sort_order ASC, name ASC
-  `;
+async function handleHideMenu(chatId: number) {
+  await sendTelegramMessage(
+    chatId,
+    [
+      "🔽 Меню скрыто.",
+      "",
+      "Чтобы открыть его снова, нажмите кнопку ниже или отправьте команду /menu."
+    ].join("\n"),
+    {
+      reply_markup: { remove_keyboard: true }
+    }
+  );
 
+  await sendTelegramMessage(chatId, "Быстрое открытие меню:", {
+    reply_markup: openMenuInlineKeyboard()
+  });
+}
+
+async function handleCatalog(chatId: number, messageId?: number) {
+  const shopId = await getDefaultShopId();
   const replyMarkup = await mainKeyboardForChat(chatId);
+
+  if (!shopId) {
+    await sendTelegramMessage(chatId, "Каталог временно недоступен. Попробуйте позже.", {
+      reply_markup: replyMarkup
+    });
+    return;
+  }
+
+  const categories = await sql<{ id: string; name: string; slug: string }[]>`
+    SELECT id, name, slug
+    FROM categories
+    WHERE shop_id = ${shopId}
+      AND is_active = true
+    ORDER BY sort_order ASC, name ASC
+    LIMIT 24
+  `;
 
   if (categories.length === 0) {
     await sendTelegramMessage(chatId, "Каталог пока наполняется.", {
@@ -267,21 +469,212 @@ async function handleCatalog(chatId: number) {
     return;
   }
 
-  await sendTelegramMessage(
+  const categoryButtons = categories.map((category) => ({
+    text: category.name,
+    callback_data: `cat:${category.id}`
+  }));
+
+  const rows: TelegramInlineKeyboardButton[][] = [
+    ...chunkRows(categoryButtons, 2),
+    [{ text: "🌐 Открыть каталог на сайте", url: buildCatalogUrl() }],
+    [{ text: "❌ Скрыть", callback_data: "msg:delete" }]
+  ];
+
+  await sendOrEditTelegramMessage(
     chatId,
     [
       "🛍 Каталог",
       "",
-      "Выберите раздел каталога:",
-      "",
-      ...categories.map((category, index) => `${index + 1}. ${category.name}`),
-      "",
-      `Открыть каталог на сайте: ${SITE_URL}/catalog`
+      "Выберите раздел, а я покажу товары прямо здесь."
     ].join("\n"),
     {
-      reply_markup: replyMarkup
-    }
+      reply_markup: inlineKeyboard(rows)
+    },
+    messageId
   );
+}
+
+async function handleCatalogCategory(chatId: number, categoryId: string, messageId?: number) {
+  const shopId = await getDefaultShopId();
+
+  if (!shopId) {
+    await sendTelegramMessage(chatId, "Каталог временно недоступен. Попробуйте позже.");
+    return;
+  }
+
+  const categoryRows = await sql<{ id: string; name: string; slug: string }[]>`
+    SELECT id, name, slug
+    FROM categories
+    WHERE shop_id = ${shopId}
+      AND id = ${categoryId}
+      AND is_active = true
+    LIMIT 1
+  `;
+
+  const category = categoryRows[0];
+
+  if (!category) {
+    await sendTelegramMessage(chatId, "Раздел каталога не найден или временно скрыт.");
+    return;
+  }
+
+  const productRows = await sql<{
+    id: string;
+    name: string;
+    slug: string;
+    price: number;
+    short_description: string | null;
+  }[]>`
+    SELECT id, name, slug, price, short_description
+    FROM products
+    WHERE shop_id = ${shopId}
+      AND category_id = ${category.id}
+      AND status = 'active'
+    ORDER BY sort_order ASC, created_at DESC
+    LIMIT 20
+  `;
+
+  if (productRows.length === 0) {
+    await sendTelegramMessage(
+      chatId,
+      [
+        `🛍 ${category.name}`,
+        "",
+        "В этом разделе пока нет доступных товаров.",
+        "Можно вернуться в каталог или открыть сайт."
+      ].join("\n"),
+      {
+        reply_markup: inlineKeyboard([
+          [{ text: "⬅️ К разделам", callback_data: "catalog" }],
+          [{ text: "🌐 Каталог на сайте", url: buildCatalogUrl() }],
+          [{ text: "❌ Скрыть", callback_data: "msg:delete" }]
+        ])
+      }
+    );
+    return;
+  }
+
+  const productButtons = productRows.map((product) => ({
+    text: `${product.name} · ${money(product.price)}`,
+    callback_data: `prod:${product.id}`
+  }));
+
+  const rows: TelegramInlineKeyboardButton[][] = [
+    ...chunkRows(productButtons, 1),
+    [
+      { text: "⬅️ К разделам", callback_data: "catalog" },
+      { text: "🌐 На сайте", url: buildCatalogUrl(`?category=${category.slug}`) }
+    ],
+    [{ text: "❌ Скрыть", callback_data: "msg:delete" }]
+  ];
+
+  await sendOrEditTelegramMessage(
+    chatId,
+    [
+      `🛍 ${category.name}`,
+      "",
+      "Выберите букет, чтобы открыть карточку:"
+    ].join("\n"),
+    {
+      reply_markup: inlineKeyboard(rows)
+    },
+    messageId
+  );
+}
+
+async function handleProductCard(chatId: number, productId: string) {
+  const shopId = await getDefaultShopId();
+
+  if (!shopId) {
+    await sendTelegramMessage(chatId, "Каталог временно недоступен. Попробуйте позже.");
+    return;
+  }
+
+  const productRows = await sql<{
+    id: string;
+    category_id: string | null;
+    category_name: string | null;
+    name: string;
+    slug: string;
+    price: number;
+    short_description: string | null;
+    description: string | null;
+    composition: string | null;
+    stock_quantity: number | null;
+    is_stock_visible: boolean;
+    image_url: string | null;
+  }[]>`
+    SELECT
+      p.id,
+      p.category_id,
+      c.name AS category_name,
+      p.name,
+      p.slug,
+      p.price,
+      p.short_description,
+      p.description,
+      p.composition,
+      p.stock_quantity,
+      p.is_stock_visible,
+      pi.url AS image_url
+    FROM products p
+    LEFT JOIN categories c ON c.id = p.category_id
+    LEFT JOIN LATERAL (
+      SELECT url
+      FROM product_images
+      WHERE product_id = p.id
+      ORDER BY is_main DESC, sort_order ASC, created_at ASC
+      LIMIT 1
+    ) pi ON true
+    WHERE p.shop_id = ${shopId}
+      AND p.id = ${productId}
+      AND p.status = 'active'
+    LIMIT 1
+  `;
+
+  const product = productRows[0];
+
+  if (!product) {
+    await sendTelegramMessage(chatId, "Товар не найден или временно скрыт.");
+    return;
+  }
+
+  const description = product.short_description || product.description || product.composition || "Стильный букет от магазина «ВЫБЕРИ МЕНЯ».";
+  const stockText = product.is_stock_visible && product.stock_quantity !== null
+    ? product.stock_quantity > 0 ? `В наличии: ${product.stock_quantity}` : "Наличие уточняется"
+    : "В наличии";
+
+  const lines = [
+    `🌸 ${product.name}`,
+    `Цена: ${money(product.price)}`,
+    product.category_name ? `Раздел: ${product.category_name}` : "",
+    `Наличие: ${stockText}`,
+    "",
+    description
+  ].filter(Boolean);
+
+  const rows: TelegramInlineKeyboardButton[][] = [
+    [{ text: "🧺 Открыть и добавить на сайте", url: buildProductUrl(product.slug) }],
+    [
+      product.category_id ? { text: "⬅️ Назад к товарам", callback_data: `cat:${product.category_id}` } : { text: "⬅️ К разделам", callback_data: "catalog" },
+      { text: "🛍 Каталог", callback_data: "catalog" }
+    ],
+    [{ text: "❌ Скрыть карточку", callback_data: "msg:delete" }]
+  ];
+
+  const replyMarkup = inlineKeyboard(rows);
+  const imageUrl = absoluteUrl(product.image_url);
+
+  if (imageUrl) {
+    await sendTelegramPhoto(chatId, imageUrl, lines.join("\n"), {
+      reply_markup: replyMarkup
+    });
+    return;
+  }
+
+  await sendTelegramMessage(chatId, lines.join("\n"), {
+    reply_markup: replyMarkup
+  });
 }
 
 async function handleOrders(chatId: number) {
@@ -339,7 +732,58 @@ async function handleContact(chatId: number) {
   );
 }
 
+async function handleCallbackQuery(callbackQuery: TelegramCallbackQuery) {
+  const data = callbackQuery.data || "";
+  const message = callbackQuery.message;
+
+  if (!message || message.chat.type !== "private") {
+    await answerCallbackQuery(callbackQuery.id);
+    return;
+  }
+
+  const chatId = message.chat.id;
+
+  if (data === "msg:delete") {
+    await answerCallbackQuery(callbackQuery.id);
+    await deleteTelegramMessage(chatId, message.message_id);
+    return;
+  }
+
+  if (data === "menu:open") {
+    await answerCallbackQuery(callbackQuery.id, "Меню открыто");
+    await handleOpenMenu(chatId);
+    return;
+  }
+
+  if (data === "catalog") {
+    await answerCallbackQuery(callbackQuery.id);
+    await handleCatalog(chatId, message.message_id);
+    return;
+  }
+
+  if (data.startsWith("cat:")) {
+    const categoryId = data.slice("cat:".length);
+    await answerCallbackQuery(callbackQuery.id);
+    await handleCatalogCategory(chatId, categoryId, message.message_id);
+    return;
+  }
+
+  if (data.startsWith("prod:")) {
+    const productId = data.slice("prod:".length);
+    await answerCallbackQuery(callbackQuery.id);
+    await handleProductCard(chatId, productId);
+    return;
+  }
+
+  await answerCallbackQuery(callbackQuery.id, "Раздел пока недоступен");
+}
+
 async function handleUpdate(update: TelegramUpdate) {
+  if (update.callback_query) {
+    await handleCallbackQuery(update.callback_query);
+    return;
+  }
+
   const message = update.message;
   const text = message?.text?.trim();
 
@@ -351,6 +795,16 @@ async function handleUpdate(update: TelegramUpdate) {
 
   if (text === "/start" || text === "👤 Профиль") {
     await handleStart(update);
+    return;
+  }
+
+  if (text === "/menu" || text === "🔼 Открыть меню") {
+    await handleOpenMenu(message.chat.id);
+    return;
+  }
+
+  if (text === "/hide" || text === "🔽 Скрыть меню") {
+    await handleHideMenu(message.chat.id);
     return;
   }
 
@@ -437,7 +891,7 @@ async function processTelegramUpdates() {
   if (!TELEGRAM_BOT_TOKEN || DRY_RUN) return;
 
   const updates = await telegramApi<TelegramUpdate[]>(
-    `getUpdates?timeout=1&limit=20${telegramOffset ? `&offset=${telegramOffset}` : ""}`
+    `getUpdates?timeout=${TELEGRAM_UPDATES_TIMEOUT_SECONDS}&limit=50${telegramOffset ? `&offset=${telegramOffset}` : ""}`
   );
 
   for (const update of updates) {
@@ -594,11 +1048,13 @@ async function processNotificationEvents() {
 }
 
 async function loop() {
-  console.log(`[bot-worker] started dryRun=${DRY_RUN} runOnce=${RUN_ONCE} tokenSet=${Boolean(TELEGRAM_BOT_TOKEN)}`);
+  console.log(
+    `[bot-worker] started dryRun=${DRY_RUN} runOnce=${RUN_ONCE} tokenSet=${Boolean(TELEGRAM_BOT_TOKEN)} poll=${POLL_INTERVAL_MS}ms updatesTimeout=${TELEGRAM_UPDATES_TIMEOUT_SECONDS}s`
+  );
 
   while (!isStopping) {
-    await processNotificationEvents();
     await processTelegramUpdates();
+    await processNotificationEvents();
 
     if (RUN_ONCE) {
       break;
