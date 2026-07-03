@@ -150,6 +150,16 @@ function staffMainKeyboard(role: string) {
   };
 }
 
+async function mainKeyboardForChat(chatId: number) {
+  const profile = await getTelegramProfile(String(chatId));
+
+  if (profile?.user_id) {
+    return staffMainKeyboard(profile.role || "staff");
+  }
+
+  return clientMainKeyboard();
+}
+
 async function getTelegramProfile(telegramId: string) {
   const rows = await sql<{
     telegram_id: string;
@@ -248,8 +258,12 @@ async function handleCatalog(chatId: number) {
     ORDER BY sort_order ASC, name ASC
   `;
 
+  const replyMarkup = await mainKeyboardForChat(chatId);
+
   if (categories.length === 0) {
-    await sendTelegramMessage(chatId, "Категории пока не добавлены.");
+    await sendTelegramMessage(chatId, "Каталог пока наполняется.", {
+      reply_markup: replyMarkup
+    });
     return;
   }
 
@@ -258,46 +272,70 @@ async function handleCatalog(chatId: number) {
     [
       "🛍 Каталог",
       "",
+      "Выберите раздел каталога:",
+      "",
       ...categories.map((category, index) => `${index + 1}. ${category.name}`),
       "",
-      "Скоро здесь появится выбор категории прямо кнопками."
-    ].join("\n")
+      `Открыть каталог на сайте: ${SITE_URL}/catalog`
+    ].join("\n"),
+    {
+      reply_markup: replyMarkup
+    }
   );
 }
 
 async function handleOrders(chatId: number) {
+  const replyMarkup = await mainKeyboardForChat(chatId);
+
   await sendTelegramMessage(
     chatId,
     [
       "📦 Заказы",
       "",
-      "Скоро здесь будут ваши заказы и статусы доставки.",
-      "Пока заказы можно смотреть на сайте или в CRM."
-    ].join("\n")
+      "Для сотрудников заказы доступны в CRM.",
+      `CRM: ${SITE_URL}/admin`,
+      "",
+      "Для клиента отслеживание заказа доступно по ссылке после оформления."
+    ].join("\n"),
+    {
+      reply_markup: replyMarkup
+    }
   );
 }
 
 async function handleBonuses(chatId: number) {
+  const replyMarkup = await mainKeyboardForChat(chatId);
+
   await sendTelegramMessage(
     chatId,
     [
       "🎁 Бонусы",
       "",
       "Бонусная система уже работает на сайте.",
-      "Скоро здесь появится вход по телефону и баланс бонусов."
-    ].join("\n")
+      "Баланс отображается в личном кабинете после подтверждения телефона.",
+      "",
+      `Личный кабинет: ${SITE_URL}/account`
+    ].join("\n"),
+    {
+      reply_markup: replyMarkup
+    }
   );
 }
 
 async function handleContact(chatId: number) {
+  const replyMarkup = await mainKeyboardForChat(chatId);
+
   await sendTelegramMessage(
     chatId,
     [
       "☎️ Связь",
       "",
-      "Напишите нам в Telegram или WhatsApp.",
+      "Мы на связи в Telegram и WhatsApp.",
       `Сайт: ${SITE_URL}`
-    ].join("\n")
+    ].join("\n"),
+    {
+      reply_markup: replyMarkup
+    }
   );
 }
 
@@ -336,21 +374,61 @@ async function handleUpdate(update: TelegramUpdate) {
     return;
   }
 
+  if (text === "🧺 Корзина") {
+    const replyMarkup = await mainKeyboardForChat(message.chat.id);
+    await sendTelegramMessage(message.chat.id, `🧺 Корзина доступна на сайте: ${SITE_URL}/cart`, {
+      reply_markup: replyMarkup
+    });
+    return;
+  }
+
   if (text === "🧾 CRM") {
-    await sendTelegramMessage(message.chat.id, `🧾 CRM: ${SITE_URL}/admin`);
+    const replyMarkup = await mainKeyboardForChat(message.chat.id);
+    await sendTelegramMessage(message.chat.id, `🧾 CRM: ${SITE_URL}/admin`, {
+      reply_markup: replyMarkup
+    });
+    return;
+  }
+
+  if (text === "⚙️ Настройки") {
+    const replyMarkup = await mainKeyboardForChat(message.chat.id);
+    await sendTelegramMessage(message.chat.id, `⚙️ Настройки магазина доступны в CRM: ${SITE_URL}/admin/settings`, {
+      reply_markup: replyMarkup
+    });
+    return;
+  }
+
+  if (text === "💐 Сборка заказов") {
+    const replyMarkup = await mainKeyboardForChat(message.chat.id);
+    await sendTelegramMessage(message.chat.id, "💐 Раздел сборки заказов закреплён за ролью флориста.", {
+      reply_markup: replyMarkup
+    });
+    return;
+  }
+
+  if (text === "🚚 Доставка") {
+    const replyMarkup = await mainKeyboardForChat(message.chat.id);
+    await sendTelegramMessage(message.chat.id, "🚚 Раздел доставки закреплён за ролью курьера.", {
+      reply_markup: replyMarkup
+    });
     return;
   }
 
   if (text === "🔔 Уведомления") {
-    await sendTelegramMessage(message.chat.id, "🔔 Уведомления включены. Новые события по заказам будут приходить сюда.");
+    const replyMarkup = await mainKeyboardForChat(message.chat.id);
+    await sendTelegramMessage(message.chat.id, "🔔 Уведомления включены. Новые события по заказам будут приходить сюда.", {
+      reply_markup: replyMarkup
+    });
     return;
   }
+
+  const replyMarkup = await mainKeyboardForChat(message.chat.id);
 
   await sendTelegramMessage(
     message.chat.id,
     "Выберите раздел в меню ниже.",
     {
-      reply_markup: clientMainKeyboard()
+      reply_markup: replyMarkup
     }
   );
 }
