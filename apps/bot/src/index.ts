@@ -125,12 +125,6 @@ function inlineKeyboard(rows: TelegramInlineKeyboardButton[][]) {
   };
 }
 
-function openMenuInlineKeyboard() {
-  return inlineKeyboard([
-    [{ text: "🔼 Открыть меню", callback_data: "menu:open" }],
-    [{ text: "❌ Скрыть это сообщение", callback_data: "msg:delete" }]
-  ]);
-}
 
 function buildCatalogUrl(path = "") {
   return absoluteUrl(`/catalog${path}`);
@@ -287,7 +281,7 @@ function clientMainKeyboard() {
     keyboard: [
       [{ text: "🛍 Каталог" }, { text: "🧺 Корзина" }],
       [{ text: "📦 Мои заказы" }, { text: "🎁 Бонусы" }],
-      [{ text: "☎️ Связь" }, { text: "🔽 Скрыть меню" }]
+      [{ text: "☎️ Связь" }]
     ],
     resize_keyboard: true,
     is_persistent: true
@@ -312,7 +306,6 @@ function staffMainKeyboard(role: string) {
     rows.push([{ text: "🚚 Доставка" }]);
   }
 
-  rows.push([{ text: "🔽 Скрыть меню" }]);
 
   return {
     keyboard: rows,
@@ -422,24 +415,6 @@ async function handleOpenMenu(chatId: number, isStart = false) {
       reply_markup: clientMainKeyboard()
     }
   );
-}
-
-async function handleHideMenu(chatId: number) {
-  await sendTelegramMessage(
-    chatId,
-    [
-      "🔽 Меню скрыто.",
-      "",
-      "Чтобы открыть его снова, нажмите кнопку ниже или отправьте команду /menu."
-    ].join("\n"),
-    {
-      reply_markup: { remove_keyboard: true }
-    }
-  );
-
-  await sendTelegramMessage(chatId, "Быстрое открытие меню:", {
-    reply_markup: openMenuInlineKeyboard()
-  });
 }
 
 async function handleCatalog(chatId: number, messageId?: number) {
@@ -654,7 +629,8 @@ async function handleProductCard(chatId: number, productId: string) {
   ].filter(Boolean);
 
   const rows: TelegramInlineKeyboardButton[][] = [
-    [{ text: "🧺 Открыть и добавить на сайте", url: buildProductUrl(product.slug) }],
+    [{ text: "🧺 Добавить в корзину", callback_data: `cart:add:${product.id}` }],
+    [{ text: "🌐 Открыть на сайте", url: buildProductUrl(product.slug) }],
     [
       product.category_id ? { text: "⬅️ Назад к товарам", callback_data: `cat:${product.category_id}` } : { text: "⬅️ К разделам", callback_data: "catalog" },
       { text: "🛍 Каталог", callback_data: "catalog" }
@@ -675,6 +651,196 @@ async function handleProductCard(chatId: number, productId: string) {
   await sendTelegramMessage(chatId, lines.join("\n"), {
     reply_markup: replyMarkup
   });
+}
+
+
+type TelegramCartRow = {
+  product_id: string;
+  quantity: number;
+  name: string;
+  slug: string;
+  price: number;
+};
+
+async function addProductToTelegramCart(chatId: number, productId: string) {
+  const shopId = await getDefaultShopId();
+
+  if (!shopId) {
+    return null;
+  }
+
+  const productRows = await sql<{ id: string; name: string }[]>`
+    SELECT id, name
+    FROM products
+    WHERE shop_id = ${shopId}
+      AND id = ${productId}
+      AND status = 'active'
+    LIMIT 1
+  `;
+
+  const product = productRows[0];
+
+  if (!product) {
+    return null;
+  }
+
+  const rows = await sql<{ quantity: number }[]>`
+    INSERT INTO telegram_cart_items (shop_id, telegram_chat_id, product_id, quantity)
+    VALUES (${shopId}, ${chatId}, ${product.id}, 1)
+    ON CONFLICT (shop_id, telegram_chat_id, product_id)
+    DO UPDATE SET quantity = telegram_cart_items.quantity + 1,
+                  updated_at = NOW()
+    RETURNING quantity
+  `;
+
+  return {
+    name: product.name,
+    quantity: rows[0]?.quantity || 1
+  };
+}
+
+async function decreaseProductInTelegramCart(chatId: number, productId: string) {
+  const shopId = await getDefaultShopId();
+
+  if (!shopId) {
+    return;
+  }
+
+  await sql`
+    DELETE FROM telegram_cart_items
+    WHERE shop_id = ${shopId}
+      AND telegram_chat_id = ${chatId}
+      AND product_id = ${productId}
+      AND quantity <= 1
+  `;
+
+  await sql`
+    UPDATE telegram_cart_items
+    SET quantity = quantity - 1,
+        updated_at = NOW()
+    WHERE shop_id = ${shopId}
+      AND telegram_chat_id = ${chatId}
+      AND product_id = ${productId}
+      AND quantity > 1
+  `;
+}
+
+async function removeProductFromTelegramCart(chatId: number, productId: string) {
+  const shopId = await getDefaultShopId();
+
+  if (!shopId) {
+    return;
+  }
+
+  await sql`
+    DELETE FROM telegram_cart_items
+    WHERE shop_id = ${shopId}
+      AND telegram_chat_id = ${chatId}
+      AND product_id = ${productId}
+  `;
+}
+
+async function clearTelegramCart(chatId: number) {
+  const shopId = await getDefaultShopId();
+
+  if (!shopId) {
+    return;
+  }
+
+  await sql`
+    DELETE FROM telegram_cart_items
+    WHERE shop_id = ${shopId}
+      AND telegram_chat_id = ${chatId}
+  `;
+}
+
+async function getTelegramCartRows(chatId: number): Promise<TelegramCartRow[]> {
+  const shopId = await getDefaultShopId();
+
+  if (!shopId) {
+    return [];
+  }
+
+  const rows = await sql<TelegramCartRow[]>`
+    SELECT
+      tci.product_id,
+      tci.quantity,
+      p.name,
+      p.slug,
+      p.price
+    FROM telegram_cart_items tci
+    INNER JOIN products p ON p.id = tci.product_id
+    WHERE tci.shop_id = ${shopId}
+      AND tci.telegram_chat_id = ${chatId}
+      AND p.status = 'active'
+    ORDER BY tci.created_at ASC
+  `;
+
+  return rows;
+}
+
+async function handleCart(chatId: number, messageId?: number) {
+  const rows = await getTelegramCartRows(chatId);
+
+  if (rows.length === 0) {
+    await sendOrEditTelegramMessage(
+      chatId,
+      [
+        "🧺 Корзина",
+        "",
+        "Корзина пока пустая.",
+        "Откройте каталог и добавьте букет прямо в боте."
+      ].join("\n"),
+      {
+        reply_markup: inlineKeyboard([
+          [{ text: "🛍 Перейти в каталог", callback_data: "catalog" }],
+          [{ text: "❌ Скрыть", callback_data: "msg:delete" }]
+        ])
+      },
+      messageId
+    );
+    return;
+  }
+
+  let total = 0;
+  const lines = ["🧺 Корзина", ""];
+  const buttons: TelegramInlineKeyboardButton[][] = [];
+
+  rows.forEach((item, index) => {
+    const itemTotal = Number(item.price || 0) * Number(item.quantity || 0);
+    total += itemTotal;
+
+    lines.push(`${index + 1}. ${item.name}`);
+    lines.push(`   ${item.quantity} × ${money(item.price)} = ${money(itemTotal)}`);
+    lines.push("");
+
+    buttons.push([
+      { text: "➖", callback_data: `cart:dec:${item.product_id}` },
+      { text: `${item.quantity} шт.`, callback_data: "cart:noop" },
+      { text: "➕", callback_data: `cart:inc:${item.product_id}` },
+      { text: "❌", callback_data: `cart:remove:${item.product_id}` }
+    ]);
+  });
+
+  lines.push(`Итого: ${money(total)}`);
+  lines.push("");
+  lines.push("Следующий шаг — оформление заказа с адресом и телефоном прямо в боте.");
+
+  buttons.push([
+    { text: "🛍 Продолжить покупки", callback_data: "catalog" },
+    { text: "🧹 Очистить", callback_data: "cart:clear" }
+  ]);
+  buttons.push([{ text: "✅ Оформить заказ", callback_data: "checkout:start" }]);
+  buttons.push([{ text: "❌ Скрыть", callback_data: "msg:delete" }]);
+
+  await sendOrEditTelegramMessage(
+    chatId,
+    lines.join("\n"),
+    {
+      reply_markup: inlineKeyboard(buttons)
+    },
+    messageId
+  );
 }
 
 async function handleOrders(chatId: number) {
@@ -749,12 +915,6 @@ async function handleCallbackQuery(callbackQuery: TelegramCallbackQuery) {
     return;
   }
 
-  if (data === "menu:open") {
-    await answerCallbackQuery(callbackQuery.id, "Меню открыто");
-    await handleOpenMenu(chatId);
-    return;
-  }
-
   if (data === "catalog") {
     await answerCallbackQuery(callbackQuery.id);
     await handleCatalog(chatId, message.message_id);
@@ -772,6 +932,64 @@ async function handleCallbackQuery(callbackQuery: TelegramCallbackQuery) {
     const productId = data.slice("prod:".length);
     await answerCallbackQuery(callbackQuery.id);
     await handleProductCard(chatId, productId);
+    return;
+  }
+
+  if (data.startsWith("cart:add:")) {
+    const productId = data.slice("cart:add:".length);
+    const result = await addProductToTelegramCart(chatId, productId);
+    await answerCallbackQuery(callbackQuery.id, result ? "Добавлено в корзину" : "Товар недоступен");
+    await handleCart(chatId);
+    return;
+  }
+
+  if (data.startsWith("cart:inc:")) {
+    const productId = data.slice("cart:inc:".length);
+    await addProductToTelegramCart(chatId, productId);
+    await answerCallbackQuery(callbackQuery.id);
+    await handleCart(chatId, message.message_id);
+    return;
+  }
+
+  if (data.startsWith("cart:dec:")) {
+    const productId = data.slice("cart:dec:".length);
+    await decreaseProductInTelegramCart(chatId, productId);
+    await answerCallbackQuery(callbackQuery.id);
+    await handleCart(chatId, message.message_id);
+    return;
+  }
+
+  if (data.startsWith("cart:remove:")) {
+    const productId = data.slice("cart:remove:".length);
+    await removeProductFromTelegramCart(chatId, productId);
+    await answerCallbackQuery(callbackQuery.id, "Товар удалён");
+    await handleCart(chatId, message.message_id);
+    return;
+  }
+
+  if (data === "cart:clear") {
+    await clearTelegramCart(chatId);
+    await answerCallbackQuery(callbackQuery.id, "Корзина очищена");
+    await handleCart(chatId, message.message_id);
+    return;
+  }
+
+  if (data === "cart:noop") {
+    await answerCallbackQuery(callbackQuery.id);
+    return;
+  }
+
+  if (data === "checkout:start") {
+    await answerCallbackQuery(callbackQuery.id);
+    await sendTelegramMessage(
+      chatId,
+      [
+        "✅ Оформление заказа",
+        "",
+        "Корзина уже работает в боте.",
+        "Следующим блоком добавим пошаговое оформление: имя, телефон, получатель, дата, интервал и адрес доставки."
+      ].join("\n")
+    );
     return;
   }
 
@@ -798,15 +1016,11 @@ async function handleUpdate(update: TelegramUpdate) {
     return;
   }
 
-  if (text === "/menu" || text === "🔼 Открыть меню") {
+  if (text === "/menu") {
     await handleOpenMenu(message.chat.id);
     return;
   }
 
-  if (text === "/hide" || text === "🔽 Скрыть меню") {
-    await handleHideMenu(message.chat.id);
-    return;
-  }
 
   if (text === "🛍 Каталог") {
     await handleCatalog(message.chat.id);
@@ -829,10 +1043,7 @@ async function handleUpdate(update: TelegramUpdate) {
   }
 
   if (text === "🧺 Корзина") {
-    const replyMarkup = await mainKeyboardForChat(message.chat.id);
-    await sendTelegramMessage(message.chat.id, `🧺 Корзина доступна на сайте: ${SITE_URL}/cart`, {
-      reply_markup: replyMarkup
-    });
+    await handleCart(message.chat.id);
     return;
   }
 
