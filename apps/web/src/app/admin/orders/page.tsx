@@ -42,6 +42,8 @@ export default async function AdminOrdersPage() {
                   paymentStatus={String(row.payment_status)}
                   paymentUrl={String(row.payment_url || "")}
                   trackingToken={String(row.tracking_token || "")}
+                  internalChatCount={Number(row.internal_chat_messages_count || 0)}
+                  internalChatPreview={String(row.internal_chat_last_message || "")}
                 />
               )
             }

@@ -140,7 +140,10 @@ export async function adminRoutes(app: FastifyInstance) {
           c.phone AS customer_phone,
           c.name AS customer_name,
           o.total AS total_amount,
-          p.payment_url AS payment_url
+          p.payment_url AS payment_url,
+          COALESCE(ic.messages_count, 0) AS internal_chat_messages_count,
+          ic.last_message AS internal_chat_last_message,
+          ic.last_at AS internal_chat_last_at
         FROM orders o
         LEFT JOIN customers c ON c.id = o.customer_id
         LEFT JOIN LATERAL (
@@ -150,6 +153,15 @@ export async function adminRoutes(app: FastifyInstance) {
           ORDER BY created_at DESC
           LIMIT 1
         ) p ON true
+        LEFT JOIN LATERAL (
+          SELECT
+            COUNT(*)::int AS messages_count,
+            (ARRAY_AGG(cm.text ORDER BY cm.created_at DESC))[1] AS last_message,
+            MAX(cm.created_at) AS last_at
+          FROM chat_messages cm
+          WHERE cm.order_id = o.id
+            AND cm.message_scope = 'internal'
+        ) ic ON true
         WHERE o.shop_id = ${shop.id}
         ORDER BY o.created_at DESC
         LIMIT 100
@@ -238,11 +250,36 @@ export async function adminRoutes(app: FastifyInstance) {
           AND is_read_by_staff = false
       `;
 
+      const staffPresence = await client`
+        SELECT
+          u.id,
+          u.name,
+          su.role,
+          ta.updated_at AS last_seen_at,
+          CASE
+            WHEN ta.updated_at IS NOT NULL AND ta.updated_at > NOW() - INTERVAL '10 minutes'
+            THEN true
+            ELSE false
+          END AS is_online
+        FROM shop_users su
+        JOIN users u ON u.id = su.user_id
+        LEFT JOIN telegram_accounts ta
+          ON ta.shop_id = su.shop_id
+         AND ta.user_id = su.user_id
+         AND ta.is_active = true
+        WHERE su.shop_id = ${shop.id}
+          AND su.is_active = true
+          AND u.status = 'active'
+        ORDER BY is_online DESC, u.name ASC NULLS LAST
+        LIMIT 12
+      `;
+
       return {
         ok: true,
         order,
         chat,
-        messages
+        messages,
+        staffPresence
       };
     } finally {
       await client.end();

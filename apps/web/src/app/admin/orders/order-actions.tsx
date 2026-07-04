@@ -11,6 +11,14 @@ type InternalChatMessage = {
   created_at: string;
 };
 
+type StaffPresence = {
+  id: string;
+  name?: string | null;
+  role: string;
+  is_online: boolean;
+  last_seen_at?: string | null;
+};
+
 function displayDateTime(value: string) {
   try {
     return new Date(value).toLocaleString("ru-RU", {
@@ -25,18 +33,34 @@ function displayDateTime(value: string) {
   }
 }
 
+function roleText(role: string) {
+  const map: Record<string, string> = {
+    owner: "Владелец",
+    admin: "Администратор",
+    manager: "Менеджер",
+    florist: "Флорист",
+    courier: "Курьер"
+  };
+
+  return map[role] || role;
+}
+
 export function OrderActions({
   orderId,
   status,
   paymentStatus,
   paymentUrl,
-  trackingToken
+  trackingToken,
+  internalChatCount = 0,
+  internalChatPreview = ""
 }: {
   orderId: string;
   status: string;
   paymentStatus: string;
   paymentUrl?: string;
   trackingToken?: string;
+  internalChatCount?: number;
+  internalChatPreview?: string;
 }) {
   const [isConfirming, setIsConfirming] = useState(false);
   const [isPaying, setIsPaying] = useState(false);
@@ -48,11 +72,15 @@ export function OrderActions({
   const [isSendingMessage, setIsSendingMessage] = useState(false);
   const [chatMessage, setChatMessage] = useState("");
   const [chatMessages, setChatMessages] = useState<InternalChatMessage[]>([]);
+  const [staffPresence, setStaffPresence] = useState<StaffPresence[]>([]);
   const [chatError, setChatError] = useState("");
+  const [chatCount, setChatCount] = useState(Number(internalChatCount || 0));
+  const [chatPreview, setChatPreview] = useState(internalChatPreview || "");
 
   const canMarkPaid = status !== "new" && status !== "cancelled" && paymentStatus !== "paid";
   const canAddPaymentLink = status === "confirmed" && paymentStatus !== "paid";
   const trackingUrl = trackingToken ? `/order/track/${trackingToken}` : "";
+  const hiddenChatBadge = !isChatOpen && chatCount > 0;
 
   async function loadInternalChat() {
     setIsChatLoading(true);
@@ -69,7 +97,15 @@ export function OrderActions({
         throw new Error(data?.message || "Не удалось загрузить чат");
       }
 
-      setChatMessages(Array.isArray(data.messages) ? data.messages : []);
+      const messages = Array.isArray(data.messages) ? data.messages : [];
+      const presence = Array.isArray(data.staffPresence) ? data.staffPresence : [];
+
+      setChatMessages(messages);
+      setStaffPresence(presence);
+      setChatCount(messages.length);
+
+      const lastMessage = messages[messages.length - 1];
+      setChatPreview(lastMessage?.text || "");
     } catch (error) {
       setChatError(error instanceof Error ? error.message : "Не удалось загрузить чат");
     } finally {
@@ -273,8 +309,13 @@ export function OrderActions({
         className="admin-action-button chat"
         onClick={() => setIsChatOpen((value) => !value)}
       >
-        {isChatOpen ? "Скрыть чат" : "Чат команды"}
+        <span>{isChatOpen ? "Скрыть чат" : "Чат команды"}</span>
+        {hiddenChatBadge ? <strong className="admin-chat-badge">{chatCount}</strong> : null}
       </button>
+
+      {!isChatOpen && chatPreview ? (
+        <p className="admin-chat-preview">{chatPreview.length > 72 ? `${chatPreview.slice(0, 72)}…` : chatPreview}</p>
+      ) : null}
 
       {isChatOpen ? (
         <div className="admin-internal-chat">
@@ -282,6 +323,20 @@ export function OrderActions({
             <strong>Внутренний чат</strong>
             <span>Видят только сотрудники</span>
           </div>
+
+          {staffPresence.length ? (
+            <div className="admin-staff-presence">
+              {staffPresence.map((staff) => (
+                <div key={staff.id} className="admin-staff-presence-item">
+                  <span className={staff.is_online ? "online" : "offline"} />
+                  <div>
+                    <strong>{staff.name || roleText(staff.role)}</strong>
+                    <small>{staff.is_online ? "В сети" : "Не в сети"} · {roleText(staff.role)}</small>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
 
           {isChatLoading ? (
             <p className="admin-chat-muted">Загружаем сообщения…</p>
