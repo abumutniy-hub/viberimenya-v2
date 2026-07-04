@@ -2,6 +2,8 @@ CREATE OR REPLACE FUNCTION create_customer_telegram_notification_from_staff_even
 RETURNS trigger AS $$
 DECLARE
   customer_telegram_id varchar(80);
+  base_payload jsonb := '{}'::jsonb;
+  parsed_payload jsonb;
 BEGIN
   IF NEW.channel <> 'telegram' THEN
     RETURN NEW;
@@ -29,6 +31,20 @@ BEGIN
 
   IF customer_telegram_id IS NULL OR customer_telegram_id = '' THEN
     RETURN NEW;
+  END IF;
+
+  IF jsonb_typeof(NEW.payload) = 'object' THEN
+    base_payload := NEW.payload;
+  ELSIF jsonb_typeof(NEW.payload) = 'string' THEN
+    BEGIN
+      parsed_payload := (NEW.payload #>> '{}')::jsonb;
+
+      IF jsonb_typeof(parsed_payload) = 'object' THEN
+        base_payload := parsed_payload;
+      END IF;
+    EXCEPTION WHEN others THEN
+      base_payload := '{}'::jsonb;
+    END;
   END IF;
 
   IF EXISTS (
@@ -65,7 +81,7 @@ BEGIN
     'customer',
     customer_telegram_id,
     'pending',
-    COALESCE(NEW.payload, '{}'::jsonb) || jsonb_build_object('audience', 'customer'),
+    base_payload || jsonb_build_object('audience', 'customer'),
     NOW(),
     NOW()
   );

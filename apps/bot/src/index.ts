@@ -1692,21 +1692,146 @@ async function handleCheckoutCancel(chatId: number) {
 }
 
 
+function orderStatusText(status: string) {
+  const map: Record<string, string> = {
+    new: "Принят",
+    confirmed: "Подтверждён",
+    assembling: "Собирается",
+    ready: "Готовится к доставке",
+    assigned_courier: "Передан курьеру",
+    delivering: "В доставке",
+    delivered: "Доставлен",
+    cancelled: "Отменён",
+    problem: "Нужно уточнение"
+  };
+
+  return map[status] || status;
+}
+
+function orderPaymentText(status: string) {
+  const map: Record<string, string> = {
+    not_required: "Оплата не требуется",
+    pending: "Ожидает оплаты",
+    paid: "Оплачен",
+    failed: "Ошибка оплаты",
+    refunded: "Возврат",
+    cancelled: "Оплата отменена"
+  };
+
+  return map[status] || status;
+}
+
+function shortDateText(value: unknown) {
+  const text = valueToText(value);
+
+  if (!text) {
+    return "";
+  }
+
+  try {
+    return new Date(text).toLocaleDateString("ru-RU");
+  } catch {
+    return "";
+  }
+}
+
 async function handleOrders(chatId: number) {
   const replyMarkup = await mainKeyboardForChat(chatId);
+  const profile = await getTelegramProfile(String(chatId));
+
+  if (profile?.user_id) {
+    await sendTelegramMessage(
+      chatId,
+      [
+        "📦 Заказы",
+        "",
+        "Заказы сотрудников доступны в CRM.",
+        `CRM: ${SITE_URL}/admin`
+      ].join("\n"),
+      {
+        reply_markup: replyMarkup
+      }
+    );
+    return;
+  }
+
+  if (!profile?.customer_id) {
+    await sendTelegramMessage(
+      chatId,
+      [
+        "📦 Мои заказы",
+        "",
+        "У вас пока нет заказов.",
+        "Откройте каталог, выберите букет и оформите доставку прямо в боте."
+      ].join("\n"),
+      {
+        reply_markup: replyMarkup
+      }
+    );
+    return;
+  }
+
+  const shopId = await getDefaultShopId();
+
+  const orders = await sql<{
+    order_number: string;
+    status: string;
+    payment_status: string;
+    total: number;
+    tracking_token: string | null;
+    created_at: string;
+  }[]>`
+    SELECT order_number, status, payment_status, total, tracking_token, created_at
+    FROM orders
+    WHERE shop_id = ${shopId}
+      AND customer_id = ${profile.customer_id}
+    ORDER BY created_at DESC
+    LIMIT 5
+  `;
+
+  if (orders.length === 0) {
+    await sendTelegramMessage(
+      chatId,
+      [
+        "📦 Мои заказы",
+        "",
+        "У вас пока нет заказов.",
+        "Откройте каталог, выберите букет и оформите доставку прямо в боте."
+      ].join("\n"),
+      {
+        reply_markup: replyMarkup
+      }
+    );
+    return;
+  }
+
+  const lines = [
+    "📦 Мои заказы",
+    "",
+    ...orders.flatMap((order) => [
+      `${order.order_number}`,
+      `Статус: ${orderStatusText(order.status)}`,
+      `Оплата: ${orderPaymentText(order.payment_status)}`,
+      `Сумма: ${money(order.total)}`,
+      shortDateText(order.created_at) ? `Дата: ${shortDateText(order.created_at)}` : "",
+      ""
+    ])
+  ].filter(Boolean);
+
+  const buttons = orders
+    .filter((order) => order.tracking_token)
+    .map((order) => ([
+      {
+        text: `Открыть ${order.order_number}`,
+        url: absoluteUrl(`/order/track/${order.tracking_token}`)
+      }
+    ]));
 
   await sendTelegramMessage(
     chatId,
-    [
-      "📦 Заказы",
-      "",
-      "Для сотрудников заказы доступны в CRM.",
-      `CRM: ${SITE_URL}/admin`,
-      "",
-      "Для клиента отслеживание заказа доступно по ссылке после оформления."
-    ].join("\n"),
+    lines.join("\n"),
     {
-      reply_markup: replyMarkup
+      reply_markup: buttons.length > 0 ? inlineKeyboard(buttons) : replyMarkup
     }
   );
 }
@@ -1978,26 +2103,35 @@ async function processTelegramUpdates() {
 function eventPayload(event: NotificationEvent): Record<string, unknown> {
   const raw = event.payload as unknown;
 
-  if (!raw) {
+  function parsePayloadValue(value: unknown): Record<string, unknown> {
+    if (!value) {
+      return {};
+    }
+
+    if (typeof value === "string") {
+      try {
+        const parsed = JSON.parse(value) as unknown;
+        return parsePayloadValue(parsed);
+      } catch {
+        return {};
+      }
+    }
+
+    if (Array.isArray(value)) {
+      return value.reduce<Record<string, unknown>>((acc, item) => {
+        const parsed = parsePayloadValue(item);
+        return { ...acc, ...parsed };
+      }, {});
+    }
+
+    if (typeof value === "object") {
+      return value as Record<string, unknown>;
+    }
+
     return {};
   }
 
-  if (typeof raw === "string") {
-    try {
-      const parsed = JSON.parse(raw) as unknown;
-      return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-        ? parsed as Record<string, unknown>
-        : {};
-    } catch {
-      return {};
-    }
-  }
-
-  if (typeof raw === "object" && !Array.isArray(raw)) {
-    return raw as Record<string, unknown>;
-  }
-
-  return {};
+  return parsePayloadValue(raw);
 }
 
 function payloadValue(payload: Record<string, unknown>, ...keys: string[]): unknown {
@@ -2019,7 +2153,8 @@ function payloadText(payload: Record<string, unknown>, ...keys: string[]): strin
 function formatEvent(event: NotificationEvent): string {
   const payload = eventPayload(event);
 
-  const orderNumber = payloadText(payload, "orderNumber", "order_number") || "заказ";
+  const orderNumber = payloadText(payload, "orderNumber", "order_number");
+  const orderTitle = orderNumber || "ваш заказ";
   const customerName = payloadText(payload, "customerName", "customer_name") || "Клиент";
   const customerPhone = payloadText(payload, "customerPhone", "customer_phone") || "";
   const totalAmount = payloadValue(payload, "totalAmount", "total_amount", "total", "amount");
@@ -2030,7 +2165,7 @@ function formatEvent(event: NotificationEvent): string {
   if (event.recipient_type === "customer") {
     if (event.type === "order_confirmed") {
       return [
-        `✅ Заказ ${orderNumber} подтверждён`,
+        `✅ Заказ ${orderTitle} подтверждён`,
         "",
         "Менеджер проверил детали заказа. Следующий шаг — оплата и подготовка букета.",
         trackingUrl ? `Статус заказа: ${trackingUrl}` : ""
@@ -2039,7 +2174,7 @@ function formatEvent(event: NotificationEvent): string {
 
     if (event.type === "payment_link_added") {
       return [
-        `💳 Заказ ${orderNumber} готов к оплате`,
+        `💳 Заказ ${orderTitle} готов к оплате`,
         totalText ? `Сумма к оплате: ${totalText}` : "",
         "",
         paymentUrl ? `Оплатить заказ: ${paymentUrl}` : "Ссылка на оплату доступна на странице заказа.",
@@ -2049,7 +2184,7 @@ function formatEvent(event: NotificationEvent): string {
 
     if (event.type === "order_paid") {
       return [
-        `✅ Оплата по заказу ${orderNumber} получена`,
+        `✅ Оплата по заказу ${orderTitle} получена`,
         "",
         "Мы приступаем к подготовке букета. Статус заказа будет обновляться по мере выполнения.",
         trackingUrl ? `Статус заказа: ${trackingUrl}` : ""
@@ -2058,7 +2193,7 @@ function formatEvent(event: NotificationEvent): string {
 
     if (event.type === "order_created") {
       return [
-        `🌸 Заказ ${orderNumber} принят`,
+        `🌸 Заказ ${orderTitle} принят`,
         totalText ? `Сумма заказа: ${totalText}` : "",
         "",
         "Менеджер проверит детали и подтвердит заказ.",
@@ -2069,7 +2204,7 @@ function formatEvent(event: NotificationEvent): string {
 
   if (event.type === "order_created") {
     return [
-      `🆕 Новый заказ ${orderNumber}`,
+      `🆕 Новый заказ ${orderNumber || "без номера"}`,
       customerName ? `Клиент: ${customerName}` : "",
       customerPhone ? `Телефон: ${customerPhone}` : "",
       totalText ? `Сумма: ${totalText}` : "",
@@ -2079,7 +2214,7 @@ function formatEvent(event: NotificationEvent): string {
 
   if (event.type === "order_confirmed") {
     return [
-      `✅ Заказ ${orderNumber} подтверждён`,
+      `✅ Заказ ${orderTitle} подтверждён`,
       customerPhone ? `Телефон: ${customerPhone}` : "",
       totalText ? `Сумма: ${totalText}` : "",
       trackingUrl ? `Ссылка: ${trackingUrl}` : ""
@@ -2088,7 +2223,7 @@ function formatEvent(event: NotificationEvent): string {
 
   if (event.type === "payment_link_added") {
     return [
-      `💳 Добавлена ссылка оплаты для ${orderNumber}`,
+      `💳 Добавлена ссылка оплаты для ${orderTitle}`,
       totalText ? `Сумма: ${totalText}` : "",
       paymentUrl ? `Оплата: ${paymentUrl}` : ""
     ].filter(Boolean).join("\n");
@@ -2096,14 +2231,14 @@ function formatEvent(event: NotificationEvent): string {
 
   if (event.type === "order_paid") {
     return [
-      `💰 Заказ ${orderNumber} оплачен`,
+      `💰 Заказ ${orderTitle} оплачен`,
       totalText ? `Сумма: ${totalText}` : "",
       customerPhone ? `Телефон: ${customerPhone}` : "",
       trackingUrl ? `Ссылка: ${trackingUrl}` : ""
     ].filter(Boolean).join("\n");
   }
 
-  return `Уведомление по заказу ${orderNumber}`;
+  return `Уведомление по заказу ${orderTitle}`;
 }
 
 async function getRecipients(event: NotificationEvent): Promise<string[]> {
