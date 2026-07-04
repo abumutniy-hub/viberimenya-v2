@@ -356,19 +356,45 @@ async function ensureTelegramAccount(update: TelegramUpdate) {
   const message = update.message;
   if (!message?.from || message.chat.type !== "private") return;
 
-  const telegramId = String(message.from.id);
-  const existing = await getTelegramProfile(telegramId);
+  const shopId = await getDefaultShopId();
 
-  if (existing) {
-    await sql`
-      UPDATE telegram_accounts
-      SET username = ${message.from.username || null},
-          first_name = ${message.from.first_name || null},
-          last_name = ${message.from.last_name || null},
-          updated_at = NOW()
-      WHERE telegram_id = ${telegramId}
-    `;
+  if (!shopId) {
+    return;
   }
+
+  const telegramId = String(message.from.id);
+
+  await sql`
+    INSERT INTO telegram_accounts (
+      shop_id,
+      telegram_id,
+      username,
+      first_name,
+      last_name,
+      is_active,
+      linked_at,
+      created_at,
+      updated_at
+    )
+    VALUES (
+      ${shopId},
+      ${telegramId},
+      ${message.from.username || null},
+      ${message.from.first_name || null},
+      ${message.from.last_name || null},
+      true,
+      NOW(),
+      NOW(),
+      NOW()
+    )
+    ON CONFLICT (shop_id, telegram_id)
+    DO UPDATE SET
+      username = EXCLUDED.username,
+      first_name = EXCLUDED.first_name,
+      last_name = EXCLUDED.last_name,
+      is_active = true,
+      updated_at = NOW()
+  `;
 }
 
 async function handleStart(update: TelegramUpdate) {
@@ -1367,6 +1393,38 @@ async function createOrderFromTelegramCheckout(chatId: number, data: TelegramChe
   if (!customer?.id) {
     throw new Error("Customer was not created");
   }
+
+  const telegramId = String(chatId);
+
+  await sql`
+    INSERT INTO telegram_accounts (
+      shop_id,
+      telegram_id,
+      customer_id,
+      is_active,
+      linked_at,
+      created_at,
+      updated_at
+    )
+    VALUES (
+      ${shopId},
+      ${telegramId},
+      ${customer.id},
+      true,
+      NOW(),
+      NOW(),
+      NOW()
+    )
+    ON CONFLICT (shop_id, telegram_id)
+    DO UPDATE SET
+      customer_id = CASE
+        WHEN telegram_accounts.customer_id IS NULL OR telegram_accounts.customer_id = ${customer.id}
+        THEN ${customer.id}
+        ELSE telegram_accounts.customer_id
+      END,
+      is_active = true,
+      updated_at = NOW()
+  `;
 
   const orderRows = await sql<{ id: string }[]>`
     INSERT INTO orders (
