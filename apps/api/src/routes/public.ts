@@ -556,6 +556,106 @@ export async function publicRoutes(app: FastifyInstance) {
     }
   });
 
+  app.get("/api/public/auth/magic/:token", async (request, reply) => {
+    const params = z.object({
+      token: z.string().min(24)
+    }).parse(request.params ?? {});
+
+    const { client } = createDb();
+
+    try {
+      const shopRows = await client<{ id: string }[]>`
+        SELECT id
+        FROM shops
+        WHERE slug = ${env.DEFAULT_SHOP_SLUG}
+        LIMIT 1
+      `;
+
+      const shop = shopRows[0];
+
+      if (!shop) {
+        return reply.redirect("/account");
+      }
+
+      const tokenRows = await client<{
+        id: string;
+        customer_id: string;
+        order_id: string | null;
+      }[]>`
+        SELECT id, customer_id, order_id
+        FROM customer_link_tokens
+        WHERE shop_id = ${shop.id}
+          AND provider = 'site'
+          AND purpose = 'magic_login'
+          AND token = ${params.token}
+          AND status = 'pending'
+          AND consumed_at IS NULL
+          AND expires_at > NOW()
+        LIMIT 1
+      `;
+
+      const loginToken = tokenRows[0];
+
+      if (!loginToken) {
+        return reply.redirect("/account");
+      }
+
+      const sessionToken = createSessionToken();
+
+      await client`
+        INSERT INTO customer_sessions (
+          shop_id,
+          customer_id,
+          token,
+          user_agent,
+          expires_at,
+          last_seen_at,
+          created_at
+        )
+        VALUES (
+          ${shop.id},
+          ${loginToken.customer_id},
+          ${sessionToken},
+          ${String(request.headers["user-agent"] ?? "")},
+          NOW() + INTERVAL '30 days',
+          NOW(),
+          NOW()
+        )
+      `;
+
+      await client`
+        UPDATE customer_link_tokens
+        SET status = 'consumed',
+            consumed_at = NOW(),
+            updated_at = NOW()
+        WHERE id = ${loginToken.id}
+      `;
+
+      let redirectUrl = "/account";
+
+      if (loginToken.order_id) {
+        const orderRows = await client<{ tracking_token: string | null }[]>`
+          SELECT tracking_token
+          FROM orders
+          WHERE id = ${loginToken.order_id}
+            AND customer_id = ${loginToken.customer_id}
+          LIMIT 1
+        `;
+
+        const order = orderRows[0];
+
+        if (order?.tracking_token) {
+          redirectUrl = `/order/track/${order.tracking_token}`;
+        }
+      }
+
+      reply.header("Set-Cookie", buildCustomerSessionCookie(sessionToken));
+      return reply.redirect(redirectUrl);
+    } finally {
+      await client.end();
+    }
+  });
+
   app.post("/api/public/account/logout", async (request, reply) => {
     const token = getCookieValue(request.headers.cookie, CUSTOMER_SESSION_COOKIE);
 
