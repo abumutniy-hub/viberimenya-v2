@@ -96,6 +96,24 @@ function phoneDigitCandidates(value: string) {
   return Array.from(candidates);
 }
 
+function normalizeRussianPhone(value: string) {
+  const digits = value.replace(/\D/g, "");
+
+  if (digits.length === 11 && digits.startsWith("8")) {
+    return `+7${digits.slice(1)}`;
+  }
+
+  if (digits.length === 11 && digits.startsWith("7")) {
+    return `+${digits}`;
+  }
+
+  if (digits.length === 10) {
+    return `+7${digits}`;
+  }
+
+  return value.trim();
+}
+
 function createSessionToken() {
   return crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
 }
@@ -1185,36 +1203,64 @@ export async function publicRoutes(app: FastifyInstance) {
       let totalAmount = amountBeforeBonus;
       const orderNumber = createOrderNumber();
       const trackingToken = createTrackingToken();
+      const customerPhone = normalizeRussianPhone(body.customerPhone);
+      const recipientPhone = body.recipientPhone.trim()
+        ? normalizeRussianPhone(body.recipientPhone)
+        : customerPhone;
+      const customerPhoneCandidates = phoneDigitCandidates(customerPhone);
 
-      const customerRows = await client<{ id: string; bonus_balance: number }[]>`
-        INSERT INTO customers (
-          shop_id,
-          phone,
-          name,
-          total_orders,
-          total_spent,
-          last_order_at,
-          created_at,
-          updated_at
-        )
-        VALUES (
-          ${shop.id},
-          ${body.customerPhone},
-          ${body.customerName},
-          0,
-          0,
-          NOW(),
-          NOW(),
-          NOW()
-        )
-        ON CONFLICT (shop_id, phone)
-        DO UPDATE SET
-          name = COALESCE(NULLIF(EXCLUDED.name, ''), customers.name),
-          updated_at = NOW()
-        RETURNING id, bonus_balance
+      const existingCustomerRows = await client<{ id: string; bonus_balance: number }[]>`
+        SELECT id, bonus_balance
+        FROM customers
+        WHERE shop_id = ${shop.id}
+          AND (
+            phone = ${customerPhone}
+            OR regexp_replace(phone, '[^0-9]', '', 'g') = ANY(${customerPhoneCandidates}::text[])
+          )
+        ORDER BY updated_at DESC
+        LIMIT 1
       `;
 
-      const customer = customerRows[0];
+      let customer = existingCustomerRows[0];
+
+      if (customer) {
+        await client`
+          UPDATE customers
+          SET name = COALESCE(NULLIF(${body.customerName}, ''), name),
+              updated_at = NOW()
+          WHERE id = ${customer.id}
+        `;
+      } else {
+        const customerRows = await client<{ id: string; bonus_balance: number }[]>`
+          INSERT INTO customers (
+            shop_id,
+            phone,
+            name,
+            total_orders,
+            total_spent,
+            last_order_at,
+            created_at,
+            updated_at
+          )
+          VALUES (
+            ${shop.id},
+            ${customerPhone},
+            ${body.customerName},
+            0,
+            0,
+            NOW(),
+            NOW(),
+            NOW()
+          )
+          ON CONFLICT (shop_id, phone)
+          DO UPDATE SET
+            name = COALESCE(NULLIF(EXCLUDED.name, ''), customers.name),
+            updated_at = NOW()
+          RETURNING id, bonus_balance
+        `;
+
+        customer = customerRows[0];
+      }
 
       if (!customer?.id) {
         throw new HttpError(500, "Customer was not created");
@@ -1298,7 +1344,7 @@ export async function publicRoutes(app: FastifyInstance) {
           ${body.deliveryAddress},
           ${body.deliveryIntervalText},
           ${body.recipientName || body.customerName},
-          ${body.recipientPhone || body.customerPhone},
+          ${recipientPhone},
           ${body.customerComment},
           ${subtotalAmount},
           ${discountTotal},
@@ -1426,9 +1472,9 @@ export async function publicRoutes(app: FastifyInstance) {
               orderNumber,
               status: "new",
               customerName: body.customerName,
-              customerPhone: body.customerPhone,
+              customerPhone,
               recipientName: body.recipientName || body.customerName,
-              recipientPhone: body.recipientPhone || body.customerPhone,
+              recipientPhone,
               totalAmount,
               discountTotal,
               bonusSpent,
