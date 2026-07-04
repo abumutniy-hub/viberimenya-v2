@@ -227,8 +227,8 @@ export async function adminRoutes(app: FastifyInstance) {
     try {
       const shop = await getShop(client);
 
-      const orderRows = await client<{ id: string; order_number: string }[]>`
-        SELECT id, order_number
+      const orderRows = await client<{ id: string; order_number: string; tracking_token: string }[]>`
+        SELECT id, order_number, tracking_token
         FROM orders
         WHERE shop_id = ${shop.id}
           AND id = ${params.id}
@@ -353,8 +353,8 @@ export async function adminRoutes(app: FastifyInstance) {
     try {
       const shop = await getShop(client);
 
-      const orderRows = await client<{ id: string; order_number: string }[]>`
-        SELECT id, order_number
+      const orderRows = await client<{ id: string; order_number: string; tracking_token: string }[]>`
+        SELECT id, order_number, tracking_token
         FROM orders
         WHERE shop_id = ${shop.id}
           AND id = ${params.id}
@@ -428,6 +428,46 @@ export async function adminRoutes(app: FastifyInstance) {
         )
         RETURNING id, author_type, author_user_id, text, attachment_url, created_at
       `;
+
+      const message = messageRows[0] as Record<string, any> | undefined;
+
+      if (message?.id) {
+        await client`
+          INSERT INTO notification_events (
+            shop_id,
+            order_id,
+            type,
+            channel,
+            recipient_type,
+            status,
+            payload,
+            created_at,
+            updated_at
+          )
+          VALUES (
+            ${shop.id},
+            ${order.id},
+            'internal_chat_message',
+            'telegram',
+            'staff',
+            'pending',
+            CAST(${JSON.stringify({
+              orderId: "__ORDER_ID__",
+              orderNumber: "__ORDER_NUMBER__",
+              messageText: "__MESSAGE_TEXT__",
+              source: "crm_internal_chat"
+            })} AS jsonb)
+              || jsonb_build_object(
+                'orderId', ${order.id},
+                'orderNumber', ${order.order_number},
+                'messageText', ${body.text},
+                'trackingUrl', ${`/order/track/${order.tracking_token}`}
+              ),
+            NOW(),
+            NOW()
+          )
+        `;
+      }
 
       return {
         ok: true,

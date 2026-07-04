@@ -2296,6 +2296,18 @@ function formatEvent(event: NotificationEvent): string {
     }
   }
 
+  if (event.type === "internal_chat_message") {
+    const messageText = payloadText(payload, "messageText", "message_text");
+
+    return [
+      `💬 Новое сообщение в чате команды`,
+      orderTitle ? `Заказ: ${orderTitle}` : "",
+      "",
+      messageText ? `Сообщение: ${messageText}` : "",
+      trackingUrl ? `Открыть заказ: ${trackingUrl}` : ""
+    ].filter(Boolean).join("\n");
+  }
+
   if (event.type === "order_created") {
     return [
       `🆕 Новый заказ ${orderNumber || "без номера"}`,
