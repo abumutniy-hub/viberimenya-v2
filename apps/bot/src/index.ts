@@ -1787,8 +1787,9 @@ async function handleOrders(chatId: number) {
     total: number;
     tracking_token: string | null;
     created_at: string;
+    delivery_date: string | null;
   }[]>`
-    SELECT order_number, status, payment_status, total, tracking_token, created_at
+    SELECT order_number, status, payment_status, total, tracking_token, created_at, delivery_date
     FROM orders
     WHERE shop_id = ${shopId}
       AND customer_id = ${profile.customer_id}
@@ -1812,38 +1813,53 @@ async function handleOrders(chatId: number) {
     return;
   }
 
-  const orderBlocks = orders.map((order, index) => {
-    const createdText = shortDateText(order.created_at);
-
-    return [
-      `${index + 1}. ${order.order_number}`,
-      `Статус: ${orderStatusText(order.status)}`,
-      `Оплата: ${orderPaymentText(order.payment_status)}`,
-      `Сумма: ${money(order.total)}`,
-      createdText ? `Создан: ${createdText}` : ""
-    ].filter(Boolean).join("\n");
-  });
-
-  const buttons = orders
-    .filter((order) => order.tracking_token)
-    .map((order, index) => ([
-      {
-        text: orders.length === 1 ? "Открыть заказ" : `Открыть заказ ${index + 1}`,
-        url: absoluteUrl(`/order/track/${order.tracking_token}`)
-      }
-    ]));
-
   await sendTelegramMessage(
     chatId,
     [
       "📦 Мои заказы",
       "",
-      orderBlocks.join("\n\n")
+      `Показываю последние ${orders.length} заказ(а).`
     ].join("\n"),
     {
-      reply_markup: buttons.length > 0 ? inlineKeyboard(buttons) : replyMarkup
+      reply_markup: replyMarkup
     }
   );
+
+  for (let index = 0; index < orders.length; index += 1) {
+    const order = orders[index];
+    if (!order) continue;
+
+    const createdText = shortDateText(order.created_at);
+    const deliveryText = shortDateText(order.delivery_date);
+
+    const message = [
+      `📦 Заказ ${index + 1}`,
+      "",
+      `Номер: ${order.order_number}`,
+      `Статус: ${orderStatusText(order.status)}`,
+      `Оплата: ${orderPaymentText(order.payment_status)}`,
+      `Сумма: ${money(order.total)}`,
+      deliveryText ? `Доставка: ${deliveryText}` : "",
+      createdText ? `Создан: ${createdText}` : ""
+    ].filter(Boolean).join("\n");
+
+    await sendTelegramMessage(
+      chatId,
+      message,
+      {
+        reply_markup: order.tracking_token
+          ? inlineKeyboard([
+              [
+                {
+                  text: "Открыть заказ",
+                  url: absoluteUrl(`/order/track/${order.tracking_token}`)
+                }
+              ]
+            ])
+          : replyMarkup
+      }
+    );
+  }
 }
 
 async function handleBonuses(chatId: number) {
