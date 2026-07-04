@@ -2746,3 +2746,122 @@ body {
     width: 100%;
   }
 }
+
+/* Step 15 — admin internal order chat */
+.admin-action-button.chat {
+  background: #201a1a;
+  color: #fff;
+  border-color: #201a1a;
+}
+
+.admin-internal-chat {
+  width: min(520px, 88vw);
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid rgba(36, 28, 28, 0.12);
+  border-radius: 18px;
+  background: #fffaf4;
+  box-shadow: 0 18px 40px rgba(36, 28, 28, 0.12);
+}
+
+.admin-internal-chat-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.admin-internal-chat-head strong {
+  color: #171414;
+  font-size: 15px;
+  font-weight: 900;
+}
+
+.admin-internal-chat-head span,
+.admin-chat-muted {
+  color: rgba(23, 20, 20, 0.58);
+  font-size: 12px;
+}
+
+.admin-chat-messages {
+  display: grid;
+  gap: 10px;
+  max-height: 280px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.admin-chat-message {
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: #fff;
+  border: 1px solid rgba(36, 28, 28, 0.08);
+}
+
+.admin-chat-message div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.admin-chat-message strong {
+  color: #171414;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.admin-chat-message span {
+  color: rgba(23, 20, 20, 0.46);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.admin-chat-message p {
+  margin: 0;
+  color: rgba(23, 20, 20, 0.78);
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.admin-chat-form {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.admin-chat-form textarea {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid rgba(36, 28, 28, 0.12);
+  border-radius: 14px;
+  padding: 10px 12px;
+  font: inherit;
+  color: #171414;
+  background: #fff;
+}
+
+.admin-chat-form button {
+  min-height: 38px;
+  border: 0;
+  border-radius: 999px;
+  background: #171414;
+  color: #fff;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.admin-chat-form button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.admin-chat-error {
+  margin: 10px 0 0;
+  color: #a33636;
+  font-size: 12px;
+  font-weight: 700;
+}

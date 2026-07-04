@@ -161,6 +161,193 @@ export async function adminRoutes(app: FastifyInstance) {
     }
   });
 
+  app.get("/api/admin/orders/:id/internal-chat", async (request, reply) => {
+    const params = z.object({
+      id: z.string().uuid()
+    }).parse(request.params ?? {});
+
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+
+      const orderRows = await client<{ id: string; order_number: string }[]>`
+        SELECT id, order_number
+        FROM orders
+        WHERE shop_id = ${shop.id}
+          AND id = ${params.id}
+        LIMIT 1
+      `;
+
+      const order = orderRows[0];
+
+      if (!order) {
+        return reply.status(404).send({
+          ok: false,
+          message: "Заказ не найден"
+        });
+      }
+
+      const chatRows = await client<{ id: string }[]>`
+        INSERT INTO order_chats (
+          shop_id,
+          order_id,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          ${shop.id},
+          ${order.id},
+          NOW(),
+          NOW()
+        )
+        ON CONFLICT (order_id)
+        DO UPDATE SET updated_at = order_chats.updated_at
+        RETURNING id
+      `;
+
+      const chat = chatRows[0];
+
+      const messages = chat?.id
+        ? await client`
+            SELECT
+              cm.id,
+              cm.author_type,
+              cm.author_user_id,
+              cm.text,
+              cm.attachment_url,
+              cm.created_at,
+              u.name AS author_name
+            FROM chat_messages cm
+            LEFT JOIN users u ON u.id = cm.author_user_id
+            WHERE cm.shop_id = ${shop.id}
+              AND cm.order_id = ${order.id}
+              AND cm.chat_id = ${chat.id}
+              AND cm.message_scope = 'internal'
+            ORDER BY cm.created_at ASC
+            LIMIT 100
+          `
+        : [];
+
+      await client`
+        UPDATE chat_messages
+        SET is_read_by_staff = true
+        WHERE shop_id = ${shop.id}
+          AND order_id = ${order.id}
+          AND message_scope = 'internal'
+          AND is_read_by_staff = false
+      `;
+
+      return {
+        ok: true,
+        order,
+        chat,
+        messages
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.post("/api/admin/orders/:id/internal-chat", async (request, reply) => {
+    const params = z.object({
+      id: z.string().uuid()
+    }).parse(request.params ?? {});
+
+    const body = z.object({
+      text: z.string().trim().min(1).max(2000)
+    }).parse(request.body ?? {});
+
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+
+      const orderRows = await client<{ id: string; order_number: string }[]>`
+        SELECT id, order_number
+        FROM orders
+        WHERE shop_id = ${shop.id}
+          AND id = ${params.id}
+        LIMIT 1
+      `;
+
+      const order = orderRows[0];
+
+      if (!order) {
+        return reply.status(404).send({
+          ok: false,
+          message: "Заказ не найден"
+        });
+      }
+
+      const chatRows = await client<{ id: string }[]>`
+        INSERT INTO order_chats (
+          shop_id,
+          order_id,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          ${shop.id},
+          ${order.id},
+          NOW(),
+          NOW()
+        )
+        ON CONFLICT (order_id)
+        DO UPDATE SET updated_at = NOW()
+        RETURNING id
+      `;
+
+      const chat = chatRows[0];
+
+      if (!chat?.id) {
+        return reply.status(500).send({
+          ok: false,
+          message: "Не удалось открыть чат заказа"
+        });
+      }
+
+      const messageRows = await client`
+        INSERT INTO chat_messages (
+          shop_id,
+          chat_id,
+          order_id,
+          author_type,
+          author_user_id,
+          author_customer_id,
+          message_scope,
+          text,
+          attachment_url,
+          is_read_by_staff,
+          is_read_by_customer,
+          created_at
+        )
+        VALUES (
+          ${shop.id},
+          ${chat.id},
+          ${order.id},
+          'staff',
+          NULL,
+          NULL,
+          'internal',
+          ${body.text},
+          NULL,
+          true,
+          false,
+          NOW()
+        )
+        RETURNING id, author_type, author_user_id, text, attachment_url, created_at
+      `;
+
+      return {
+        ok: true,
+        message: messageRows[0]
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
   app.post("/api/admin/orders/:id/confirm", async (request, reply) => {
     const params = z.object({
       id: z.string().uuid()
