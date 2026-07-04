@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { config } from "dotenv";
 import postgres from "postgres";
@@ -395,6 +396,34 @@ async function ensureTelegramAccount(update: TelegramUpdate) {
       is_active = true,
       updated_at = NOW()
   `;
+}
+
+function createCustomerMagicToken() {
+  return randomUUID().replace(/-/g, "") + randomUUID().replace(/-/g, "");
+}
+
+async function createCustomerMagicLoginUrl(params: {
+  shopId: string;
+  customerId: string;
+  orderId: string | null;
+}) {
+  const token = createCustomerMagicToken();
+
+  await sql`
+    INSERT INTO customer_link_tokens (
+      shop_id, customer_id, order_id, provider, purpose,
+      token, status, expires_at, metadata, created_at, updated_at
+    )
+    VALUES (
+      ${params.shopId}, ${params.customerId}, ${params.orderId},
+      'site', 'magic_login',
+      ${token}, 'pending', NOW() + INTERVAL '15 minutes',
+      ${JSON.stringify({ source: "telegram_magic_login" })},
+      NOW(), NOW()
+    )
+  `;
+
+  return absoluteUrl(`/api/public/auth/magic/${token}`);
 }
 
 async function handleCustomerLinkToken(message: TelegramMessage, payload: string) {
