@@ -1264,6 +1264,21 @@ export async function publicRoutes(app: FastifyInstance) {
           )
         `;
 
+      const telegramLinkToken = createCustomerLinkToken();
+
+      await client`
+        INSERT INTO customer_link_tokens (
+          shop_id, customer_id, order_id, provider, purpose,
+          token, status, expires_at, metadata, created_at, updated_at
+        )
+        VALUES (
+          ${shop.id}, ${customer.id}, ${order.id}, 'telegram', 'connect_channel',
+          ${telegramLinkToken}, 'pending', NOW() + INTERVAL '7 days',
+          ${JSON.stringify({ source: "site_order_success", orderNumber })},
+          NOW(), NOW()
+        )
+      `;
+
       return reply.status(201).send({
         ok: true,
         order: {
@@ -1274,7 +1289,8 @@ export async function publicRoutes(app: FastifyInstance) {
           discountTotal,
           bonusSpent,
           promoCode,
-          trackingToken
+          trackingToken,
+          telegramLinkUrl: telegramBotDeepLink(telegramLinkToken)
         }
       });
     } catch (error) {
