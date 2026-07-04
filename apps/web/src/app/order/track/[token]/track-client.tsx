@@ -78,6 +78,140 @@ function paymentText(status: string) {
   return map[status] || status;
 }
 
+type OrderStepState = "done" | "active" | "waiting";
+
+const orderTimelineSteps = [
+  {
+    key: "accepted",
+    title: "Заказ принят",
+    text: "Мы получили заказ и передали его менеджеру."
+  },
+  {
+    key: "confirmed",
+    title: "Подтверждение",
+    text: "Менеджер проверяет детали, состав и время доставки."
+  },
+  {
+    key: "payment",
+    title: "Оплата",
+    text: "После подтверждения появится ссылка для оплаты."
+  },
+  {
+    key: "assembly",
+    title: "Сборка букета",
+    text: "Флорист собирает композицию к выбранному времени."
+  },
+  {
+    key: "delivery",
+    title: "Доставка",
+    text: "Курьер получает заказ и везёт его получателю."
+  },
+  {
+    key: "delivered",
+    title: "Доставлен",
+    text: "Заказ передан получателю."
+  }
+] as const;
+
+function orderStepState(order: TrackOrder, stepKey: string): OrderStepState {
+  const status = order.status;
+  const paymentStatus = order.paymentStatus;
+
+  if (status === "cancelled" || status === "problem") {
+    return stepKey === "confirmed" ? "active" : stepKey === "accepted" ? "done" : "waiting";
+  }
+
+  if (stepKey === "accepted") {
+    return "done";
+  }
+
+  if (stepKey === "confirmed") {
+    if (["confirmed", "assembling", "ready", "assigned_courier", "delivering", "delivered"].includes(status)) {
+      return "done";
+    }
+
+    return "active";
+  }
+
+  if (stepKey === "payment") {
+    if (paymentStatus === "paid") {
+      return "done";
+    }
+
+    if (status === "confirmed") {
+      return "active";
+    }
+
+    return ["assembling", "ready", "assigned_courier", "delivering", "delivered"].includes(status) ? "done" : "waiting";
+  }
+
+  if (stepKey === "assembly") {
+    if (["ready", "assigned_courier", "delivering", "delivered"].includes(status)) {
+      return "done";
+    }
+
+    if (status === "assembling") {
+      return "active";
+    }
+
+    return "waiting";
+  }
+
+  if (stepKey === "delivery") {
+    if (status === "delivered") {
+      return "done";
+    }
+
+    if (["ready", "assigned_courier", "delivering"].includes(status)) {
+      return "active";
+    }
+
+    return "waiting";
+  }
+
+  if (stepKey === "delivered") {
+    return status === "delivered" ? "done" : "waiting";
+  }
+
+  return "waiting";
+}
+
+function orderProgressText(order: TrackOrder) {
+  if (order.status === "cancelled") {
+    return "Заказ отменён";
+  }
+
+  if (order.status === "problem") {
+    return "Нужно уточнение по заказу";
+  }
+
+  if (order.status === "delivered") {
+    return "Заказ доставлен";
+  }
+
+  if (order.status === "delivering" || order.status === "assigned_courier") {
+    return "Заказ в доставке";
+  }
+
+  if (order.status === "ready") {
+    return "Букет готовится к передаче курьеру";
+  }
+
+  if (order.status === "assembling") {
+    return "Букет собирается";
+  }
+
+  if (order.paymentStatus !== "paid" && order.status === "confirmed") {
+    return "Ожидается оплата";
+  }
+
+  if (order.status === "confirmed") {
+    return "Заказ подтверждён";
+  }
+
+  return "Менеджер проверяет заказ";
+}
+
 export function TrackClient({ token }: { token: string }) {
   const [loading, setLoading] = useState(true);
   const [order, setOrder] = useState<TrackOrder | null>(null);
@@ -136,6 +270,32 @@ export function TrackClient({ token }: { token: string }) {
 
         <div className="track-status-pill">
           {paymentText(order.paymentStatus)}
+        </div>
+      </section>
+
+      <section className="track-card track-progress-card">
+        <div className="track-progress-head">
+          <div>
+            <h2>Путь заказа</h2>
+            <p>{orderProgressText(order)}</p>
+          </div>
+          <span>{statusText(order.status)}</span>
+        </div>
+
+        <div className="order-timeline">
+          {orderTimelineSteps.map((step, index) => {
+            const state = orderStepState(order, step.key);
+
+            return (
+              <article key={step.key} className={`order-timeline-step ${state}`}>
+                <span className="order-timeline-dot">{state === "done" ? "✓" : index + 1}</span>
+                <div>
+                  <strong>{step.title}</strong>
+                  <small>{step.text}</small>
+                </div>
+              </article>
+            );
+          })}
         </div>
       </section>
 

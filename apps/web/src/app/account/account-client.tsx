@@ -70,6 +70,31 @@ function paymentText(status: string) {
   return map[status] || status;
 }
 
+function orderProgressPercent(status: string, paymentStatus: string) {
+  if (status === "cancelled") return 100;
+  if (status === "problem") return 30;
+  if (status === "delivered") return 100;
+  if (status === "delivering") return 88;
+  if (status === "assigned_courier") return 78;
+  if (status === "ready") return 68;
+  if (status === "assembling") return 56;
+  if (paymentStatus === "paid") return 46;
+  if (status === "confirmed") return 36;
+  return 18;
+}
+
+function orderProgressLabel(status: string, paymentStatus: string) {
+  if (status === "cancelled") return "Заказ отменён";
+  if (status === "problem") return "Нужно уточнение";
+  if (status === "delivered") return "Доставлен";
+  if (status === "delivering" || status === "assigned_courier") return "В доставке";
+  if (status === "ready") return "Готов к доставке";
+  if (status === "assembling") return "Собирается";
+  if (paymentStatus === "paid") return "Оплачен";
+  if (status === "confirmed") return "Подтверждён";
+  return "Принят";
+}
+
 export function AccountClient() {
   const [loading, setLoading] = useState(true);
   const [phone, setPhone] = useState("");
@@ -267,7 +292,7 @@ export function AccountClient() {
         {orders.length ? (
           <div className="account-list">
             {orders.map((order) => (
-              <article key={order.order_number} className="account-list-item">
+              <article key={order.order_number} className="account-list-item account-order-item">
                 <div>
                   {order.tracking_token ? (
                     <a href={`/order/track/${order.tracking_token}`} className="account-order-link">
@@ -277,10 +302,13 @@ export function AccountClient() {
                     <strong>{order.order_number}</strong>
                   )}
                   <span>{dateText(order.created_at)}</span>
+                  <div className="account-order-progress">
+                    <span style={{ width: `${orderProgressPercent(order.status, order.payment_status)}%` }} />
+                  </div>
                 </div>
 
                 <div>
-                  <span>{statusText(order.status)}</span>
+                  <span>{orderProgressLabel(order.status, order.payment_status)}</span>
                   <span>{paymentText(order.payment_status)}</span>
                 </div>
 
