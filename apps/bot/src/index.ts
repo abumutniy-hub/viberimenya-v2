@@ -878,6 +878,62 @@ type CreatedTelegramOrder = {
   total: number;
 };
 
+
+function safeCheckoutData(value: unknown): TelegramCheckoutData {
+  if (!value) {
+    return {};
+  }
+
+  if (typeof value === "string") {
+    try {
+      return safeCheckoutData(JSON.parse(value));
+    } catch {
+      return {};
+    }
+  }
+
+  if (typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  const raw = value as Record<string, unknown>;
+  const data: TelegramCheckoutData = {};
+
+  if (typeof raw.customerName === "string") {
+    data.customerName = raw.customerName;
+  }
+
+  if (typeof raw.customerPhone === "string") {
+    data.customerPhone = raw.customerPhone;
+  }
+
+  if (typeof raw.recipientName === "string") {
+    data.recipientName = raw.recipientName;
+  }
+
+  if (typeof raw.recipientPhone === "string") {
+    data.recipientPhone = raw.recipientPhone;
+  }
+
+  if (typeof raw.deliveryDateText === "string") {
+    data.deliveryDateText = raw.deliveryDateText;
+  }
+
+  if (typeof raw.deliveryInterval === "string") {
+    data.deliveryInterval = raw.deliveryInterval;
+  }
+
+  if (typeof raw.deliveryAddress === "string") {
+    data.deliveryAddress = raw.deliveryAddress;
+  }
+
+  if (typeof raw.comment === "string") {
+    data.comment = raw.comment;
+  }
+
+  return data;
+}
+
 function normalizeInput(value: string) {
   return value.trim().replace(/\s+/g, " ");
 }
@@ -938,7 +994,7 @@ async function getCheckoutSession(chatId: number): Promise<TelegramCheckoutSessi
     return null;
   }
 
-  const rows = await sql<TelegramCheckoutSession[]>`
+  const rows = await sql<{ step: TelegramCheckoutStep; data: unknown }[]>`
     SELECT step, data
     FROM telegram_checkout_sessions
     WHERE shop_id = ${shopId}
@@ -946,7 +1002,16 @@ async function getCheckoutSession(chatId: number): Promise<TelegramCheckoutSessi
     LIMIT 1
   `;
 
-  return rows[0] || null;
+  const row = rows[0];
+
+  if (!row) {
+    return null;
+  }
+
+  return {
+    step: row.step,
+    data: safeCheckoutData(row.data)
+  };
 }
 
 async function setCheckoutSession(chatId: number, step: TelegramCheckoutStep, data: TelegramCheckoutData) {
@@ -958,7 +1023,7 @@ async function setCheckoutSession(chatId: number, step: TelegramCheckoutStep, da
 
   await sql`
     INSERT INTO telegram_checkout_sessions (shop_id, telegram_chat_id, step, data)
-    VALUES (${shopId}, ${chatId}, ${step}, ${JSON.stringify(data)})
+    VALUES (${shopId}, ${chatId}, ${step}, CAST(${JSON.stringify(data)} AS jsonb))
     ON CONFLICT (shop_id, telegram_chat_id)
     DO UPDATE SET step = EXCLUDED.step,
                   data = EXCLUDED.data,
@@ -1069,9 +1134,7 @@ async function handleCheckoutMessage(message: TelegramMessage, text: string): Pr
     return true;
   }
 
-  const data: TelegramCheckoutData = {
-    ...(session.data || {})
-  };
+  const data = safeCheckoutData(session.data);
 
   if (session.step === "customer_name") {
     if (value.length < 2) {
@@ -1115,7 +1178,7 @@ async function handleCheckoutMessage(message: TelegramMessage, text: string): Pr
   }
 
   if (session.step === "recipient_name") {
-    data.recipientName = value === "-" ? data.customerName : value;
+    data.recipientName = value === "-" ? (data.customerName || "Клиент Telegram") : value;
     await setCheckoutSession(message.chat.id, "recipient_phone", data);
     await askCheckoutQuestion(
       message.chat.id,
@@ -1130,7 +1193,7 @@ async function handleCheckoutMessage(message: TelegramMessage, text: string): Pr
 
   if (session.step === "recipient_phone") {
     if (value === "-") {
-      data.recipientPhone = data.customerPhone;
+      data.recipientPhone = data.customerPhone || "";
     } else {
       const phone = normalizePhone(value);
 
@@ -1254,35 +1317,50 @@ async function createOrderFromTelegramCheckout(chatId: number, data: TelegramChe
     data.comment ? `Комментарий: ${data.comment}` : ""
   ].filter(Boolean).join("\n");
 
-  const customerRows = await sql<{ id: string; bonus_balance: number }[]>`
-    INSERT INTO customers (
-      shop_id,
-      phone,
-      name,
-      total_orders,
-      total_spent,
-      last_order_at,
-      created_at,
-      updated_at
-    )
-    VALUES (
-      ${shopId},
-      ${customerPhone},
-      ${customerName},
-      0,
-      0,
-      NOW(),
-      NOW(),
-      NOW()
-    )
-    ON CONFLICT (shop_id, phone)
-    DO UPDATE SET
-      name = COALESCE(NULLIF(EXCLUDED.name, ''), customers.name),
-      updated_at = NOW()
-    RETURNING id, bonus_balance
+  let customerRows = await sql<{ id: string; bonus_balance: number }[]>`
+    SELECT id, bonus_balance
+    FROM customers
+    WHERE shop_id = ${shopId}
+      AND phone = ${customerPhone}
+    LIMIT 1
   `;
 
-  const customer = customerRows[0];
+  let customer = customerRows[0];
+
+  if (customer) {
+    await sql`
+      UPDATE customers
+      SET name = COALESCE(NULLIF(${customerName}, ''), name),
+          updated_at = NOW()
+      WHERE id = ${customer.id}
+    `;
+  } else {
+    customerRows = await sql<{ id: string; bonus_balance: number }[]>`
+      INSERT INTO customers (
+        shop_id,
+        phone,
+        name,
+        total_orders,
+        total_spent,
+        last_order_at,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        ${shopId},
+        ${customerPhone},
+        ${customerName},
+        0,
+        0,
+        NOW(),
+        NOW(),
+        NOW()
+      )
+      RETURNING id, bonus_balance
+    `;
+
+    customer = customerRows[0];
+  }
 
   if (!customer?.id) {
     throw new Error("Customer was not created");
@@ -1433,22 +1511,53 @@ async function createOrderFromTelegramCheckout(chatId: number, data: TelegramChe
       'telegram',
       'staff',
       'pending',
-      ${JSON.stringify({
+      CAST(${JSON.stringify({
         orderId: order.id,
+        order_id: order.id,
+
         orderNumber,
+        order_number: orderNumber,
+
         status: "new",
+
         customerName,
+        customer_name: customerName,
+
         customerPhone,
+        customer_phone: customerPhone,
+
         recipientName,
+        recipient_name: recipientName,
+
         recipientPhone,
+        recipient_phone: recipientPhone,
+
         totalAmount: total,
+        total_amount: total,
+        total,
+
         discountTotal: 0,
+        discount_total: 0,
+
         bonusSpent: 0,
+        bonus_spent: 0,
+
         deliveryType: "delivery",
+        delivery_type: "delivery",
+
         deliveryDate: data.deliveryDateText || null,
+        delivery_date: data.deliveryDateText || null,
+
         trackingToken,
-        trackingUrl: `/order/track/${trackingToken}`
-      })},
+        tracking_token: trackingToken,
+
+        trackingUrl: absoluteUrl(`/order/track/${trackingToken}`),
+        tracking_url: absoluteUrl(`/order/track/${trackingToken}`),
+
+        source: "telegram",
+        telegramChatId: chatId,
+        telegram_chat_id: chatId
+      })} AS jsonb),
       NOW(),
       NOW()
     )
@@ -1806,18 +1915,68 @@ async function processTelegramUpdates() {
   }
 }
 
+function eventPayload(event: NotificationEvent): Record<string, unknown> {
+  const raw = event.payload as unknown;
+
+  if (!raw) {
+    return {};
+  }
+
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+        ? parsed as Record<string, unknown>
+        : {};
+    } catch {
+      return {};
+    }
+  }
+
+  if (typeof raw === "object" && !Array.isArray(raw)) {
+    return raw as Record<string, unknown>;
+  }
+
+  return {};
+}
+
+function payloadValue(payload: Record<string, unknown>, ...keys: string[]): unknown {
+  for (const key of keys) {
+    const value = payload[key];
+
+    if (value !== null && value !== undefined && value !== "") {
+      return value;
+    }
+  }
+
+  return "";
+}
+
+function payloadText(payload: Record<string, unknown>, ...keys: string[]): string {
+  return valueToText(payloadValue(payload, ...keys));
+}
+
 function formatEvent(event: NotificationEvent): string {
-  const p = event.payload || {};
-  const orderNumber = valueToText(p.orderNumber) || "без номера";
-  const trackingUrl = absoluteUrl(p.trackingUrl);
-  const paymentUrl = absoluteUrl(p.paymentUrl);
+  const p = eventPayload(event);
+
+  const orderNumber = payloadText(p, "orderNumber", "order_number") || "без номера";
+  const customerName = payloadText(p, "customerName", "customer_name", "clientName", "client_name");
+  const customerPhone = payloadText(p, "customerPhone", "customer_phone", "phone");
+  const paymentStatus = payloadText(p, "paymentStatus", "payment_status");
+  const trackingToken = payloadText(p, "trackingToken", "tracking_token");
+  const trackingUrl = absoluteUrl(
+    payloadText(p, "trackingUrl", "tracking_url") || (trackingToken ? `/order/track/${trackingToken}` : "")
+  );
+  const paymentUrl = absoluteUrl(payloadText(p, "paymentUrl", "payment_url"));
+  const totalAmount = payloadValue(p, "totalAmount", "total_amount", "total", "amount");
+  const bonusEarned = payloadValue(p, "bonusEarned", "bonus_earned");
 
   if (event.type === "order_created") {
     return [
       `🆕 Новый заказ ${orderNumber}`,
-      `Клиент: ${valueToText(p.customerName)}`,
-      `Телефон: ${valueToText(p.customerPhone)}`,
-      `Сумма: ${money(p.totalAmount)}`,
+      customerName ? `Клиент: ${customerName}` : "",
+      customerPhone ? `Телефон: ${customerPhone}` : "",
+      `Сумма: ${money(totalAmount)}`,
       trackingUrl ? `Заказ: ${trackingUrl}` : ""
     ].filter(Boolean).join("\n");
   }
@@ -1825,8 +1984,8 @@ function formatEvent(event: NotificationEvent): string {
   if (event.type === "order_confirmed") {
     return [
       `✅ Заказ подтверждён ${orderNumber}`,
-      `Статус оплаты: ${valueToText(p.paymentStatus)}`,
-      `Сумма: ${money(p.totalAmount)}`,
+      paymentStatus ? `Статус оплаты: ${paymentStatus}` : "",
+      `Сумма: ${money(totalAmount)}`,
       trackingUrl ? `Заказ: ${trackingUrl}` : ""
     ].filter(Boolean).join("\n");
   }
@@ -1834,7 +1993,7 @@ function formatEvent(event: NotificationEvent): string {
   if (event.type === "payment_link_added") {
     return [
       `💳 Добавлена ссылка оплаты ${orderNumber}`,
-      `Сумма: ${money(p.amount)}`,
+      `Сумма: ${money(totalAmount)}`,
       paymentUrl ? `Оплата: ${paymentUrl}` : ""
     ].filter(Boolean).join("\n");
   }
@@ -1842,8 +2001,8 @@ function formatEvent(event: NotificationEvent): string {
   if (event.type === "order_paid") {
     return [
       `💚 Заказ оплачен ${orderNumber}`,
-      `Сумма: ${money(p.totalAmount)}`,
-      `Бонус начислен: ${money(p.bonusEarned)}`
+      `Сумма: ${money(totalAmount)}`,
+      `Бонус начислен: ${money(bonusEarned)}`
     ].filter(Boolean).join("\n");
   }
 
