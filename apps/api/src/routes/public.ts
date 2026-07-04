@@ -76,6 +76,15 @@ function createSessionToken() {
   return crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
 }
 
+function createCustomerLinkToken() {
+  return crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
+}
+
+function telegramBotDeepLink(token: string) {
+  const username = process.env.TELEGRAM_BOT_USERNAME || "viberimenya_bot";
+  return `https://t.me/${username}?start=link_${token}`;
+}
+
 function getCookieValue(cookieHeader: string | undefined, name: string) {
   if (!cookieHeader) return "";
 
