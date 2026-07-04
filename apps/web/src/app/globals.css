@@ -2961,3 +2961,50 @@ body {
   background: #c43c3c;
   box-shadow: 0 0 0 4px rgba(196, 60, 60, 0.1);
 }
+
+/* Step 19 — cart success action buttons */
+.cart-success-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 22px;
+}
+
+.cart-success-actions a,
+.cart-success-actions button {
+  min-height: 48px;
+  padding: 0 22px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  font-weight: 900;
+  font-size: 15px;
+  line-height: 1;
+  border: 1px solid rgba(23, 20, 20, 0.1);
+}
+
+.cart-success-actions .dark-button {
+  background: #171414;
+  color: #fff;
+  border-color: #171414;
+  box-shadow: 0 12px 28px rgba(23, 20, 20, 0.18);
+}
+
+.cart-success-actions .light-button {
+  background: rgba(23, 20, 20, 0.06);
+  color: #171414;
+}
+
+@media (max-width: 640px) {
+  .cart-success-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .cart-success-actions a,
+  .cart-success-actions button {
+    width: 100%;
+  }
+}
