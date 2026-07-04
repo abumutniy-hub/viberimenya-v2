@@ -72,6 +72,30 @@ function createLoginCode() {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
 
+function phoneDigitCandidates(value: string) {
+  const digits = value.replace(/\D/g, "");
+  const candidates = new Set<string>();
+
+  if (digits) {
+    candidates.add(digits);
+  }
+
+  if (digits.length === 11 && digits.startsWith("8")) {
+    candidates.add(`7${digits.slice(1)}`);
+  }
+
+  if (digits.length === 11 && digits.startsWith("7")) {
+    candidates.add(`8${digits.slice(1)}`);
+  }
+
+  if (digits.length === 10) {
+    candidates.add(`7${digits}`);
+    candidates.add(`8${digits}`);
+  }
+
+  return Array.from(candidates);
+}
+
 function createSessionToken() {
   return crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
 }
@@ -303,6 +327,7 @@ export async function publicRoutes(app: FastifyInstance) {
 
     const body = schema.parse(request.body ?? {});
     const phone = body.phone.trim();
+    const phoneCandidates = phoneDigitCandidates(phone);
     const { client } = createDb();
 
     try {
@@ -323,7 +348,10 @@ export async function publicRoutes(app: FastifyInstance) {
         SELECT id
         FROM customers
         WHERE shop_id = ${shop.id}
-          AND phone = ${phone}
+          AND (
+            phone = ${phone}
+            OR regexp_replace(phone, '[^0-9]', '', 'g') = ANY(${phoneCandidates}::text[])
+          )
         LIMIT 1
       `;
 
@@ -422,6 +450,7 @@ export async function publicRoutes(app: FastifyInstance) {
 
     const body = schema.parse(request.body ?? {});
     const phone = body.phone.trim();
+    const phoneCandidates = phoneDigitCandidates(phone);
     const code = body.code.trim();
     const { client } = createDb();
 
@@ -448,7 +477,10 @@ export async function publicRoutes(app: FastifyInstance) {
         SELECT id, customer_id, code, attempts
         FROM customer_login_codes
         WHERE shop_id = ${shop.id}
-          AND phone = ${phone}
+          AND (
+            phone = ${phone}
+            OR regexp_replace(phone, '[^0-9]', '', 'g') = ANY(${phoneCandidates}::text[])
+          )
           AND consumed_at IS NULL
           AND expires_at > NOW()
         ORDER BY created_at DESC
