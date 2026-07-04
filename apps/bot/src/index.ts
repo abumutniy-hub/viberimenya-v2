@@ -2458,6 +2458,21 @@ function formatEvent(event: NotificationEvent): string {
   const totalText = totalAmount === undefined || totalAmount === null || totalAmount === "" ? "" : money(totalAmount);
 
   if (event.recipient_type === "customer") {
+    if (event.type === "customer_login_code") {
+      const code = payloadText(payload, "code");
+      const phone = payloadText(payload, "phone");
+
+      return [
+        "🔐 Код входа в личный кабинет",
+        "",
+        code ? `Код: ${code}` : "",
+        "Код действует 10 минут.",
+        phone ? `Телефон: ${phone}` : "",
+        "",
+        "Если вы не запрашивали вход, просто проигнорируйте это сообщение."
+      ].filter(Boolean).join("\n");
+    }
+
     if (event.type === "order_confirmed") {
       return [
         `✅ Заказ ${orderTitle} подтверждён`,

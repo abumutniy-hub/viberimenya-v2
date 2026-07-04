@@ -357,11 +357,57 @@ export async function publicRoutes(app: FastifyInstance) {
         )
       `;
 
+      const telegramRows = await client<{ telegram_id: string }[]>`
+        SELECT telegram_id
+        FROM telegram_accounts
+        WHERE shop_id = ${shop.id}
+          AND customer_id = ${customer.id}
+          AND is_active = true
+        ORDER BY linked_at DESC
+        LIMIT 1
+      `;
+
+      const telegramAccount = telegramRows[0];
+
+      if (telegramAccount?.telegram_id) {
+        await client`
+          INSERT INTO notification_events (
+            shop_id,
+            order_id,
+            type,
+            channel,
+            recipient_type,
+            recipient_telegram_id,
+            payload,
+            attempts,
+            created_at,
+            updated_at
+          )
+          VALUES (
+            ${shop.id},
+            NULL,
+            'customer_login_code',
+            'telegram',
+            'customer',
+            ${telegramAccount.telegram_id},
+            ${JSON.stringify({ code, phone })},
+            0,
+            NOW(),
+            NOW()
+          )
+        `;
+
+        return {
+          ok: true,
+          message: "Код входа отправлен в Telegram"
+        };
+      }
+
       console.log(`[account-login] phone=${phone} code=${code}`);
 
       return {
         ok: true,
-        message: "Код подтверждения создан"
+        message: "Telegram к этому номеру пока не подключён. Код создан для проверки администратором."
       };
     } finally {
       await client.end();
