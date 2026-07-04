@@ -330,6 +330,7 @@ async function mainKeyboardForChat(chatId: number) {
 async function getTelegramProfile(telegramId: string) {
   const rows = await sql<{
     telegram_id: string;
+    shop_id: string;
     username: string | null;
     first_name: string | null;
     user_id: string | null;
@@ -338,6 +339,7 @@ async function getTelegramProfile(telegramId: string) {
   }[]>`
     SELECT
       ta.telegram_id,
+      ta.shop_id,
       ta.username,
       ta.first_name,
       ta.user_id,
@@ -575,6 +577,14 @@ async function handleOpenMenu(chatId: number, isStart = false) {
   const telegramId = String(chatId);
   const profile = await getTelegramProfile(telegramId);
 
+  const customerLoginUrl = profile?.customer_id
+    ? await createCustomerMagicLoginUrl({
+        shopId: profile.shop_id,
+        customerId: profile.customer_id,
+        orderId: null
+      })
+    : null;
+
   if (profile?.user_id) {
     const role = profile.role || "staff";
 
@@ -593,6 +603,18 @@ async function handleOpenMenu(chatId: number, isStart = false) {
       }
     );
 
+    if (customerLoginUrl) {
+      await sendTelegramMessage(
+        chatId,
+        "Личный кабинет покупателя тоже доступен на сайте. Вход выполнится автоматически.",
+        {
+          reply_markup: inlineKeyboard([
+            [{ text: "Открыть личный кабинет", url: customerLoginUrl }]
+          ])
+        }
+      );
+    }
+
     return;
   }
 
@@ -610,6 +632,18 @@ async function handleOpenMenu(chatId: number, isStart = false) {
       reply_markup: clientMainKeyboard()
     }
   );
+
+  if (customerLoginUrl) {
+    await sendTelegramMessage(
+      chatId,
+      "Откройте личный кабинет на сайте — вход выполнится автоматически.",
+      {
+        reply_markup: inlineKeyboard([
+          [{ text: "Открыть личный кабинет", url: customerLoginUrl }]
+        ])
+      }
+    );
+  }
 }
 
 async function handleCatalog(chatId: number, messageId?: number) {
