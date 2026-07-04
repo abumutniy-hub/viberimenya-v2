@@ -522,6 +522,12 @@ async function handleCustomerLinkToken(message: TelegramMessage, payload: string
     WHERE id = ${linkToken.id}
   `;
 
+  const magicLoginUrl = await createCustomerMagicLoginUrl({
+    shopId,
+    customerId: linkToken.customer_id,
+    orderId: linkToken.order_id
+  });
+
   await sendTelegramMessage(
     message.chat.id,
     [
@@ -531,6 +537,21 @@ async function handleCustomerLinkToken(message: TelegramMessage, payload: string
       "Ваши заказы доступны в разделе «📦 Мои заказы»."
     ].join("\n"),
     { reply_markup: await mainKeyboardForChat(message.chat.id) }
+  );
+
+  await sendTelegramMessage(
+    message.chat.id,
+    "Откройте сайт — вход выполнится автоматически.",
+    {
+      reply_markup: inlineKeyboard([
+        [
+          {
+            text: "Открыть личный кабинет",
+            url: magicLoginUrl
+          }
+        ]
+      ])
+    }
   );
 
   return true;
