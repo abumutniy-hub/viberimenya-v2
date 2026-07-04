@@ -429,9 +429,17 @@ export async function adminRoutes(app: FastifyInstance) {
         RETURNING id, author_type, author_user_id, text, attachment_url, created_at
       `;
 
-      const message = messageRows[0] as Record<string, any> | undefined;
+      const message = messageRows[0] as Record<string, unknown> | undefined;
 
       if (message?.id) {
+        const notificationPayload = {
+          orderId: order.id,
+          orderNumber: order.order_number,
+          messageText: body.text,
+          trackingUrl: order.tracking_token ? `/order/track/${order.tracking_token}` : null,
+          source: "crm_internal_chat"
+        };
+
         await client`
           INSERT INTO notification_events (
             shop_id,
@@ -451,18 +459,7 @@ export async function adminRoutes(app: FastifyInstance) {
             'telegram',
             'staff',
             'pending',
-            CAST(${JSON.stringify({
-              orderId: "__ORDER_ID__",
-              orderNumber: "__ORDER_NUMBER__",
-              messageText: "__MESSAGE_TEXT__",
-              source: "crm_internal_chat"
-            })} AS jsonb)
-              || jsonb_build_object(
-                'orderId', ${order.id},
-                'orderNumber', ${order.order_number},
-                'messageText', ${body.text},
-                'trackingUrl', ${`/order/track/${order.tracking_token}`}
-              ),
+            CAST(${JSON.stringify(notificationPayload)} AS jsonb),
             NOW(),
             NOW()
           )
