@@ -57,6 +57,7 @@ export function CartClient() {
     orderNumber: string;
     totalAmount: number;
     trackingToken?: string;
+    telegramLinkUrl?: string;
   } | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -234,6 +235,15 @@ export function CartClient() {
         <h1>{success.orderNumber}</h1>
         <p>Мы получили заказ. Менеджер проверит детали и свяжется с вами.</p>
         <strong>{money(success.totalAmount)}</strong>
+
+        {success.telegramLinkUrl ? (
+          <div className="cart-success-actions">
+            <a href={success.telegramLinkUrl} className="dark-button" target="_blank" rel="noreferrer">
+              Подключить Telegram
+            </a>
+          </div>
+        ) : null}
+
         <div className="cart-success-actions">
           <a href="/catalog" className="light-button">Вернуться в каталог</a>
           {success.trackingToken ? (
