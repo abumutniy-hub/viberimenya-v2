@@ -158,7 +158,11 @@ export function AccountClient() {
     }
 
     setStep("code");
-    setMessage("Код отправлен. Введите его ниже.");
+    setMessage(
+      data?.message
+        ? `${data.message}. Откройте Telegram, посмотрите код и введите его здесь.`
+        : "Код отправлен в Telegram. Откройте Telegram, посмотрите код и введите его здесь."
+    );
   }
 
   async function verifyCode(event: React.FormEvent<HTMLFormElement>) {
@@ -245,6 +249,36 @@ export function AccountClient() {
               </label>
 
               <button type="submit">Войти</button>
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={async () => {
+                  setMessage("");
+
+                  const response = await fetch("/api/public/account/request-code", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    credentials: "include",
+                    body: JSON.stringify({ phone: phone.trim() })
+                  });
+
+                  const data = await response.json();
+
+                  if (!response.ok || !data.ok) {
+                    setMessage(data?.message || "Не удалось отправить код повторно");
+                    return;
+                  }
+
+                  setCode("");
+                  setMessage(
+                    data?.message
+                      ? `${data.message}. Откройте Telegram, посмотрите код и введите его здесь.`
+                      : "Код отправлен повторно в Telegram. Откройте Telegram, посмотрите код и введите его здесь."
+                  );
+                }}
+              >
+                Отправить код ещё раз
+              </button>
               <button type="button" className="ghost-button" onClick={() => setStep("phone")}>
                 Изменить телефон
               </button>
