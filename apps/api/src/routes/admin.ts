@@ -128,6 +128,48 @@ export async function adminRoutes(app: FastifyInstance) {
     }
   });
 
+  app.post("/api/admin/presence", async () => {
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+
+      const rows = await client`
+        WITH current_staff AS (
+          SELECT u.id
+          FROM users u
+          JOIN shop_users su ON su.user_id = u.id
+          WHERE su.shop_id = ${shop.id}
+            AND su.is_active = true
+            AND u.status = 'active'
+            AND su.role IN ('owner', 'admin', 'manager')
+          ORDER BY
+            CASE su.role
+              WHEN 'owner' THEN 1
+              WHEN 'admin' THEN 2
+              WHEN 'manager' THEN 3
+              ELSE 10
+            END,
+            u.created_at ASC
+          LIMIT 1
+        )
+        UPDATE users u
+        SET last_login_at = NOW(),
+            updated_at = NOW()
+        FROM current_staff
+        WHERE u.id = current_staff.id
+        RETURNING u.id, u.name, u.last_login_at
+      `;
+
+      return {
+        ok: true,
+        staff: rows[0] ?? null
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
   app.get("/api/admin/orders", async () => {
     const { client } = createDb();
 
@@ -142,6 +184,7 @@ export async function adminRoutes(app: FastifyInstance) {
           o.total AS total_amount,
           p.payment_url AS payment_url,
           COALESCE(ic.messages_count, 0) AS internal_chat_messages_count,
+          COALESCE(ic.unread_count, 0) AS internal_chat_unread_count,
           ic.last_message AS internal_chat_last_message,
           ic.last_at AS internal_chat_last_at
         FROM orders o
@@ -156,6 +199,7 @@ export async function adminRoutes(app: FastifyInstance) {
         LEFT JOIN LATERAL (
           SELECT
             COUNT(*)::int AS messages_count,
+            COUNT(*) FILTER (WHERE cm.is_read_by_staff = false)::int AS unread_count,
             (ARRAY_AGG(cm.text ORDER BY cm.created_at DESC))[1] AS last_message,
             MAX(cm.created_at) AS last_at
           FROM chat_messages cm
@@ -255,18 +299,27 @@ export async function adminRoutes(app: FastifyInstance) {
           u.id,
           u.name,
           su.role,
-          ta.updated_at AS last_seen_at,
+          GREATEST(
+            COALESCE(u.last_login_at, '1970-01-01'::timestamptz),
+            COALESCE(ta.last_telegram_seen_at, '1970-01-01'::timestamptz)
+          ) AS last_seen_at,
           CASE
-            WHEN ta.updated_at IS NOT NULL AND ta.updated_at > NOW() - INTERVAL '10 minutes'
+            WHEN GREATEST(
+              COALESCE(u.last_login_at, '1970-01-01'::timestamptz),
+              COALESCE(ta.last_telegram_seen_at, '1970-01-01'::timestamptz)
+            ) > NOW() - INTERVAL '3 minutes'
             THEN true
             ELSE false
           END AS is_online
         FROM shop_users su
         JOIN users u ON u.id = su.user_id
-        LEFT JOIN telegram_accounts ta
-          ON ta.shop_id = su.shop_id
-         AND ta.user_id = su.user_id
-         AND ta.is_active = true
+        LEFT JOIN LATERAL (
+          SELECT MAX(updated_at) AS last_telegram_seen_at
+          FROM telegram_accounts
+          WHERE shop_id = su.shop_id
+            AND user_id = su.user_id
+            AND is_active = true
+        ) ta ON true
         WHERE su.shop_id = ${shop.id}
           AND su.is_active = true
           AND u.status = 'active'
@@ -369,7 +422,7 @@ export async function adminRoutes(app: FastifyInstance) {
           'internal',
           ${body.text},
           NULL,
-          true,
+          false,
           false,
           NOW()
         )

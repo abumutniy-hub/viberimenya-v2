@@ -102,7 +102,7 @@ export function OrderActions({
 
       setChatMessages(messages);
       setStaffPresence(presence);
-      setChatCount(messages.length);
+      setChatCount(0);
 
       const lastMessage = messages[messages.length - 1];
       setChatPreview(lastMessage?.text || "");
@@ -115,6 +115,7 @@ export function OrderActions({
 
   useEffect(() => {
     if (isChatOpen) {
+      setChatCount(0);
       void loadInternalChat();
     }
   }, [isChatOpen]);

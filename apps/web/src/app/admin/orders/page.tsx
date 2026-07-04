@@ -1,6 +1,7 @@
 import { AdminTable } from "../components/admin-table";
 import { fetchAdmin, type AdminRow } from "../lib/admin-api";
 import { OrderActions } from "./order-actions";
+import { AdminPresenceHeartbeat } from "../components/admin-presence-heartbeat";
 
 export const dynamic = "force-dynamic";
 
@@ -13,6 +14,7 @@ export default async function AdminOrdersPage() {
 
   return (
     <div className="admin-page">
+      <AdminPresenceHeartbeat />
       <div className="admin-page-head">
         <div>
           <span>CRM</span>
@@ -42,7 +44,7 @@ export default async function AdminOrdersPage() {
                   paymentStatus={String(row.payment_status)}
                   paymentUrl={String(row.payment_url || "")}
                   trackingToken={String(row.tracking_token || "")}
-                  internalChatCount={Number(row.internal_chat_messages_count || 0)}
+                  internalChatCount={Number(row.internal_chat_unread_count || 0)}
                   internalChatPreview={String(row.internal_chat_last_message || "")}
                 />
               )

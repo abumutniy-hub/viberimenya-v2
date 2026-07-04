@@ -2946,3 +2946,18 @@ body {
   color: rgba(23, 20, 20, 0.5);
   font-size: 11px;
 }
+
+/* Step 17 — unread-only chat badges and CRM presence */
+.admin-chat-badge {
+  background: #e22d2d;
+}
+
+.admin-staff-presence-item > span.online {
+  background: #16a34a;
+  box-shadow: 0 0 0 4px rgba(22, 163, 74, 0.14);
+}
+
+.admin-staff-presence-item > span.offline {
+  background: #c43c3c;
+  box-shadow: 0 0 0 4px rgba(196, 60, 60, 0.1);
+}
