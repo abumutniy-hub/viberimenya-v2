@@ -1745,7 +1745,7 @@ async function handleOrders(chatId: number) {
       [
         "📦 Заказы",
         "",
-        "Заказы сотрудников доступны в CRM.",
+        "Рабочие заказы доступны в CRM.",
         `CRM: ${SITE_URL}/admin`
       ].join("\n"),
       {
@@ -1772,6 +1772,13 @@ async function handleOrders(chatId: number) {
   }
 
   const shopId = await getDefaultShopId();
+
+  if (!shopId) {
+    await sendTelegramMessage(chatId, "Не удалось загрузить заказы. Попробуйте позже.", {
+      reply_markup: replyMarkup
+    });
+    return;
+  }
 
   const orders = await sql<{
     order_number: string;
@@ -1805,31 +1812,34 @@ async function handleOrders(chatId: number) {
     return;
   }
 
-  const lines = [
-    "📦 Мои заказы",
-    "",
-    ...orders.flatMap((order) => [
-      `${order.order_number}`,
+  const orderBlocks = orders.map((order, index) => {
+    const createdText = shortDateText(order.created_at);
+
+    return [
+      `${index + 1}. ${order.order_number}`,
       `Статус: ${orderStatusText(order.status)}`,
       `Оплата: ${orderPaymentText(order.payment_status)}`,
       `Сумма: ${money(order.total)}`,
-      shortDateText(order.created_at) ? `Дата: ${shortDateText(order.created_at)}` : "",
-      ""
-    ])
-  ].filter(Boolean);
+      createdText ? `Создан: ${createdText}` : ""
+    ].filter(Boolean).join("\n");
+  });
 
   const buttons = orders
     .filter((order) => order.tracking_token)
-    .map((order) => ([
+    .map((order, index) => ([
       {
-        text: `Открыть ${order.order_number}`,
+        text: orders.length === 1 ? "Открыть заказ" : `Открыть заказ ${index + 1}`,
         url: absoluteUrl(`/order/track/${order.tracking_token}`)
       }
     ]));
 
   await sendTelegramMessage(
     chatId,
-    lines.join("\n"),
+    [
+      "📦 Мои заказы",
+      "",
+      orderBlocks.join("\n\n")
+    ].join("\n"),
     {
       reply_markup: buttons.length > 0 ? inlineKeyboard(buttons) : replyMarkup
     }
@@ -1838,14 +1848,82 @@ async function handleOrders(chatId: number) {
 
 async function handleBonuses(chatId: number) {
   const replyMarkup = await mainKeyboardForChat(chatId);
+  const profile = await getTelegramProfile(String(chatId));
+
+  if (profile?.user_id) {
+    await sendTelegramMessage(
+      chatId,
+      [
+        "🎁 Бонусы",
+        "",
+        "Бонусы клиентов отображаются в карточке клиента и заказах в CRM.",
+        `CRM: ${SITE_URL}/admin`
+      ].join("\n"),
+      {
+        reply_markup: replyMarkup
+      }
+    );
+    return;
+  }
+
+  if (!profile?.customer_id) {
+    await sendTelegramMessage(
+      chatId,
+      [
+        "🎁 Бонусы",
+        "",
+        "Бонусный счёт появится после первого заказа.",
+        "После оплаты заказа бонусы будут отображаться здесь и в личном кабинете.",
+        "",
+        `Личный кабинет: ${SITE_URL}/account`
+      ].join("\n"),
+      {
+        reply_markup: replyMarkup
+      }
+    );
+    return;
+  }
+
+  const customerRows = await sql<{
+    bonus_balance: number;
+    total_orders: number;
+    total_spent: number;
+  }[]>`
+    SELECT bonus_balance, total_orders, total_spent
+    FROM customers
+    WHERE id = ${profile.customer_id}
+    LIMIT 1
+  `;
+
+  const customer = customerRows[0];
+
+  if (!customer) {
+    await sendTelegramMessage(
+      chatId,
+      [
+        "🎁 Бонусы",
+        "",
+        "Бонусный счёт появится после первого заказа.",
+        "",
+        `Личный кабинет: ${SITE_URL}/account`
+      ].join("\n"),
+      {
+        reply_markup: replyMarkup
+      }
+    );
+    return;
+  }
 
   await sendTelegramMessage(
     chatId,
     [
       "🎁 Бонусы",
       "",
-      "Бонусная система уже работает на сайте.",
-      "Баланс отображается в личном кабинете после подтверждения телефона.",
+      `Баланс: ${money(customer.bonus_balance)}`,
+      `Заказов: ${Number(customer.total_orders || 0)}`,
+      `Покупки: ${money(customer.total_spent)}`,
+      "",
+      "Бонусы можно использовать при следующих заказах.",
       "",
       `Личный кабинет: ${SITE_URL}/account`
     ].join("\n"),
