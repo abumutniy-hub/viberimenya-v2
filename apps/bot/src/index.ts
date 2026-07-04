@@ -6,6 +6,8 @@ config({ path: resolve(process.cwd(), "../../.env") });
 
 type NotificationEvent = {
   id: string;
+  shop_id: string;
+  order_id: string | null;
   type: string;
   channel: string;
   recipient_type: string;
@@ -1957,80 +1959,138 @@ function payloadText(payload: Record<string, unknown>, ...keys: string[]): strin
 }
 
 function formatEvent(event: NotificationEvent): string {
-  const p = eventPayload(event);
+  const payload = eventPayload(event);
 
-  const orderNumber = payloadText(p, "orderNumber", "order_number") || "без номера";
-  const customerName = payloadText(p, "customerName", "customer_name", "clientName", "client_name");
-  const customerPhone = payloadText(p, "customerPhone", "customer_phone", "phone");
-  const paymentStatus = payloadText(p, "paymentStatus", "payment_status");
-  const trackingToken = payloadText(p, "trackingToken", "tracking_token");
-  const trackingUrl = absoluteUrl(
-    payloadText(p, "trackingUrl", "tracking_url") || (trackingToken ? `/order/track/${trackingToken}` : "")
-  );
-  const paymentUrl = absoluteUrl(payloadText(p, "paymentUrl", "payment_url"));
-  const totalAmount = payloadValue(p, "totalAmount", "total_amount", "total", "amount");
-  const bonusEarned = payloadValue(p, "bonusEarned", "bonus_earned");
+  const orderNumber = payloadText(payload, "orderNumber", "order_number") || "заказ";
+  const customerName = payloadText(payload, "customerName", "customer_name") || "Клиент";
+  const customerPhone = payloadText(payload, "customerPhone", "customer_phone") || "";
+  const totalAmount = payloadValue(payload, "totalAmount", "total_amount", "total", "amount");
+  const paymentUrl = absoluteUrl(payloadValue(payload, "paymentUrl", "payment_url"));
+  const trackingUrl = absoluteUrl(payloadValue(payload, "trackingUrl", "tracking_url"));
+  const totalText = totalAmount === undefined || totalAmount === null || totalAmount === "" ? "" : money(totalAmount);
+
+  if (event.recipient_type === "customer") {
+    if (event.type === "order_confirmed") {
+      return [
+        `✅ Заказ ${orderNumber} подтверждён`,
+        "",
+        "Менеджер проверил детали заказа. Следующий шаг — оплата и подготовка букета.",
+        trackingUrl ? `Статус заказа: ${trackingUrl}` : ""
+      ].filter(Boolean).join("\n");
+    }
+
+    if (event.type === "payment_link_added") {
+      return [
+        `💳 Заказ ${orderNumber} готов к оплате`,
+        totalText ? `Сумма к оплате: ${totalText}` : "",
+        "",
+        paymentUrl ? `Оплатить заказ: ${paymentUrl}` : "Ссылка на оплату доступна на странице заказа.",
+        trackingUrl ? `Статус заказа: ${trackingUrl}` : ""
+      ].filter(Boolean).join("\n");
+    }
+
+    if (event.type === "order_paid") {
+      return [
+        `✅ Оплата по заказу ${orderNumber} получена`,
+        "",
+        "Мы приступаем к подготовке букета. Статус заказа будет обновляться по мере выполнения.",
+        trackingUrl ? `Статус заказа: ${trackingUrl}` : ""
+      ].filter(Boolean).join("\n");
+    }
+
+    if (event.type === "order_created") {
+      return [
+        `🌸 Заказ ${orderNumber} принят`,
+        totalText ? `Сумма заказа: ${totalText}` : "",
+        "",
+        "Менеджер проверит детали и подтвердит заказ.",
+        trackingUrl ? `Статус заказа: ${trackingUrl}` : ""
+      ].filter(Boolean).join("\n");
+    }
+  }
 
   if (event.type === "order_created") {
     return [
       `🆕 Новый заказ ${orderNumber}`,
       customerName ? `Клиент: ${customerName}` : "",
       customerPhone ? `Телефон: ${customerPhone}` : "",
-      `Сумма: ${money(totalAmount)}`,
-      trackingUrl ? `Заказ: ${trackingUrl}` : ""
+      totalText ? `Сумма: ${totalText}` : "",
+      trackingUrl ? `Ссылка: ${trackingUrl}` : ""
     ].filter(Boolean).join("\n");
   }
 
   if (event.type === "order_confirmed") {
     return [
-      `✅ Заказ подтверждён ${orderNumber}`,
-      paymentStatus ? `Статус оплаты: ${paymentStatus}` : "",
-      `Сумма: ${money(totalAmount)}`,
-      trackingUrl ? `Заказ: ${trackingUrl}` : ""
+      `✅ Заказ ${orderNumber} подтверждён`,
+      customerPhone ? `Телефон: ${customerPhone}` : "",
+      totalText ? `Сумма: ${totalText}` : "",
+      trackingUrl ? `Ссылка: ${trackingUrl}` : ""
     ].filter(Boolean).join("\n");
   }
 
   if (event.type === "payment_link_added") {
     return [
-      `💳 Добавлена ссылка оплаты ${orderNumber}`,
-      `Сумма: ${money(totalAmount)}`,
+      `💳 Добавлена ссылка оплаты для ${orderNumber}`,
+      totalText ? `Сумма: ${totalText}` : "",
       paymentUrl ? `Оплата: ${paymentUrl}` : ""
     ].filter(Boolean).join("\n");
   }
 
   if (event.type === "order_paid") {
     return [
-      `💚 Заказ оплачен ${orderNumber}`,
-      `Сумма: ${money(totalAmount)}`,
-      `Бонус начислен: ${money(bonusEarned)}`
+      `💰 Заказ ${orderNumber} оплачен`,
+      totalText ? `Сумма: ${totalText}` : "",
+      customerPhone ? `Телефон: ${customerPhone}` : "",
+      trackingUrl ? `Ссылка: ${trackingUrl}` : ""
     ].filter(Boolean).join("\n");
   }
 
-  return [
-    `🔔 Событие ${event.type}`,
-    `Заказ: ${orderNumber}`
-  ].join("\n");
+  return `Уведомление по заказу ${orderNumber}`;
 }
 
 async function getRecipients(event: NotificationEvent): Promise<string[]> {
-  if (event.recipient_telegram_id) {
-    return [event.recipient_telegram_id];
+  const directRecipient = valueToText(event.recipient_telegram_id).trim();
+
+  if (directRecipient) {
+    return [directRecipient];
   }
 
-  const rows = await sql<{ telegram_id: string }[]>`
-    SELECT telegram_id
-    FROM telegram_accounts
-    WHERE is_active = true
-      AND user_id IS NOT NULL
-    ORDER BY created_at ASC
-  `;
+  if (event.recipient_type === "customer" && event.order_id) {
+    const rows = await sql<{ telegram_id: string }[]>`
+      SELECT ta.telegram_id
+      FROM orders o
+      JOIN telegram_accounts ta
+        ON ta.shop_id = o.shop_id
+       AND ta.customer_id = o.customer_id
+       AND ta.is_active = true
+      WHERE o.id = ${event.order_id}
+        AND o.shop_id = ${event.shop_id}
+      ORDER BY ta.linked_at DESC
+      LIMIT 1
+    `;
 
-  return rows.map((row) => row.telegram_id);
+    return rows.map((row) => row.telegram_id).filter(Boolean);
+  }
+
+  if (event.recipient_type === "staff") {
+    const rows = await sql<{ telegram_id: string }[]>`
+      SELECT DISTINCT ta.telegram_id
+      FROM telegram_accounts ta
+      WHERE ta.shop_id = ${event.shop_id}
+        AND ta.user_id IS NOT NULL
+        AND ta.is_active = true
+      ORDER BY ta.telegram_id
+    `;
+
+    return rows.map((row) => row.telegram_id).filter(Boolean);
+  }
+
+  return [];
 }
 
 async function processNotificationEvents() {
   const events = await sql<NotificationEvent[]>`
-    SELECT id, type, channel, recipient_type, recipient_telegram_id, payload, attempts, created_at
+    SELECT id, shop_id, order_id, type, channel, recipient_type, recipient_telegram_id, payload, attempts, created_at
     FROM notification_events
     WHERE status = 'pending'
       AND channel = 'telegram'
