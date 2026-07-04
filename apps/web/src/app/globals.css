@@ -2265,3 +2265,320 @@ button.dark-button,
   cursor: pointer;
 }
 
+
+/* Step 11 — catalog/product polish */
+.product-image-placeholder {
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 25% 20%, rgba(255,255,255,0.9), transparent 28%),
+    linear-gradient(135deg, #fff5f8 0%, #f5d7df 45%, #efe6dc 100%);
+}
+
+.product-image-placeholder::after {
+  content: "";
+  position: absolute;
+  inset: 18px;
+  border: 1px solid rgba(88, 45, 52, 0.12);
+  border-radius: 28px;
+  pointer-events: none;
+}
+
+.product-image-placeholder span {
+  position: relative;
+  z-index: 1;
+  letter-spacing: 0.12em;
+}
+
+.product-image-placeholder small {
+  position: relative;
+  z-index: 1;
+  display: block;
+  max-width: 180px;
+  margin-top: 10px;
+  color: rgba(67, 38, 44, 0.62);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  text-align: center;
+}
+
+.product-detail-image.has-image {
+  padding: 0;
+  overflow: hidden;
+}
+
+.product-detail-image.has-image img {
+  width: 100%;
+  height: 100%;
+  min-height: 420px;
+  object-fit: cover;
+  display: block;
+}
+
+.product-card {
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+}
+
+.product-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 24px 60px rgba(72, 39, 45, 0.12);
+  border-color: rgba(72, 39, 45, 0.12);
+}
+
+.product-cart-button,
+.product-main-cart-button {
+  border: 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.product-main-cart-button {
+  min-height: 54px;
+  padding-inline: 28px;
+  font-size: 16px;
+}
+
+.product-secondary-button {
+  min-height: 54px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.product-actions {
+  align-items: stretch;
+}
+
+@media (max-width: 760px) {
+  .product-main-cart-button,
+  .product-secondary-button {
+    width: 100%;
+  }
+
+  .product-detail-image.has-image img {
+    min-height: 320px;
+  }
+}
+
+/* Step 12 — product page visual polish */
+.product-media {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.product-image-placeholder::after {
+  display: none;
+}
+
+.product-image-placeholder {
+  border: 1px solid rgba(80, 54, 54, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.42);
+}
+
+.product-image-placeholder span {
+  width: 82px;
+  height: 82px;
+  border-radius: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #282323;
+  color: #fff;
+  font-size: 22px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  box-shadow: 0 18px 40px rgba(40, 35, 35, 0.16);
+}
+
+.product-detail-image.product-image-placeholder {
+  min-height: 520px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  align-items: center;
+  justify-content: center;
+}
+
+.product-detail-image.product-image-placeholder small,
+.product-image.product-image-placeholder small {
+  color: rgba(40, 31, 31, 0.55);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.product-photo-caption {
+  border: 1px solid rgba(80, 54, 54, 0.08);
+  background: rgba(255, 255, 255, 0.58);
+  border-radius: 26px;
+  padding: 22px 24px;
+  box-shadow: 0 16px 40px rgba(74, 50, 50, 0.06);
+}
+
+.product-photo-caption strong {
+  display: block;
+  margin-bottom: 8px;
+  color: #171414;
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.product-photo-caption p {
+  margin: 0;
+  color: rgba(43, 35, 35, 0.62);
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.product-short-note {
+  margin-top: 14px !important;
+  max-width: 620px;
+  color: rgba(43, 35, 35, 0.58) !important;
+  font-size: 18px !important;
+}
+
+.product-actions {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(190px, 0.7fr);
+  gap: 14px;
+  margin-top: 28px;
+}
+
+.product-actions .dark-button,
+.product-main-cart-button {
+  min-height: 58px;
+  border-radius: 999px;
+  background: #141111;
+  color: #fff;
+  border: 0;
+  font-weight: 900;
+  box-shadow: 0 18px 36px rgba(20, 17, 17, 0.18);
+}
+
+.product-actions .dark-button:hover,
+.product-main-cart-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 22px 46px rgba(20, 17, 17, 0.24);
+}
+
+.product-secondary-button,
+.product-actions .light-button {
+  min-height: 58px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  color: #171414;
+  border: 1px solid rgba(80, 54, 54, 0.12);
+  font-weight: 800;
+  text-decoration: none;
+  box-shadow: 0 14px 28px rgba(74, 50, 50, 0.06);
+}
+
+.product-bottom {
+  gap: 16px;
+}
+
+.product-bottom .product-cart-button {
+  min-height: 46px;
+  padding: 0 20px;
+  border-radius: 999px;
+  font-size: 15px;
+}
+
+@media (max-width: 760px) {
+  .product-detail-image.product-image-placeholder {
+    min-height: 420px;
+  }
+
+  .product-actions {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .product-photo-caption {
+    padding: 18px;
+    border-radius: 22px;
+  }
+
+  .product-short-note {
+    font-size: 16px !important;
+  }
+}
+
+/* Step 13 — clean public product UI */
+html,
+body {
+  background: #f5efe6;
+}
+
+.catalog-page,
+.product-page {
+  background: #f5efe6;
+  box-shadow: none !important;
+  border-left: 0 !important;
+  border-right: 0 !important;
+  outline: 0 !important;
+}
+
+.catalog-page::before,
+.catalog-page::after,
+.product-page::before,
+.product-page::after {
+  display: none !important;
+  content: none !important;
+}
+
+.product-detail,
+.product-media,
+.product-detail-image,
+.product-photo-caption,
+.product-detail-info {
+  border-left-color: transparent;
+  border-right-color: transparent;
+}
+
+.product-detail-image.product-image-placeholder {
+  border-radius: 34px;
+  border: 1px solid rgba(80, 54, 54, 0.06);
+  box-shadow: 0 24px 70px rgba(74, 50, 50, 0.08);
+}
+
+.product-photo-caption {
+  background: rgba(255, 255, 255, 0.76);
+}
+
+.product-photo-caption strong {
+  letter-spacing: -0.02em;
+}
+
+.product-actions .dark-button,
+.product-main-cart-button {
+  background: #111;
+}
+
+.product-actions .light-button,
+.product-secondary-button {
+  background: #fffaf4;
+}
+
+@media (max-width: 760px) {
+  .catalog-page,
+  .product-page {
+    width: 100%;
+    max-width: 100%;
+    margin-left: 0;
+    margin-right: 0;
+    padding-left: 22px;
+    padding-right: 22px;
+  }
+
+  .product-detail {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .product-media,
+  .product-detail-info {
+    min-width: 0;
+  }
+}

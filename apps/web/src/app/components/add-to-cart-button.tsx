@@ -58,7 +58,7 @@ export function AddToCartButton({
         window.location.href = "/cart";
       }}
     >
-      В корзину
+      Добавить в корзину
     </button>
   );
 }

@@ -65,26 +65,49 @@ export default async function ProductPage({ params }: ProductPageProps) {
   }
 
   const product = data.product;
+  const primaryImage = data.images?.[0] ?? null;
 
   return (
     <main className="product-page">
       <a className="back-link" href="/catalog">← Каталог</a>
 
       <section className="product-detail">
-        <div className="product-detail-image">
-          <span>ВМ</span>
+        <div className="product-media">
+          <div className={`product-detail-image ${primaryImage ? "has-image" : "product-image-placeholder"}`}>
+            {primaryImage ? (
+              <img src={primaryImage.url} alt={primaryImage.alt || product.name} />
+            ) : (
+              <>
+                <span>ВМ</span>
+                <small>Букет будет собран индивидуально к вашему заказу</small>
+              </>
+            )}
+          </div>
+
+          <div className="product-photo-caption">
+            <strong>Индивидуальная сборка</strong>
+            <p>
+              Перед доставкой менеджер сможет согласовать детали заказа и при необходимости отправить фото готовой композиции.
+            </p>
+          </div>
         </div>
 
         <div className="product-detail-info">
           <span>Букет / композиция</span>
           <h1>{product.name}</h1>
           <p>{product.description || product.shortDescription || "Свежая композиция для красивого повода."}</p>
+          <p className="product-short-note">
+            Подойдёт для подарка, доставки на дом или приятного знака внимания.
+          </p>
 
           <div className="product-price">{money(product.price)}</div>
 
           <div className="product-actions">
-            <AddToCartButton product={{ id: product.id, slug: product.slug, name: product.name, price: product.price }} />
-            <a href="/catalog" className="light-button">Продолжить выбор</a>
+            <AddToCartButton
+              className="dark-button product-main-cart-button"
+              product={{ id: product.id, slug: product.slug, name: product.name, price: product.price }}
+            />
+            <a href="/catalog" className="light-button product-secondary-button">Продолжить выбор</a>
           </div>
 
           <div className="product-notes">

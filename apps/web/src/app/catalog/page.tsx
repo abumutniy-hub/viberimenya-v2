@@ -84,7 +84,7 @@ export default async function CatalogPage({ searchParams }: CatalogPageProps) {
           <span>Каталог</span>
           <h1>Букеты и подарки</h1>
           <p>
-            Выберите композицию под повод, настроение и получателя. Выберите композицию под повод, настроение и получателя.
+            Выберите композицию под повод, настроение и получателя.
           </p>
         </div>
       </section>
@@ -120,8 +120,9 @@ export default async function CatalogPage({ searchParams }: CatalogPageProps) {
             <div className="product-grid">
               {visibleProducts.map((product) => (
                 <article className="product-card" key={product.id}>
-                  <a className="product-image" href={`/product/${product.slug}`} aria-label={product.name}>
+                  <a className="product-image product-image-placeholder" href={`/product/${product.slug}`} aria-label={product.name}>
                     <span>ВМ</span>
+                    <small>Индивидуальная сборка под заказ</small>
                   </a>
 
                   <div className="product-body">
