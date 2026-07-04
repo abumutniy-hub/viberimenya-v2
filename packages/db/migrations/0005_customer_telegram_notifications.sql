@@ -11,7 +11,7 @@ BEGIN
     RETURN NEW;
   END IF;
 
-  IF NEW.type NOT IN ('order_confirmed', 'payment_link_added', 'order_paid') THEN
+  IF NEW.type NOT IN ('order_created', 'order_confirmed', 'payment_link_added', 'order_paid') THEN
     RETURN NEW;
   END IF;
 
