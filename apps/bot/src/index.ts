@@ -397,9 +397,126 @@ async function ensureTelegramAccount(update: TelegramUpdate) {
   `;
 }
 
+async function handleCustomerLinkToken(message: TelegramMessage, payload: string) {
+  const token = payload.replace(/^link_/, "").trim();
+  const telegramId = String(message.chat.id);
+  const shopId = await getDefaultShopId();
+
+  if (!shopId || !token) {
+    await sendTelegramMessage(message.chat.id, "Ссылка подключения недействительна.");
+    return true;
+  }
+
+  const tokenRows = await sql<{ id: string; customer_id: string; order_id: string | null }[]>`
+    SELECT id, customer_id, order_id
+    FROM customer_link_tokens
+    WHERE shop_id = ${shopId}
+      AND provider = 'telegram'
+      AND purpose = 'connect_channel'
+      AND token = ${token}
+      AND status = 'pending'
+      AND consumed_at IS NULL
+      AND expires_at > NOW()
+    LIMIT 1
+  `;
+
+  const linkToken = tokenRows[0];
+
+  if (!linkToken) {
+    await sendTelegramMessage(message.chat.id, "Ссылка подключения недействительна или срок её действия истёк.");
+    return true;
+  }
+
+  const existingRows = await sql<{ customer_id: string | null }[]>`
+    SELECT customer_id
+    FROM telegram_accounts
+    WHERE shop_id = ${shopId}
+      AND telegram_id = ${telegramId}
+      AND is_active = true
+    LIMIT 1
+  `;
+
+  const existing = existingRows[0];
+
+  if (existing?.customer_id && existing.customer_id !== linkToken.customer_id) {
+    await sendTelegramMessage(message.chat.id, "Этот Telegram уже связан с другим профилем. Для смены привязки обратитесь к менеджеру.");
+    return true;
+  }
+
+  const displayName = [message.from?.first_name, message.from?.last_name].filter(Boolean).join(" ") || null;
+
+  await sql`
+    INSERT INTO telegram_accounts (
+      shop_id, customer_id, telegram_id, username, first_name, last_name,
+      is_active, linked_at, created_at, updated_at
+    )
+    VALUES (
+      ${shopId}, ${linkToken.customer_id}, ${telegramId},
+      ${message.from?.username || null}, ${message.from?.first_name || null}, ${message.from?.last_name || null},
+      true, NOW(), NOW(), NOW()
+    )
+    ON CONFLICT (shop_id, telegram_id)
+    DO UPDATE SET
+      customer_id = ${linkToken.customer_id},
+      username = EXCLUDED.username,
+      first_name = EXCLUDED.first_name,
+      last_name = EXCLUDED.last_name,
+      is_active = true,
+      updated_at = NOW()
+  `;
+
+  await sql`
+    INSERT INTO customer_channel_links (
+      shop_id, customer_id, provider, provider_user_id,
+      provider_username, provider_display_name,
+      is_active, linked_at, created_at, updated_at
+    )
+    VALUES (
+      ${shopId}, ${linkToken.customer_id}, 'telegram', ${telegramId},
+      ${message.from?.username || null}, ${displayName},
+      true, NOW(), NOW(), NOW()
+    )
+    ON CONFLICT (shop_id, provider, provider_user_id)
+    DO UPDATE SET
+      customer_id = ${linkToken.customer_id},
+      provider_username = EXCLUDED.provider_username,
+      provider_display_name = EXCLUDED.provider_display_name,
+      is_active = true,
+      updated_at = NOW()
+  `;
+
+  await sql`
+    UPDATE customer_link_tokens
+    SET status = 'consumed',
+        consumed_at = NOW(),
+        updated_at = NOW()
+    WHERE id = ${linkToken.id}
+  `;
+
+  await sendTelegramMessage(
+    message.chat.id,
+    [
+      "✅ Telegram подключён",
+      "",
+      "Теперь здесь будут приходить уведомления по заказам, оплате, сборке и доставке.",
+      "Ваши заказы доступны в разделе «📦 Мои заказы»."
+    ].join("\n"),
+    { reply_markup: await mainKeyboardForChat(message.chat.id) }
+  );
+
+  return true;
+}
+
 async function handleStart(update: TelegramUpdate) {
   const message = update.message;
   if (!message) return;
+
+  const payload = (message.text || "").split(/\s+/).slice(1).join(" ").trim();
+
+  if (payload.startsWith("link_")) {
+    const handled = await handleCustomerLinkToken(message, payload);
+    if (handled) return;
+  }
 
   await handleOpenMenu(message.chat.id, true);
 }
@@ -2084,7 +2201,7 @@ async function handleUpdate(update: TelegramUpdate) {
 
   await ensureTelegramAccount(update);
 
-  if (text === "/start" || text === "👤 Профиль") {
+  if (text.startsWith("/start") || text === "👤 Профиль") {
     await handleStart(update);
     return;
   }
