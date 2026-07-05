@@ -3611,3 +3611,27 @@ body {
     grid-template-columns: 1fr;
   }
 }
+
+/* Block 2.3.2 — product two action buttons */
+.product-actions-two {
+  grid-template-columns: 1.25fr 1fr;
+}
+
+.product-actions-two .product-main-cart-button,
+.product-actions-two .product-secondary-button {
+  transition: transform 0.16s ease, box-shadow 0.16s ease, background-color 0.16s ease, border-color 0.16s ease;
+}
+
+.product-actions-two .product-main-cart-button:hover,
+.product-actions-two .product-main-cart-button:focus-visible,
+.product-actions-two .product-secondary-button:hover,
+.product-actions-two .product-secondary-button:focus-visible {
+  transform: translateY(-2px);
+  box-shadow: 0 14px 32px rgba(23, 20, 20, 0.12);
+}
+
+@media (max-width: 760px) {
+  .product-actions-two {
+    grid-template-columns: 1fr;
+  }
+}

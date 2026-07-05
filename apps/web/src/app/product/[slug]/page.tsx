@@ -123,13 +123,12 @@ export default async function ProductPage({ params }: ProductPageProps) {
             {hasOldPrice(product) ? <span>{money(Number(product.oldPrice))}</span> : null}
           </div>
 
-          <div className="product-actions product-actions-three">
+          <div className="product-actions product-actions-two">
             <AddToCartButton
               className="dark-button product-main-cart-button"
               label="Добавить в корзину"
               product={{ id: product.id, slug: product.slug, name: product.name, price: product.price }}
             />
-            <a href="/cart" className="light-button product-secondary-button">Перейти в корзину</a>
             <a href="/catalog" className="light-button product-secondary-button">Продолжить выбор</a>
           </div>
 
