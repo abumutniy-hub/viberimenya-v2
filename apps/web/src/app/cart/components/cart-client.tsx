@@ -78,13 +78,28 @@ export function CartClient() {
   const amountBeforeBonus = Math.max(0, subtotal + deliveryPrice - discountTotal);
   const total = Math.max(0, amountBeforeBonus - bonusToSpend);
 
-  function updateQty(productId: string, quantity: number) {
-    const next = items
-      .map((item) => (item.productId === productId ? { ...item, quantity } : item))
-      .filter((item) => item.quantity > 0);
-
+  function resetCartAdjustments() {
     setDiscountTotal(0);
     setPromoMessage("");
+    setBonusToSpend(0);
+    setBonusMessage("");
+  }
+
+  function updateQty(productId: string, quantity: number) {
+    const safeQuantity = Math.max(0, Number(quantity) || 0);
+    const next = items
+      .map((item) => (item.productId === productId ? { ...item, quantity: safeQuantity } : item))
+      .filter((item) => item.quantity > 0);
+
+    resetCartAdjustments();
+    setItems(next);
+    writeCart(next);
+  }
+
+  function removeItem(productId: string) {
+    const next = items.filter((item) => item.productId !== productId);
+
+    resetCartAdjustments();
     setItems(next);
     writeCart(next);
   }
@@ -282,10 +297,16 @@ export function CartClient() {
                 <p>{money(item.price)}</p>
               </div>
 
-              <div className="quantity-control">
-                <button type="button" onClick={() => updateQty(item.productId, item.quantity - 1)}>−</button>
-                <span>{item.quantity}</span>
-                <button type="button" onClick={() => updateQty(item.productId, item.quantity + 1)}>+</button>
+              <div className="cart-item-controls">
+                <div className="quantity-control" aria-label={`Количество: ${item.name}`}>
+                  <button type="button" onClick={() => updateQty(item.productId, item.quantity - 1)}>−</button>
+                  <span>{item.quantity}</span>
+                  <button type="button" onClick={() => updateQty(item.productId, item.quantity + 1)}>+</button>
+                </div>
+
+                <button type="button" className="cart-remove-button" onClick={() => removeItem(item.productId)}>
+                  Удалить
+                </button>
               </div>
 
               <strong>{money(item.price * item.quantity)}</strong>
