@@ -3897,3 +3897,46 @@ body {
     margin-top: 8px;
   }
 }
+
+/* Block 2.4.4 — align cart quantity and remove button */
+@media (max-width: 760px) {
+  .cart-item-controls {
+    grid-column: 2;
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 12px;
+    margin-top: 12px;
+  }
+
+  .cart-item-controls .quantity-control {
+    grid-column: auto !important;
+    justify-self: auto !important;
+    margin-top: 0 !important;
+  }
+
+  .cart-remove-button {
+    margin-top: 0 !important;
+    min-height: 36px;
+    padding: 0 16px;
+  }
+
+  .cart-item {
+    gap: 14px 18px;
+  }
+
+  .cart-item h3 {
+    line-height: 1.15;
+  }
+}
+
+@media (max-width: 380px) {
+  .cart-item-controls {
+    gap: 9px;
+  }
+
+  .cart-remove-button {
+    padding: 0 12px;
+  }
+}
