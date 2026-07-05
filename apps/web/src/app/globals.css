@@ -3106,3 +3106,67 @@ body {
   text-align: center !important;
   white-space: normal !important;
 }
+
+/* Block 2.2.2 — catalog price and status */
+.catalog-page .product-card-title-row {
+  display: grid;
+  gap: 10px;
+}
+
+.catalog-page .product-status-badge {
+  width: fit-content;
+  border: 1px solid rgba(67, 43, 33, 0.12);
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.72);
+  color: rgba(63, 43, 33, 0.72);
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.catalog-page .product-price-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.catalog-page .product-price-row strong {
+  font-size: 24px;
+  line-height: 1.05;
+}
+
+.catalog-page .product-price-row span {
+  color: rgba(63, 43, 33, 0.45);
+  font-size: 15px;
+  font-weight: 800;
+  text-decoration: line-through;
+}
+
+.catalog-page .product-card-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.catalog-page .product-open-button,
+.catalog-page .product-cart-button {
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  text-align: center;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.catalog-page .product-cart-button {
+  width: 100%;
+  border: 0;
+  background: #171414;
+  color: #fff;
+}

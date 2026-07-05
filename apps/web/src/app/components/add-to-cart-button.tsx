@@ -24,7 +24,8 @@ function writeCart(items: CartItem[]) {
 
 export function AddToCartButton({
   product,
-  className = "dark-button"
+  className = "dark-button",
+  label = "Добавить в корзину"
 }: {
   product: {
     id: string;
@@ -33,6 +34,7 @@ export function AddToCartButton({
     price: number;
   };
   className?: string;
+  label?: string;
 }) {
   return (
     <button
@@ -58,7 +60,7 @@ export function AddToCartButton({
         window.location.href = "/cart";
       }}
     >
-      Добавить в корзину
+      {label}
     </button>
   );
 }

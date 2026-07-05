@@ -63,6 +63,18 @@ function getFirstParam(value: string | string[] | undefined) {
   return value;
 }
 
+function productAvailabilityText(product: Product) {
+  if (product.stockQuantity !== null && product.stockQuantity !== undefined && Number(product.stockQuantity) <= 0) {
+    return "Под заказ";
+  }
+
+  return "В наличии";
+}
+
+function hasOldPrice(product: Product) {
+  return product.oldPrice !== null && product.oldPrice !== undefined && Number(product.oldPrice) > Number(product.price);
+}
+
 export default async function CatalogPage({ searchParams }: CatalogPageProps) {
   const params = (await searchParams) ?? {};
   const selectedCategory = getFirstParam(params.category);
@@ -141,13 +153,27 @@ export default async function CatalogPage({ searchParams }: CatalogPageProps) {
 
                   <div className="product-body">
                     <div>
-                      <h3>{product.name}</h3>
+                      <div className="product-card-title-row">
+                        <h3>{product.name}</h3>
+                        <span className="product-status-badge">{productAvailabilityText(product)}</span>
+                      </div>
                       <p>{product.shortDescription || product.description || "Свежая композиция для красивого повода."}</p>
                     </div>
 
                     <div className="product-bottom">
-                      <strong>{money(product.price)}</strong>
-                      <AddToCartButton className="product-cart-button" product={{ id: product.id, slug: product.slug, name: product.name, price: product.price }} />
+                      <div className="product-price-row">
+                        <strong>{money(product.price)}</strong>
+                        {hasOldPrice(product) ? <span>{money(Number(product.oldPrice))}</span> : null}
+                      </div>
+
+                      <div className="product-card-actions">
+                        <a href={`/product/${product.slug}`} className="light-button product-open-button">Открыть</a>
+                        <AddToCartButton
+                          className="product-cart-button"
+                          label="В корзину"
+                          product={{ id: product.id, slug: product.slug, name: product.name, price: product.price }}
+                        />
+                      </div>
                     </div>
                   </div>
                 </article>
