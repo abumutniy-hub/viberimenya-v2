@@ -112,7 +112,9 @@ export function FavoriteButton({
         setActive(next.includes(productId));
       }}
     >
-      {active ? "♥" : "♡"}
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 21s-7.2-4.5-9.6-9.1C0.6 8.5 2.4 4.5 6.2 4.1c2-.2 3.8.8 4.8 2.3 1-1.5 2.8-2.5 4.8-2.3 3.8.4 5.6 4.4 3.8 7.8C19.2 16.5 12 21 12 21Z" />
+      </svg>
     </button>
   );
 }

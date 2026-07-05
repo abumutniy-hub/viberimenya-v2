@@ -3420,3 +3420,37 @@ body {
     justify-content: center !important;
   }
 }
+
+/* Block 2.2.8 — stable SVG favorite heart */
+.catalog-page .favorite-button {
+  aspect-ratio: 1 / 1 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+}
+
+.catalog-page .favorite-button svg {
+  width: 20px;
+  height: 20px;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.catalog-page .favorite-button.active svg {
+  fill: currentColor;
+}
+
+@media (max-width: 760px) {
+  .catalog-page .favorite-button {
+    width: 38px !important;
+    height: 38px !important;
+  }
+
+  .catalog-page .favorite-button svg {
+    width: 19px;
+    height: 19px;
+  }
+}
