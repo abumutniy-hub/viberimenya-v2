@@ -3403,3 +3403,20 @@ body {
     width: 100%;
   }
 }
+
+/* Block 2.2.7 — mobile favorite heart polish */
+@media (max-width: 760px) {
+  .catalog-page .favorite-button {
+    width: 38px !important;
+    height: 38px !important;
+    min-width: 38px !important;
+    min-height: 38px !important;
+    padding: 0 !important;
+    border-radius: 50% !important;
+    font-size: 21px !important;
+    line-height: 1 !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+  }
+}
