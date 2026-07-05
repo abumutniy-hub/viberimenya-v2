@@ -3454,3 +3454,25 @@ body {
     height: 19px;
   }
 }
+
+/* Block 2.2.9 — clean favorite heart shape */
+.catalog-page .favorite-button svg {
+  width: 21px !important;
+  height: 21px !important;
+  fill: none !important;
+  stroke: currentColor !important;
+  stroke-width: 2.15 !important;
+  stroke-linecap: round !important;
+  stroke-linejoin: round !important;
+}
+
+.catalog-page .favorite-button.active svg {
+  fill: currentColor !important;
+}
+
+@media (max-width: 760px) {
+  .catalog-page .favorite-button svg {
+    width: 20px !important;
+    height: 20px !important;
+  }
+}
