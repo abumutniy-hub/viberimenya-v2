@@ -3828,3 +3828,35 @@ body {
     justify-items: start;
   }
 }
+
+/* Block 2.4.2 — make cart remove action look like a button */
+.cart-remove-button {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 0 14px;
+  border: 1px solid rgba(164, 45, 45, 0.2) !important;
+  border-radius: 999px;
+  background: rgba(255, 246, 244, 0.96) !important;
+  color: #9f2f2f !important;
+  box-shadow: 0 8px 18px rgba(164, 45, 45, 0.08);
+  text-decoration: none !important;
+  font-size: 13px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.cart-remove-button:hover,
+.cart-remove-button:focus-visible {
+  border-color: rgba(164, 45, 45, 0.34) !important;
+  background: #fff !important;
+  color: #7f1f1f !important;
+  box-shadow: 0 12px 24px rgba(164, 45, 45, 0.14);
+  transform: translateY(-1px);
+}
+
+.cart-remove-button:active {
+  transform: translateY(0) scale(0.98);
+  box-shadow: none;
+}
