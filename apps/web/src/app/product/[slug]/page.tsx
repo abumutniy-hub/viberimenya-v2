@@ -1,4 +1,4 @@
-import { AddToCartButton } from "../../components/add-to-cart-button";
+import { AddToCartButton, FavoriteButton } from "../../components/add-to-cart-button";
 export const dynamic = "force-dynamic";
 
 type Product = {
@@ -48,6 +48,18 @@ function money(value: number) {
   return `${Number(value || 0).toLocaleString("ru-RU")} ₽`;
 }
 
+function productAvailabilityText(product: Product) {
+  if (product.stockQuantity !== null && product.stockQuantity !== undefined && Number(product.stockQuantity) <= 0) {
+    return "Под заказ";
+  }
+
+  return "В наличии";
+}
+
+function hasOldPrice(product: Product) {
+  return product.oldPrice !== null && product.oldPrice !== undefined && Number(product.oldPrice) > Number(product.price);
+}
+
 export default async function ProductPage({ params }: ProductPageProps) {
   const { slug } = await params;
   const data = await fetchJson<ProductResponse>(`/api/public/products/${slug}`);
@@ -73,15 +85,18 @@ export default async function ProductPage({ params }: ProductPageProps) {
 
       <section className="product-detail">
         <div className="product-media">
-          <div className={`product-detail-image ${primaryImage ? "has-image" : "product-image-placeholder"}`}>
-            {primaryImage ? (
-              <img src={primaryImage.url} alt={primaryImage.alt || product.name} />
-            ) : (
-              <>
-                <span>ВМ</span>
-                <small>Букет будет собран индивидуально к вашему заказу</small>
-              </>
-            )}
+          <div className="product-detail-media-card">
+            <div className={`product-detail-image ${primaryImage ? "has-image" : "product-image-placeholder"}`}>
+              {primaryImage ? (
+                <img src={primaryImage.url} alt={primaryImage.alt || product.name} />
+              ) : (
+                <>
+                  <span>ВМ</span>
+                  <small>Букет будет собран индивидуально к вашему заказу</small>
+                </>
+              )}
+            </div>
+            <FavoriteButton productId={product.id} className="product-favorite-button" />
           </div>
 
           <div className="product-photo-caption">
@@ -93,20 +108,28 @@ export default async function ProductPage({ params }: ProductPageProps) {
         </div>
 
         <div className="product-detail-info">
-          <span>Букет / композиция</span>
+          <div className="product-detail-meta-row">
+            <span>Букет / композиция</span>
+            <em>{productAvailabilityText(product)}</em>
+          </div>
           <h1>{product.name}</h1>
           <p>{product.description || product.shortDescription || "Свежая композиция для красивого повода."}</p>
           <p className="product-short-note">
             Подойдёт для подарка, доставки на дом или приятного знака внимания.
           </p>
 
-          <div className="product-price">{money(product.price)}</div>
+          <div className="product-price product-price-detail">
+            <strong>{money(product.price)}</strong>
+            {hasOldPrice(product) ? <span>{money(Number(product.oldPrice))}</span> : null}
+          </div>
 
-          <div className="product-actions">
+          <div className="product-actions product-actions-three">
             <AddToCartButton
               className="dark-button product-main-cart-button"
+              label="Добавить в корзину"
               product={{ id: product.id, slug: product.slug, name: product.name, price: product.price }}
             />
+            <a href="/cart" className="light-button product-secondary-button">Перейти в корзину</a>
             <a href="/catalog" className="light-button product-secondary-button">Продолжить выбор</a>
           </div>
 
