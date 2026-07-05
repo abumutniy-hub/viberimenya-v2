@@ -3860,3 +3860,40 @@ body {
   transform: translateY(0) scale(0.98);
   box-shadow: none;
 }
+
+
+/* Block 2.4.3 — cart mobile alignment without duplicated line total */
+.cart-item > strong {
+  display: none !important;
+}
+
+@media (max-width: 760px) {
+  .cart-item {
+    grid-template-columns: 92px minmax(0, 1fr);
+    gap: 14px 16px;
+    align-items: start;
+  }
+
+  .cart-item-image {
+    width: 92px;
+    height: 92px;
+    min-width: 92px;
+  }
+
+  .cart-item h3 {
+    margin-bottom: 6px;
+  }
+
+  .cart-item p {
+    margin-bottom: 10px;
+  }
+
+  .cart-item .quantity-control {
+    justify-self: start;
+    margin-top: 4px;
+  }
+
+  .cart-remove-button {
+    margin-top: 8px;
+  }
+}
