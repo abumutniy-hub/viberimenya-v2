@@ -284,7 +284,7 @@ function clientMainKeyboard() {
     keyboard: [
       [{ text: "🛍 Каталог" }, { text: "🧺 Корзина" }],
       [{ text: "📦 Мои заказы" }, { text: "🎁 Бонусы" }],
-      [{ text: "☎️ Связь" }]
+      [{ text: "👤 Профиль" }, { text: "☎️ Связь" }]
     ],
     resize_keyboard: true,
     is_persistent: true
@@ -1936,6 +1936,97 @@ function shortDateText(value: unknown) {
   }
 }
 
+async function handleCustomerProfile(chatId: number) {
+  const replyMarkup = await mainKeyboardForChat(chatId);
+  const profile = await getTelegramProfile(String(chatId));
+
+  if (profile?.user_id && !profile.customer_id) {
+    await sendTelegramMessage(
+      chatId,
+      [
+        "👤 Профиль",
+        "",
+        "Вы вошли как сотрудник магазина.",
+        `Роль: ${profile.role || "staff"}`,
+        "",
+        `CRM: ${SITE_URL}/admin`
+      ].join("\n"),
+      {
+        reply_markup: replyMarkup
+      }
+    );
+    return;
+  }
+
+  if (!profile?.customer_id) {
+    await sendTelegramMessage(
+      chatId,
+      [
+        "👤 Профиль",
+        "",
+        "Личный кабинет покупателя пока не подключён.",
+        "Оформите заказ на сайте и нажмите «Подключить Telegram» после оформления."
+      ].join("\n"),
+      {
+        reply_markup: replyMarkup
+      }
+    );
+    return;
+  }
+
+  const customerRows = await sql<{
+    phone: string;
+    name: string | null;
+    email: string | null;
+    bonus_balance: number;
+    total_orders: number;
+    total_spent: number;
+    last_order_at: string | null;
+  }[]>`
+    SELECT phone, name, email, bonus_balance, total_orders, total_spent, last_order_at
+    FROM customers
+    WHERE id = ${profile.customer_id}
+    LIMIT 1
+  `;
+
+  const customer = customerRows[0];
+
+  if (!customer) {
+    await sendTelegramMessage(chatId, "Профиль покупателя не найден. Попробуйте позже.", {
+      reply_markup: replyMarkup
+    });
+    return;
+  }
+
+  const loginUrl = await createCustomerMagicLoginUrl({
+    shopId: profile.shop_id,
+    customerId: profile.customer_id,
+    orderId: null
+  });
+
+  await sendTelegramMessage(
+    chatId,
+    [
+      "👤 Профиль покупателя",
+      "",
+      customer.name ? `Имя: ${customer.name}` : "",
+      `Телефон: ${customer.phone}`,
+      customer.email ? `Email: ${customer.email}` : "",
+      `Бонусы: ${money(customer.bonus_balance)}`,
+      `Заказов: ${Number(customer.total_orders || 0)}`,
+      `Покупки: ${money(customer.total_spent)}`,
+      customer.last_order_at ? `Последний заказ: ${shortDateText(customer.last_order_at)}` : "",
+      "",
+      "На сайте доступна полная история заказов и бонусов."
+    ].filter(Boolean).join("\n"),
+    {
+      reply_markup: inlineKeyboard([
+        [{ text: "Открыть личный кабинет на сайте", url: loginUrl }]
+      ])
+    }
+  );
+}
+
 async function handleOrders(chatId: number) {
   const replyMarkup = await mainKeyboardForChat(chatId);
   const profile = await getTelegramProfile(String(chatId));
@@ -2285,8 +2376,13 @@ async function handleUpdate(update: TelegramUpdate) {
 
   await ensureTelegramAccount(update);
 
-  if (text.startsWith("/start") || text === "👤 Профиль") {
+  if (text.startsWith("/start")) {
     await handleStart(update);
+    return;
+  }
+
+  if (text === "👤 Профиль") {
+    await handleCustomerProfile(message.chat.id);
     return;
   }
 
