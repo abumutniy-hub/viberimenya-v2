@@ -159,9 +159,9 @@ export function AccountClient() {
 
     setStep("code");
     setMessage(
-      data?.message
-        ? `${data.message}. Откройте Telegram, посмотрите код и введите его здесь.`
-        : "Код отправлен в Telegram. Откройте Telegram, посмотрите код и введите его здесь."
+      data?.message === "Код входа отправлен в Telegram"
+        ? "Код входа отправлен в Telegram. Откройте Telegram, посмотрите код и введите его здесь."
+        : data?.message || "Код отправлен. Введите его здесь."
     );
   }
 
@@ -271,9 +271,9 @@ export function AccountClient() {
 
                   setCode("");
                   setMessage(
-                    data?.message
-                      ? `${data.message}. Откройте Telegram, посмотрите код и введите его здесь.`
-                      : "Код отправлен повторно в Telegram. Откройте Telegram, посмотрите код и введите его здесь."
+                    data?.message === "Код входа отправлен в Telegram"
+                      ? "Код входа повторно отправлен в Telegram. Откройте Telegram, посмотрите код и введите его здесь."
+                      : data?.message || "Код отправлен повторно. Введите его здесь."
                   );
                 }}
               >

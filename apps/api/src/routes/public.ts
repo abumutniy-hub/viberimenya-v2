@@ -451,10 +451,11 @@ export async function publicRoutes(app: FastifyInstance) {
 
       console.log(`[account-login] phone=${phone} code=${code}`);
 
-      return {
-        ok: true,
-        message: "Telegram к этому номеру пока не подключён. Код создан для проверки администратором."
-      };
+      return reply.status(409).send({
+        ok: false,
+        code: "telegram_not_connected",
+        message: "Telegram к этому номеру пока не подключён. Для входа оформите заказ на сайте и нажмите «Подключить Telegram» после оформления."
+      });
     } finally {
       await client.end();
     }
