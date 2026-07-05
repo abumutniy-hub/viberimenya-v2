@@ -291,8 +291,36 @@ export async function publicRoutes(app: FastifyInstance) {
         .orderBy(asc(products.sortOrder), desc(products.createdAt))
         .limit(100);
 
+      const productIds = result.map((product) => product.id);
+
+      const imageRows = productIds.length > 0
+        ? await client<{ product_id: string; url: string; alt: string | null }[]>`
+            SELECT DISTINCT ON (product_id)
+              product_id,
+              url,
+              alt
+            FROM product_images
+            WHERE shop_id = ${shop.id}
+              AND product_id = ANY(${productIds}::uuid[])
+            ORDER BY product_id, is_main DESC, sort_order ASC, created_at ASC
+          `
+        : [];
+
+      const imagesByProductId = new Map(
+        imageRows.map((image) => [
+          image.product_id,
+          {
+            url: image.url,
+            alt: image.alt
+          }
+        ])
+      );
+
       return {
-        items: result
+        items: result.map((product) => ({
+          ...product,
+          primaryImage: imagesByProductId.get(product.id) ?? null
+        }))
       };
     } finally {
       await client.end();

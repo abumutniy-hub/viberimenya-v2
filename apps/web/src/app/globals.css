@@ -3008,3 +3008,17 @@ body {
     width: 100%;
   }
 }
+
+/* Block 2.2.1 — real product images in catalog */
+.product-image.has-image {
+  padding: 0;
+  overflow: hidden;
+  background: #f4eee8;
+}
+
+.product-image.has-image img {
+  width: 100%;
+  height: 245px;
+  object-fit: cover;
+  display: block;
+}

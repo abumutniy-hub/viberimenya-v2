@@ -20,6 +20,10 @@ type Product = {
   stockQuantity?: number | null;
   status: string;
   isFeatured?: boolean | null;
+  primaryImage?: {
+    url: string;
+    alt?: string | null;
+  } | null;
 };
 
 type CategoriesResponse = {
@@ -120,9 +124,19 @@ export default async function CatalogPage({ searchParams }: CatalogPageProps) {
             <div className="product-grid">
               {visibleProducts.map((product) => (
                 <article className="product-card" key={product.id}>
-                  <a className="product-image product-image-placeholder" href={`/product/${product.slug}`} aria-label={product.name}>
-                    <span>ВМ</span>
-                    <small>Индивидуальная сборка под заказ</small>
+                  <a
+                    className={`product-image ${product.primaryImage ? "has-image" : "product-image-placeholder"}`}
+                    href={`/product/${product.slug}`}
+                    aria-label={product.name}
+                  >
+                    {product.primaryImage ? (
+                      <img src={product.primaryImage.url} alt={product.primaryImage.alt || product.name} />
+                    ) : (
+                      <>
+                        <span>ВМ</span>
+                        <small>Индивидуальная сборка под заказ</small>
+                      </>
+                    )}
                   </a>
 
                   <div className="product-body">
