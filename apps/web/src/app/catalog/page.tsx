@@ -1,4 +1,4 @@
-import { AddToCartButton } from "../components/add-to-cart-button";
+import { AddToCartButton, FavoriteButton } from "../components/add-to-cart-button";
 export const dynamic = "force-dynamic";
 
 type Category = {
@@ -136,20 +136,23 @@ export default async function CatalogPage({ searchParams }: CatalogPageProps) {
             <div className="product-grid">
               {visibleProducts.map((product) => (
                 <article className="product-card" key={product.id}>
-                  <a
-                    className={`product-image ${product.primaryImage ? "has-image" : "product-image-placeholder"}`}
-                    href={`/product/${product.slug}`}
-                    aria-label={product.name}
-                  >
-                    {product.primaryImage ? (
-                      <img src={product.primaryImage.url} alt={product.primaryImage.alt || product.name} />
-                    ) : (
-                      <>
-                        <span>ВМ</span>
-                        <small>Индивидуальная сборка под заказ</small>
-                      </>
-                    )}
-                  </a>
+                  <div className="product-card-media">
+                    <a
+                      className={`product-image ${product.primaryImage ? "has-image" : "product-image-placeholder"}`}
+                      href={`/product/${product.slug}`}
+                      aria-label={product.name}
+                    >
+                      {product.primaryImage ? (
+                        <img src={product.primaryImage.url} alt={product.primaryImage.alt || product.name} />
+                      ) : (
+                        <>
+                          <span>ВМ</span>
+                          <small>Индивидуальная сборка под заказ</small>
+                        </>
+                      )}
+                    </a>
+                    <FavoriteButton productId={product.id} />
+                  </div>
 
                   <div className="product-body">
                     <div>

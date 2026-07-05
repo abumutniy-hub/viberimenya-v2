@@ -1,6 +1,7 @@
 "use client";
 
 import { usePathname } from "next/navigation";
+import { CartCountBadge } from "./cart-indicator";
 
 const items = [
   { href: "/", label: "Главная", icon: "🏠", match: (path: string) => path === "/" },
@@ -26,7 +27,10 @@ export function MobileTabbar() {
     <nav className="mobile-tabbar" aria-label="Мобильное меню">
       {items.map((item) => (
         <a key={item.href} href={item.href} className={item.match(pathname) ? "active" : ""}>
-          <span>{item.icon}</span>
+          <span className="mobile-tabbar-icon">
+            {item.icon}
+            {item.href === "/cart" ? <CartCountBadge /> : null}
+          </span>
           {item.label}
         </a>
       ))}
