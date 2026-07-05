@@ -63,9 +63,26 @@ export function CartClient() {
 
   useEffect(() => {
     setItems(readCart());
+
     fetch("/api/public/delivery")
       .then((res) => res.json())
       .then((data) => setDelivery(data))
+      .catch(() => undefined);
+
+    fetch("/api/public/account/me", {
+      credentials: "include"
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        const customer = data?.customer as AccountCustomer | undefined;
+
+        if (!customer) return;
+
+        setAccount(customer);
+        setCustomerName(customer.name || "");
+        setCustomerPhone(customer.phone || "");
+        setBonusBalance(Number(customer.bonus_balance || 0));
+      })
       .catch(() => undefined);
   }, []);
 
@@ -350,8 +367,29 @@ export function CartClient() {
           {promoMessage ? <p>{promoMessage}</p> : null}
         </div>
 
-        <label><span>Ваше имя</span><input name="customerName" required /></label>
-        <label><span>Ваш телефон</span><input name="customerPhone" required /></label>
+        <label>
+          <span>Ваше имя</span>
+          <input
+            name="customerName"
+            value={customerName}
+            onChange={(event) => setCustomerName(event.target.value)}
+            required
+          />
+        </label>
+
+        <label>
+          <span>Ваш телефон</span>
+          <input
+            name="customerPhone"
+            value={customerPhone}
+            onChange={(event) => {
+              setCustomerPhone(event.target.value);
+              setBonusToSpend(0);
+              setBonusMessage("");
+            }}
+            required
+          />
+        </label>
         <label><span>Имя получателя</span><input name="recipientName" /></label>
         <label><span>Телефон получателя</span><input name="recipientPhone" /></label>
 
