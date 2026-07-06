@@ -4779,3 +4779,114 @@ body {
     gap: 8px;
   }
 }
+
+/* Block 3.2.2 — polish CRM order detail layout */
+.admin-order-detail-hero {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.admin-order-detail-hero > .admin-order-actions {
+  grid-column: 1 / -1;
+  width: 100%;
+  margin-top: 6px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(25, 23, 22, 0.07);
+}
+
+.admin-order-detail-hero .admin-order-link-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.admin-order-detail-hero .admin-payment-link-box {
+  max-width: 520px;
+}
+
+.admin-order-detail-hero .admin-action-button,
+.admin-order-detail-hero .admin-small-link,
+.admin-order-detail-hero .admin-copy-link,
+.admin-order-detail-hero .admin-status-badge,
+.admin-order-detail-hero .admin-paid-badge,
+.admin-order-detail-hero .admin-muted-badge {
+  min-height: 36px;
+}
+
+.admin-order-detail-card .admin-panel-head {
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(25, 23, 22, 0.07);
+}
+
+.admin-order-detail-card .admin-panel-head h2 {
+  font-size: 22px;
+  letter-spacing: -0.04em;
+}
+
+.admin-order-info-row {
+  grid-template-columns: 125px minmax(0, 1fr);
+  min-height: 42px;
+  align-items: center;
+}
+
+.admin-order-info-row span {
+  color: rgba(25, 23, 22, 0.48);
+}
+
+.admin-order-info-row strong {
+  line-height: 1.35;
+}
+
+.admin-order-detail-card {
+  overflow: hidden;
+}
+
+.admin-order-comment {
+  min-height: 120px;
+  padding-top: 6px;
+}
+
+.admin-order-detail-page .admin-order-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+@media (max-width: 1180px) {
+  .admin-order-detail-hero {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-order-detail-total {
+    text-align: left;
+  }
+}
+
+@media (max-width: 760px) {
+  .admin-order-detail-page .admin-page-head h1 {
+    font-size: 34px;
+    word-break: break-word;
+  }
+
+  .admin-order-detail-hero .admin-order-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .admin-order-detail-hero .admin-order-link-actions,
+  .admin-order-detail-page .admin-order-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .admin-order-detail-page .admin-order-actions > *,
+  .admin-order-detail-hero .admin-order-link-actions > * {
+    width: 100%;
+  }
+
+  .admin-order-info-row {
+    grid-template-columns: 1fr;
+    min-height: 0;
+  }
+}

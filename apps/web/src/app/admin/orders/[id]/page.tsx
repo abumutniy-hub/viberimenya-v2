@@ -152,6 +152,7 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
           trackingToken={trackingToken}
           internalChatCount={0}
           internalChatPreview=""
+          showDetailsLink={false}
         />
       </section>
 
@@ -219,8 +220,14 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
           </div>
           <InfoRow label="Товары" value={money(order.subtotal)} />
           <InfoRow label={isPickup ? "Самовывоз" : "Доставка"} value={money(order.delivery_price)} />
-          <InfoRow label="Скидка" value={`−${money(order.discount_total)}`} />
-          <InfoRow label="Бонусы списаны" value={`−${money(order.bonus_spent)}`} />
+          <InfoRow
+            label="Скидка"
+            value={Number(order.discount_total || 0) > 0 ? `−${money(order.discount_total)}` : money(0)}
+          />
+          <InfoRow
+            label="Бонусы списаны"
+            value={Number(order.bonus_spent || 0) > 0 ? `−${money(order.bonus_spent)}` : money(0)}
+          />
           <InfoRow label="Бонусы к начислению" value={money(order.bonus_earned)} />
           <InfoRow label="Итого" value={money(order.total)} />
         </article>

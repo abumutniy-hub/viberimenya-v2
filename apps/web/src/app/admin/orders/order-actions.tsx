@@ -52,7 +52,8 @@ export function OrderActions({
   paymentUrl,
   trackingToken,
   internalChatCount = 0,
-  internalChatPreview = ""
+  internalChatPreview = "",
+  showDetailsLink = true
 }: {
   orderId: string;
   status: string;
@@ -61,6 +62,7 @@ export function OrderActions({
   trackingToken?: string;
   internalChatCount?: number;
   internalChatPreview?: string;
+  showDetailsLink?: boolean;
 }) {
   const [isConfirming, setIsConfirming] = useState(false);
   const [isPaying, setIsPaying] = useState(false);
@@ -249,9 +251,11 @@ export function OrderActions({
   return (
     <div className="admin-order-actions">
       <div className="admin-order-link-actions">
-        <a className="admin-small-link" href={`/admin/orders/${orderId}`}>
-          Детали
-        </a>
+        {showDetailsLink ? (
+          <a className="admin-small-link" href={`/admin/orders/${orderId}`}>
+            Детали
+          </a>
+        ) : null}
 
         {trackingToken ? (
           <>
