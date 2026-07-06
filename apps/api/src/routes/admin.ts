@@ -1154,10 +1154,31 @@ export async function adminRoutes(app: FastifyInstance) {
       const shop = await getShop(client);
 
       const items = await client`
-        SELECT *
-        FROM shop_users
-        WHERE shop_id = ${shop.id}
-        ORDER BY created_at DESC
+        SELECT
+          su.id,
+          su.user_id,
+          su.role,
+          su.is_active,
+          su.created_at,
+          su.updated_at,
+          u.name,
+          u.phone,
+          u.email,
+          u.status AS user_status,
+          u.last_login_at
+        FROM shop_users su
+        JOIN users u ON u.id = su.user_id
+        WHERE su.shop_id = ${shop.id}
+        ORDER BY
+          CASE su.role
+            WHEN 'owner' THEN 1
+            WHEN 'admin' THEN 2
+            WHEN 'manager' THEN 3
+            WHEN 'florist' THEN 4
+            WHEN 'courier' THEN 5
+            ELSE 99
+          END,
+          su.created_at DESC
         LIMIT 100
       `;
 
