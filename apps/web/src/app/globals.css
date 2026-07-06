@@ -5291,3 +5291,79 @@ body {
     grid-template-columns: 1fr;
   }
 }
+
+/* Block 3.4.5 — order assignees */
+.admin-order-assignees-card {
+  margin-bottom: 18px;
+}
+
+.admin-order-assignees-form {
+  padding: 18px 20px 20px;
+}
+
+.admin-order-assignees-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.admin-order-assignee-field {
+  display: grid;
+  gap: 7px;
+}
+
+.admin-order-assignee-field span {
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(25, 23, 22, 0.52);
+}
+
+.admin-order-assignee-field select {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid rgba(25, 23, 22, 0.12);
+  border-radius: 14px;
+  background: #fff;
+  padding: 0 13px;
+  font: inherit;
+  color: #171414;
+}
+
+.admin-order-assignee-field small,
+.admin-order-assignees-note {
+  font-size: 12px;
+  color: rgba(25, 23, 22, 0.56);
+}
+
+.admin-order-assignees-note {
+  margin-top: 12px;
+}
+
+.admin-order-assignees-form > button {
+  margin-top: 14px;
+  min-height: 42px;
+  border: 0;
+  border-radius: 999px;
+  background: #171414;
+  color: #fff;
+  padding: 0 18px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.admin-order-assignees-form > button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+@media (max-width: 900px) {
+  .admin-order-assignees-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-order-assignees-form {
+    padding: 16px;
+  }
+}

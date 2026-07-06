@@ -66,6 +66,12 @@ const employeeSchema = z.object({
   isActive: z.coerce.boolean().optional().default(true)
 });
 
+const orderAssigneesSchema = z.object({
+  managerId: z.string().uuid().optional().or(z.literal("")).default(""),
+  floristId: z.string().uuid().optional().or(z.literal("")).default(""),
+  courierId: z.string().uuid().optional().or(z.literal("")).default("")
+});
+
 function slugify(value: string) {
   const map: Record<string, string> = {
     а: "a", б: "b", в: "v", г: "g", д: "d", е: "e", ё: "e", ж: "zh", з: "z",
@@ -293,10 +299,119 @@ export async function adminRoutes(app: FastifyInstance) {
         ORDER BY created_at ASC
       `;
 
+      const staff = await client`
+        SELECT
+          su.user_id,
+          su.role,
+          su.is_active,
+          u.name,
+          u.phone,
+          u.email,
+          ta.telegram_id AS telegram_id,
+          ta.username AS telegram_username
+        FROM shop_users su
+        JOIN users u ON u.id = su.user_id
+        LEFT JOIN LATERAL (
+          SELECT telegram_id, username
+          FROM telegram_accounts
+          WHERE shop_id = su.shop_id
+            AND user_id = su.user_id
+            AND is_active = true
+          ORDER BY linked_at DESC
+          LIMIT 1
+        ) ta ON true
+        WHERE su.shop_id = ${shop.id}
+          AND su.is_active = true
+          AND su.role IN ('manager', 'florist', 'courier')
+        ORDER BY
+          CASE su.role
+            WHEN 'manager' THEN 1
+            WHEN 'florist' THEN 2
+            WHEN 'courier' THEN 3
+            ELSE 99
+          END,
+          u.name ASC NULLS LAST
+      `;
+
       return {
         ok: true,
         order,
-        items
+        items,
+        staff
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.patch("/api/admin/orders/:id/assignees", async (request, reply) => {
+    const params = z.object({
+      id: z.string().uuid()
+    }).parse(request.params ?? {});
+
+    const body = orderAssigneesSchema.parse(request.body ?? {});
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+
+      const managerId = body.managerId.trim() || null;
+      const floristId = body.floristId.trim() || null;
+      const courierId = body.courierId.trim() || null;
+
+      const orderRows = await client<{ id: string; order_number: string }[]>`
+        SELECT id, order_number
+        FROM orders
+        WHERE shop_id = ${shop.id}
+          AND id = ${params.id}
+        LIMIT 1
+      `;
+
+      const order = orderRows[0];
+
+      if (!order) {
+        return reply.status(404).send({
+          ok: false,
+          message: "Заказ не найден"
+        });
+      }
+
+      async function ensureAssignee(userId: string | null, role: "manager" | "florist" | "courier", label: string) {
+        if (!userId) return;
+
+        const rows = await client<{ id: string }[]>`
+          SELECT su.id
+          FROM shop_users su
+          WHERE su.shop_id = ${shop.id}
+            AND su.user_id = ${userId}
+            AND su.role = ${role}::shop_user_role
+            AND su.is_active = true
+          LIMIT 1
+        `;
+
+        if (!rows[0]) {
+          throw new HttpError(400, `${label} не найден или не активен`);
+        }
+      }
+
+      await ensureAssignee(managerId, "manager", "Менеджер");
+      await ensureAssignee(floristId, "florist", "Флорист");
+      await ensureAssignee(courierId, "courier", "Курьер");
+
+      const updatedRows = await client`
+        UPDATE orders
+        SET manager_id = ${managerId},
+            florist_id = ${floristId},
+            courier_id = ${courierId},
+            updated_at = NOW()
+        WHERE shop_id = ${shop.id}
+          AND id = ${order.id}
+        RETURNING id, manager_id, florist_id, courier_id, updated_at
+      `;
+
+      return {
+        ok: true,
+        order: updatedRows[0] ?? null
       };
     } finally {
       await client.end();

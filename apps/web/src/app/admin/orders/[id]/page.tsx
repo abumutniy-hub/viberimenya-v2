@@ -1,5 +1,6 @@
 import { fetchAdmin, type AdminRow } from "../../lib/admin-api";
 import { OrderActions } from "../order-actions";
+import { OrderAssigneesForm, type OrderStaffMember } from "./order-assignees-form";
 
 export const dynamic = "force-dynamic";
 
@@ -11,6 +12,7 @@ type Response = {
   ok: boolean;
   order: AdminRow;
   items: AdminRow[];
+  staff: OrderStaffMember[];
 };
 
 const orderStatusLabels: Record<string, string> = {
@@ -96,6 +98,7 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
   const data = await fetchAdmin<Response>(`/api/admin/orders/${id}`);
   const order = data?.order;
   const items = data?.items ?? [];
+  const staff = data?.staff ?? [];
 
   if (!order) {
     return (
@@ -154,6 +157,23 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
           internalChatPreview=""
           showDetailsLink={false}
           showStatusActions
+        />
+      </section>
+
+      <section className="admin-panel admin-order-detail-card admin-order-assignees-card">
+        <div className="admin-panel-head">
+          <div>
+            <span>Команда заказа</span>
+            <h2>Ответственные</h2>
+          </div>
+        </div>
+
+        <OrderAssigneesForm
+          orderId={String(order.id)}
+          currentManagerId={String(order.manager_id || "")}
+          currentFloristId={String(order.florist_id || "")}
+          currentCourierId={String(order.courier_id || "")}
+          staff={staff}
         />
       </section>
 
