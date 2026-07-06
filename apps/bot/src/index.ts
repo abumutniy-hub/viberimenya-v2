@@ -2747,14 +2747,13 @@ function formatEvent(event: NotificationEvent): string {
   }
 
   if (event.type === "florist_order_assigned") {
-    const floristName = payloadText(payload, "floristName", "florist_name");
+    const productName = payloadText(payload, "productName", "product_name");
     const deliveryDate = payloadText(payload, "deliveryDate", "delivery_date");
     const crmUrl = absoluteUrl(payloadValue(payload, "crmUrl", "crm_url"));
 
     return [
       `💐 Вам назначен заказ ${orderTitle}`,
-      floristName ? `Флорист: ${floristName}` : "",
-      totalText ? `Сумма: ${totalText}` : "",
+      productName ? `Товар: ${productName}` : "",
       deliveryDate ? `Дата доставки: ${shortDateText(deliveryDate)}` : "",
       "",
       "Откройте заказ в CRM и возьмите его в работу.",
@@ -2888,7 +2887,14 @@ async function processNotificationEvents() {
       }
 
       for (const chatId of recipients) {
-        await sendTelegramMessage(chatId, message);
+        const payload = eventPayload(event);
+        const productImageUrl = absoluteUrl(payloadValue(payload, "productImageUrl", "product_image_url"));
+
+        if (event.type === "florist_order_assigned" && productImageUrl) {
+          await sendTelegramPhoto(chatId, productImageUrl, message);
+        } else {
+          await sendTelegramMessage(chatId, message);
+        }
       }
 
       await sql`

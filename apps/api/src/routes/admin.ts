@@ -436,12 +436,36 @@ export async function adminRoutes(app: FastifyInstance) {
         const florist = floristRows[0];
 
         if (florist?.telegram_id) {
+          const itemRows = await client<{
+            product_name: string | null;
+            product_image_url: string | null;
+          }[]>`
+            SELECT
+              oi.product_name,
+              pi.url AS product_image_url
+            FROM order_items oi
+            LEFT JOIN LATERAL (
+              SELECT url
+              FROM product_images
+              WHERE product_id = oi.product_id
+                AND shop_id = ${shop.id}
+              ORDER BY is_main DESC, sort_order ASC, created_at ASC
+              LIMIT 1
+            ) pi ON true
+            WHERE oi.order_id = ${order.id}
+            ORDER BY oi.created_at ASC
+            LIMIT 1
+          `;
+
+          const firstItem = itemRows[0];
+
           const notificationPayload = {
             orderId: order.id,
             orderNumber: order.order_number,
             floristId,
             floristName: florist.name,
-            totalAmount: order.total,
+            productName: firstItem?.product_name ?? null,
+            productImageUrl: firstItem?.product_image_url ?? null,
             deliveryDate: order.delivery_date,
             trackingUrl: order.tracking_token ? `/order/track/${order.tracking_token}` : null,
             crmUrl: `/admin/orders/${order.id}`
