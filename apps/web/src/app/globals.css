@@ -5155,3 +5155,139 @@ body {
     margin-right: 16px;
   }
 }
+
+/* Block 3.4.4 — employee management table */
+.admin-employees-panel {
+  overflow: hidden;
+}
+
+.admin-employees-table-wrap {
+  overflow-x: auto;
+}
+
+.admin-employees-table {
+  width: 100%;
+  min-width: 980px;
+  border-collapse: collapse;
+}
+
+.admin-employees-table th,
+.admin-employees-table td {
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(25, 23, 22, 0.08);
+  text-align: left;
+  vertical-align: top;
+}
+
+.admin-employees-table th {
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(25, 23, 22, 0.58);
+}
+
+.admin-employees-table td {
+  font-size: 13px;
+  color: #171414;
+}
+
+.admin-employees-table td strong {
+  display: block;
+  max-width: 180px;
+}
+
+.admin-employee-actions {
+  display: grid;
+  gap: 9px;
+  min-width: 360px;
+}
+
+.admin-employee-telegram-status {
+  font-size: 12px;
+  color: rgba(25, 23, 22, 0.64);
+}
+
+.admin-employee-link-box {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  gap: 8px;
+}
+
+.admin-employee-link-box input,
+.admin-employee-edit input,
+.admin-employee-edit select {
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid rgba(25, 23, 22, 0.12);
+  border-radius: 12px;
+  background: #fff;
+  padding: 0 11px;
+  font: inherit;
+  font-size: 12px;
+}
+
+.admin-employee-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.admin-employee-actions button {
+  min-height: 34px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(25, 23, 22, 0.08);
+  color: #171414;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.admin-employee-actions button:hover {
+  background: rgba(25, 23, 22, 0.12);
+}
+
+.admin-employee-actions button.danger {
+  background: rgba(164, 45, 45, 0.12);
+  color: #9f2f2f;
+}
+
+.admin-employee-actions button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.admin-employee-edit {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 16px;
+  background: rgba(25, 23, 22, 0.04);
+}
+
+.admin-employee-edit label {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  font-size: 12px;
+  color: rgba(25, 23, 22, 0.72);
+}
+
+.admin-employee-edit label input {
+  width: auto;
+  min-height: auto;
+}
+
+@media (max-width: 760px) {
+  .admin-employee-actions {
+    min-width: 300px;
+  }
+
+  .admin-employee-edit {
+    grid-template-columns: 1fr;
+  }
+}

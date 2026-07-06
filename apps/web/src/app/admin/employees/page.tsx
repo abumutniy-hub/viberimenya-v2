@@ -1,5 +1,5 @@
-import { AdminTable } from "../components/admin-table";
 import { fetchAdmin, type AdminRow } from "../lib/admin-api";
+import { EmployeeActions } from "./employee-actions";
 import { EmployeeForm } from "./employee-form";
 
 export const dynamic = "force-dynamic";
@@ -8,8 +8,16 @@ type Response = {
   items: AdminRow[];
 };
 
+function text(value: unknown) {
+  return String(value ?? "").trim();
+}
+
+function bool(value: unknown) {
+  return value === true || value === "true";
+}
+
 function roleText(role: unknown) {
-  const value = String(role || "");
+  const value = text(role);
 
   const map: Record<string, string> = {
     owner: "Владелец",
@@ -23,17 +31,22 @@ function roleText(role: unknown) {
 }
 
 function activeText(value: unknown) {
-  return value === true || value === "true" ? "Активен" : "Отключён";
+  return bool(value) ? "Активен" : "Отключён";
+}
+
+function telegramText(item: AdminRow) {
+  const username = text(item.linked_telegram_username);
+  const telegramId = text(item.linked_telegram_id);
+
+  if (username) return `@${username}`;
+  if (telegramId) return telegramId;
+
+  return "";
 }
 
 export default async function AdminEmployeesPage() {
   const data = await fetchAdmin<Response>("/api/admin/employees");
-
-  const rows = (data?.items ?? []).map((item) => ({
-    ...item,
-    role_label: roleText(item.role),
-    active_label: activeText(item.is_active)
-  }));
+  const rows = data?.items ?? [];
 
   return (
     <div className="admin-page">
@@ -54,19 +67,63 @@ export default async function AdminEmployeesPage() {
         <EmployeeForm />
       </section>
 
-      <section className="admin-panel">
-        <AdminTable
-          rows={rows}
-          emptyText="Сотрудники пока не добавлены."
-          columns={[
-            { key: "name", label: "Сотрудник" },
-            { key: "phone", label: "Телефон" },
-            { key: "email", label: "Email" },
-            { key: "role_label", label: "Роль" },
-            { key: "active_label", label: "Статус" },
-            { key: "created_at", label: "Добавлен", type: "date" }
-          ]}
-        />
+      <section className="admin-panel admin-employees-panel">
+        <div className="admin-employees-table-wrap">
+          <table className="admin-employees-table">
+            <thead>
+              <tr>
+                <th>Сотрудник</th>
+                <th>Телефон</th>
+                <th>Email</th>
+                <th>Роль</th>
+                <th>Статус</th>
+                <th>Управление</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.length ? (
+                rows.map((item) => {
+                  const role = text(item.role);
+                  const employeeId = text(item.id);
+                  const name = text(item.name);
+                  const phone = text(item.phone);
+                  const email = text(item.email);
+                  const isActive = bool(item.is_active);
+                  const canManage = role !== "owner";
+
+                  return (
+                    <tr key={employeeId}>
+                      <td>
+                        <strong>{name || "—"}</strong>
+                      </td>
+                      <td>{phone || "—"}</td>
+                      <td>{email || "—"}</td>
+                      <td>{roleText(role)}</td>
+                      <td>{activeText(isActive)}</td>
+                      <td>
+                        <EmployeeActions
+                          employeeId={employeeId}
+                          name={name}
+                          phone={phone}
+                          email={email}
+                          role={role}
+                          isActive={isActive}
+                          canManage={canManage}
+                          telegramLinkUrl={text(item.telegram_link_url)}
+                          linkedTelegramText={telegramText(item)}
+                        />
+                      </td>
+                    </tr>
+                  );
+                })
+              ) : (
+                <tr>
+                  <td colSpan={6}>Сотрудники пока не добавлены.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </section>
     </div>
   );

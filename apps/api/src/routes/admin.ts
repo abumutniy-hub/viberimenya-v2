@@ -1172,7 +1172,23 @@ export async function adminRoutes(app: FastifyInstance) {
     try {
       const shop = await getShop(client);
 
-      const items = await client`
+      const items = await client<{
+        id: string;
+        user_id: string;
+        role: string;
+        is_active: boolean;
+        created_at: string;
+        updated_at: string;
+        name: string | null;
+        phone: string | null;
+        email: string | null;
+        user_status: string;
+        last_login_at: string | null;
+        linked_telegram_id: string | null;
+        linked_telegram_username: string | null;
+        telegram_link_token: string | null;
+        telegram_link_expires_at: string | null;
+      }[]>`
         SELECT
           su.id,
           su.user_id,
@@ -1184,9 +1200,35 @@ export async function adminRoutes(app: FastifyInstance) {
           u.phone,
           u.email,
           u.status AS user_status,
-          u.last_login_at
+          u.last_login_at,
+          ta.telegram_id AS linked_telegram_id,
+          ta.username AS linked_telegram_username,
+          elt.token AS telegram_link_token,
+          elt.expires_at AS telegram_link_expires_at
         FROM shop_users su
         JOIN users u ON u.id = su.user_id
+        LEFT JOIN LATERAL (
+          SELECT telegram_id, username
+          FROM telegram_accounts
+          WHERE shop_id = su.shop_id
+            AND user_id = su.user_id
+            AND is_active = true
+          ORDER BY linked_at DESC
+          LIMIT 1
+        ) ta ON true
+        LEFT JOIN LATERAL (
+          SELECT token, expires_at
+          FROM employee_link_tokens
+          WHERE shop_id = su.shop_id
+            AND user_id = su.user_id
+            AND provider = 'telegram'
+            AND purpose = 'connect_staff'
+            AND status = 'pending'
+            AND consumed_at IS NULL
+            AND expires_at > NOW()
+          ORDER BY created_at DESC
+          LIMIT 1
+        ) elt ON true
         WHERE su.shop_id = ${shop.id}
         ORDER BY
           CASE su.role
@@ -1201,7 +1243,13 @@ export async function adminRoutes(app: FastifyInstance) {
         LIMIT 100
       `;
 
-      return { shop, items };
+      return {
+        shop,
+        items: items.map((item) => ({
+          ...item,
+          telegram_link_url: item.telegram_link_token ? telegramStaffLinkUrl(String(item.telegram_link_token)) : null
+        }))
+      };
     } finally {
       await client.end();
     }
@@ -1353,6 +1401,206 @@ export async function adminRoutes(app: FastifyInstance) {
         employee: employeeRows[0] ?? null,
         telegramLinkUrl: telegramStaffLinkUrl(telegramToken)
       };
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.patch("/api/admin/employees/:id", async (request, reply) => {
+    const params = z.object({ id: z.string().uuid() }).parse(request.params ?? {});
+    const body = employeeSchema.parse(request.body ?? {});
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+
+      const employeeRows = await client<{ user_id: string; role: string }[]>`
+        SELECT user_id, role
+        FROM shop_users
+        WHERE shop_id = ${shop.id}
+          AND id = ${params.id}
+        LIMIT 1
+      `;
+
+      const employee = employeeRows[0];
+
+      if (!employee) {
+        return reply.status(404).send({
+          ok: false,
+          message: "Сотрудник не найден"
+        });
+      }
+
+      if (employee.role === "owner") {
+        return reply.status(400).send({
+          ok: false,
+          message: "Владельца нельзя редактировать через эту форму"
+        });
+      }
+
+      const name = body.name.trim();
+      const phone = body.phone.trim();
+      const email = body.email.trim() || null;
+
+      await client`
+        UPDATE users
+        SET name = ${name},
+            phone = ${phone},
+            email = ${email},
+            status = 'active',
+            updated_at = NOW()
+        WHERE id = ${employee.user_id}
+      `;
+
+      await client`
+        UPDATE shop_users
+        SET role = ${body.role}::shop_user_role,
+            is_active = ${body.isActive},
+            updated_at = NOW()
+        WHERE shop_id = ${shop.id}
+          AND id = ${params.id}
+      `;
+
+      return { ok: true };
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.post("/api/admin/employees/:id/telegram-link", async (request, reply) => {
+    const params = z.object({ id: z.string().uuid() }).parse(request.params ?? {});
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+
+      const employeeRows = await client<{ user_id: string; role: string; name: string | null }[]>`
+        SELECT su.user_id, su.role, u.name
+        FROM shop_users su
+        JOIN users u ON u.id = su.user_id
+        WHERE su.shop_id = ${shop.id}
+          AND su.id = ${params.id}
+          AND su.is_active = true
+        LIMIT 1
+      `;
+
+      const employee = employeeRows[0];
+
+      if (!employee) {
+        return reply.status(404).send({
+          ok: false,
+          message: "Активный сотрудник не найден"
+        });
+      }
+
+      await client`
+        UPDATE employee_link_tokens
+        SET status = 'cancelled',
+            updated_at = NOW()
+        WHERE shop_id = ${shop.id}
+          AND user_id = ${employee.user_id}
+          AND provider = 'telegram'
+          AND purpose = 'connect_staff'
+          AND status = 'pending'
+          AND consumed_at IS NULL
+      `;
+
+      const telegramToken = createEmployeeLinkToken();
+
+      await client`
+        INSERT INTO employee_link_tokens (
+          shop_id,
+          user_id,
+          provider,
+          purpose,
+          token,
+          status,
+          expires_at,
+          metadata,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          ${shop.id},
+          ${employee.user_id},
+          'telegram',
+          'connect_staff',
+          ${telegramToken},
+          'pending',
+          NOW() + INTERVAL '7 days',
+          CAST(${JSON.stringify({ source: "admin_employee_link_regenerate" })} AS jsonb),
+          NOW(),
+          NOW()
+        )
+      `;
+
+      return {
+        ok: true,
+        telegramLinkUrl: telegramStaffLinkUrl(telegramToken)
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.delete("/api/admin/employees/:id", async (request, reply) => {
+    const params = z.object({ id: z.string().uuid() }).parse(request.params ?? {});
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+
+      const employeeRows = await client<{ user_id: string; role: string }[]>`
+        SELECT user_id, role
+        FROM shop_users
+        WHERE shop_id = ${shop.id}
+          AND id = ${params.id}
+        LIMIT 1
+      `;
+
+      const employee = employeeRows[0];
+
+      if (!employee) {
+        return reply.status(404).send({
+          ok: false,
+          message: "Сотрудник не найден"
+        });
+      }
+
+      if (employee.role === "owner") {
+        return reply.status(400).send({
+          ok: false,
+          message: "Владельца нельзя удалить из команды"
+        });
+      }
+
+      await client`
+        UPDATE shop_users
+        SET is_active = false,
+            updated_at = NOW()
+        WHERE shop_id = ${shop.id}
+          AND id = ${params.id}
+      `;
+
+      await client`
+        UPDATE telegram_accounts
+        SET is_active = false,
+            updated_at = NOW()
+        WHERE shop_id = ${shop.id}
+          AND user_id = ${employee.user_id}
+      `;
+
+      await client`
+        UPDATE employee_link_tokens
+        SET status = 'cancelled',
+            updated_at = NOW()
+        WHERE shop_id = ${shop.id}
+          AND user_id = ${employee.user_id}
+          AND status = 'pending'
+          AND consumed_at IS NULL
+      `;
+
+      return { ok: true };
     } finally {
       await client.end();
     }
