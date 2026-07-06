@@ -4890,3 +4890,84 @@ body {
     min-height: 0;
   }
 }
+
+/* Block 3.2.3 — polish admin order detail inner spacing */
+.admin-order-detail-card,
+.admin-order-detail-page .admin-panel {
+  overflow: hidden;
+}
+
+.admin-order-detail-card .admin-panel-head {
+  padding: 18px 20px 16px;
+}
+
+.admin-order-detail-card .admin-panel-head h2 {
+  margin: 0;
+}
+
+.admin-order-info-row {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 22px;
+  min-height: 54px;
+  padding: 14px 20px;
+}
+
+.admin-order-info-row span,
+.admin-order-info-row strong {
+  display: block;
+  margin: 0;
+  line-height: 1.35;
+}
+
+.admin-order-info-row span {
+  color: rgba(25, 23, 22, 0.52);
+}
+
+.admin-order-info-row strong {
+  color: #171414;
+}
+
+.admin-order-detail-card .admin-order-comment,
+.admin-order-detail-card .admin-order-item-row,
+.admin-order-detail-card .admin-order-item-summary {
+  padding-left: 20px;
+  padding-right: 20px;
+}
+
+.admin-order-comment {
+  min-height: 120px;
+  padding-top: 14px;
+  padding-bottom: 14px;
+}
+
+.admin-order-detail-card .admin-order-item-row {
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+
+.admin-order-detail-card .admin-order-item-summary {
+  padding-top: 10px;
+  padding-bottom: 14px;
+}
+
+@media (max-width: 760px) {
+  .admin-order-detail-card .admin-panel-head {
+    padding: 16px 16px 14px;
+  }
+
+  .admin-order-info-row {
+    grid-template-columns: 1fr;
+    row-gap: 6px;
+    min-height: 0;
+    padding: 12px 16px;
+  }
+
+  .admin-order-detail-card .admin-order-comment,
+  .admin-order-detail-card .admin-order-item-row,
+  .admin-order-detail-card .admin-order-item-summary {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+}
