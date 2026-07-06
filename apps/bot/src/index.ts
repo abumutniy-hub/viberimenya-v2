@@ -2066,7 +2066,7 @@ async function handleCustomerProfile(chatId: number) {
   const replyMarkup = await mainKeyboardForChat(chatId);
   const profile = await getTelegramProfile(String(chatId));
 
-  if (profile?.user_id && !profile.customer_id) {
+  if (profile?.user_id) {
     await sendTelegramMessage(
       chatId,
       [
