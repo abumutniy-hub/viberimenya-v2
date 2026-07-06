@@ -3980,3 +3980,27 @@ body {
   font-weight: 700;
   line-height: 1.4;
 }
+
+/* Block 2.4.6 — cart bonus checkout polish */
+.bonus-box {
+  align-items: center;
+}
+
+.bonus-box button {
+  align-self: center;
+}
+
+.bonus-box p + p {
+  margin-top: 4px;
+  color: #6d4f2d;
+}
+
+@media (max-width: 520px) {
+  .bonus-box {
+    grid-template-columns: 1fr;
+  }
+
+  .bonus-box button {
+    width: 100%;
+  }
+}

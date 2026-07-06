@@ -40,6 +40,22 @@ function writeCart(items: CartItem[]) {
   window.dispatchEvent(new Event("viberimenya_cart_changed"));
 }
 
+function phoneDigits(value: string) {
+  return value.replace(/\D/g, "");
+}
+
+function phonesMatch(left: string, right: string) {
+  const leftDigits = phoneDigits(left);
+  const rightDigits = phoneDigits(right);
+
+  if (!leftDigits || !rightDigits) return false;
+
+  const leftTail = leftDigits.length > 10 ? leftDigits.slice(-10) : leftDigits;
+  const rightTail = rightDigits.length > 10 ? rightDigits.slice(-10) : rightDigits;
+
+  return leftTail === rightTail;
+}
+
 export function CartClient() {
   const [items, setItems] = useState<CartItem[]>([]);
   const [delivery, setDelivery] = useState<DeliveryData>({ zones: [], intervals: [] });
@@ -170,7 +186,7 @@ export function CartClient() {
       return;
     }
 
-    if (customerPhone.trim() !== account.phone) {
+    if (!phonesMatch(customerPhone, account.phone)) {
       setBonusToSpend(0);
       setBonusMessage("Для списания бонусов укажите телефон из личного кабинета");
       return;
@@ -239,6 +255,7 @@ export function CartClient() {
           paymentMethod: form.get("paymentMethod"),
           customerComment: form.get("customerComment"),
           promoCode,
+          bonusToSpend,
           items: items.map((item) => ({
             productId: item.productId,
             quantity: item.quantity
@@ -360,6 +377,13 @@ export function CartClient() {
           </div>
         ) : null}
 
+        {bonusToSpend > 0 ? (
+          <div className="checkout-discount bonus-discount">
+            <span>Бонусы</span>
+            <strong>−{money(bonusToSpend)}</strong>
+          </div>
+        ) : null}
+
         <div className="promo-box">
           <label>
             <span>Промокод</span>
@@ -380,6 +404,20 @@ export function CartClient() {
 
           {promoMessage ? <p>{promoMessage}</p> : null}
         </div>
+
+        {account ? (
+          <div className="promo-box bonus-box">
+            <div>
+              <strong>Бонусы</strong>
+              <p>Доступно: {money(bonusBalance)}</p>
+              {bonusMessage ? <p>{bonusMessage}</p> : null}
+            </div>
+
+            <button type="button" onClick={checkBonus} disabled={items.length === 0 || amountBeforeBonus <= 0}>
+              Использовать
+            </button>
+          </div>
+        ) : null}
 
         <label>
           <span>Ваше имя</span>
