@@ -542,6 +542,92 @@ export async function adminRoutes(app: FastifyInstance) {
     }
   });
 
+  app.post("/api/admin/orders/:id/status", async (request, reply) => {
+    const params = z.object({
+      id: z.string().uuid()
+    }).parse(request.params ?? {});
+
+    const body = z.object({
+      status: z.enum([
+        "new",
+        "confirmed",
+        "assembling",
+        "ready",
+        "assigned_courier",
+        "delivering",
+        "delivered",
+        "cancelled",
+        "problem"
+      ]),
+      comment: z.string().optional().default("")
+    }).parse(request.body ?? {});
+
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+
+      const orderRows = await client<{ id: string; status: string }[]>`
+        SELECT id, status
+        FROM orders
+        WHERE shop_id = ${shop.id}
+          AND id = ${params.id}
+        LIMIT 1
+      `;
+
+      const order = orderRows[0];
+
+      if (!order) {
+        return reply.status(404).send({
+          ok: false,
+          message: "Заказ не найден"
+        });
+      }
+
+      if (order.status === body.status) {
+        return {
+          ok: true,
+          message: "Статус уже установлен"
+        };
+      }
+
+      await client`
+        UPDATE orders
+        SET status = ${body.status}::order_status,
+            delivered_at = CASE WHEN ${body.status} = 'delivered' THEN NOW() ELSE delivered_at END,
+            cancelled_at = CASE WHEN ${body.status} = 'cancelled' THEN NOW() ELSE cancelled_at END,
+            updated_at = NOW()
+        WHERE id = ${order.id}
+      `;
+
+      await client`
+        INSERT INTO order_status_history (
+          shop_id,
+          order_id,
+          from_status,
+          to_status,
+          comment,
+          created_at
+        )
+        VALUES (
+          ${shop.id},
+          ${order.id},
+          ${order.status}::order_status,
+          ${body.status}::order_status,
+          ${body.comment || "Статус изменён в CRM"},
+          NOW()
+        )
+      `;
+
+      return {
+        ok: true,
+        status: body.status
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
   app.post("/api/admin/orders/:id/confirm", async (request, reply) => {
     const params = z.object({
       id: z.string().uuid()

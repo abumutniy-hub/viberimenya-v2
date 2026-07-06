@@ -4971,3 +4971,51 @@ body {
     padding-right: 16px;
   }
 }
+
+/* Block 3.3.1 — CRM order status action buttons */
+.admin-status-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
+}
+
+.admin-status-actions .admin-action-button {
+  min-height: 34px;
+  padding: 0 12px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.admin-action-button.warning {
+  background: rgba(183, 123, 43, 0.12);
+  color: #865313;
+  border: 1px solid rgba(183, 123, 43, 0.2);
+}
+
+.admin-action-button.warning:hover,
+.admin-action-button.warning:focus-visible {
+  background: rgba(183, 123, 43, 0.18);
+}
+
+.admin-action-button.danger {
+  background: rgba(164, 45, 45, 0.12);
+  color: #9f2f2f;
+  border: 1px solid rgba(164, 45, 45, 0.2);
+}
+
+.admin-action-button.danger:hover,
+.admin-action-button.danger:focus-visible {
+  background: rgba(164, 45, 45, 0.18);
+}
+
+@media (max-width: 760px) {
+  .admin-status-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .admin-status-actions .admin-action-button {
+    width: 100%;
+  }
+}

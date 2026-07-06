@@ -248,6 +248,31 @@ export function OrderActions({
     }
   }
 
+  async function changeStatus(nextStatus: string, label: string) {
+    const confirmed = window.confirm(`Изменить статус заказа на «${label}»?`);
+    if (!confirmed) return;
+
+    try {
+      const response = await fetch(`/api/admin/orders/${orderId}/status`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          status: nextStatus,
+          comment: `Статус изменён в CRM: ${label}`
+        })
+      });
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        throw new Error(data?.message || "Не удалось изменить статус");
+      }
+
+      window.location.reload();
+    } catch (error) {
+      alert(error instanceof Error ? error.message : "Не удалось изменить статус");
+    }
+  }
+
   return (
     <div className="admin-order-actions">
       <div className="admin-order-link-actions">
@@ -314,6 +339,50 @@ export function OrderActions({
       ) : (
         <span className="admin-muted-badge">Оплата после подтверждения</span>
       )}
+
+      <div className="admin-status-actions">
+        {status !== "assembling" && status !== "cancelled" && status !== "delivered" ? (
+          <button type="button" className="admin-action-button secondary" onClick={() => changeStatus("assembling", "Собирается")}>
+            Собирается
+          </button>
+        ) : null}
+
+        {status !== "ready" && status !== "cancelled" && status !== "delivered" ? (
+          <button type="button" className="admin-action-button secondary" onClick={() => changeStatus("ready", "Готов")}>
+            Готов
+          </button>
+        ) : null}
+
+        {status !== "assigned_courier" && status !== "cancelled" && status !== "delivered" ? (
+          <button type="button" className="admin-action-button secondary" onClick={() => changeStatus("assigned_courier", "Курьер")}>
+            Курьер
+          </button>
+        ) : null}
+
+        {status !== "delivering" && status !== "cancelled" && status !== "delivered" ? (
+          <button type="button" className="admin-action-button secondary" onClick={() => changeStatus("delivering", "В доставке")}>
+            В доставке
+          </button>
+        ) : null}
+
+        {status !== "delivered" && status !== "cancelled" ? (
+          <button type="button" className="admin-action-button secondary" onClick={() => changeStatus("delivered", "Доставлен")}>
+            Доставлен
+          </button>
+        ) : null}
+
+        {status !== "problem" && status !== "cancelled" && status !== "delivered" ? (
+          <button type="button" className="admin-action-button warning" onClick={() => changeStatus("problem", "Проблема")}>
+            Проблема
+          </button>
+        ) : null}
+
+        {status !== "cancelled" && status !== "delivered" ? (
+          <button type="button" className="admin-action-button danger" onClick={() => changeStatus("cancelled", "Отменён")}>
+            Отменить
+          </button>
+        ) : null}
+      </div>
 
       <button
         type="button"
