@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { createDb } from "@viberimenya/db";
 import { env } from "../lib/env";
@@ -13,6 +14,15 @@ type ShopRow = {
 
 function numberFromCount(value: unknown) {
   return Number(value ?? 0);
+}
+
+function createEmployeeLinkToken() {
+  return randomUUID().replace(/-/g, "") + randomUUID().replace(/-/g, "");
+}
+
+function telegramStaffLinkUrl(token: string) {
+  const username = process.env.TELEGRAM_BOT_USERNAME || "viberimenya_bot";
+  return `https://t.me/${username}?start=staff_${token}`;
 }
 
 const settingsSchema = z.object({
@@ -45,6 +55,15 @@ const productSchema = z.object({
   status: z.enum(["draft", "active", "hidden", "archived"]).optional().default("active"),
   isFeatured: z.coerce.boolean().optional().default(false),
   sortOrder: z.coerce.number().int().optional().default(100)
+});
+
+const employeeSchema = z.object({
+  name: z.string().min(2),
+  phone: z.string().min(5),
+  email: z.string().email().optional().or(z.literal("")).default(""),
+  telegramUsername: z.string().optional().default(""),
+  role: z.enum(["admin", "manager", "florist", "courier"]),
+  isActive: z.coerce.boolean().optional().default(true)
 });
 
 function slugify(value: string) {
@@ -1183,6 +1202,158 @@ export async function adminRoutes(app: FastifyInstance) {
       `;
 
       return { shop, items };
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.post("/api/admin/employees", async (request, reply) => {
+    const body = employeeSchema.parse(request.body ?? {});
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+
+      const name = body.name.trim();
+      const phone = body.phone.trim();
+      const email = body.email.trim() || null;
+
+      const existingRows = email
+        ? await client<{ id: string }[]>`
+            SELECT id
+            FROM users
+            WHERE phone = ${phone}
+               OR email = ${email}
+            LIMIT 1
+          `
+        : await client<{ id: string }[]>`
+            SELECT id
+            FROM users
+            WHERE phone = ${phone}
+            LIMIT 1
+          `;
+
+      let userId = existingRows[0]?.id;
+
+      if (userId) {
+        await client`
+          UPDATE users
+          SET name = ${name},
+              phone = ${phone},
+              email = ${email},
+              status = 'active',
+              updated_at = NOW()
+          WHERE id = ${userId}
+        `;
+      } else {
+        const userRows = await client<{ id: string }[]>`
+          INSERT INTO users (
+            phone,
+            email,
+            name,
+            status,
+            created_at,
+            updated_at
+          )
+          VALUES (
+            ${phone},
+            ${email},
+            ${name},
+            'active',
+            NOW(),
+            NOW()
+          )
+          RETURNING id
+        `;
+
+        userId = userRows[0]?.id;
+      }
+
+      if (!userId) {
+        return reply.status(500).send({
+          ok: false,
+          message: "Не удалось создать пользователя"
+        });
+      }
+
+      const employeeRows = await client`
+        INSERT INTO shop_users (
+          shop_id,
+          user_id,
+          role,
+          is_active,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          ${shop.id},
+          ${userId},
+          ${body.role}::shop_user_role,
+          ${body.isActive},
+          NOW(),
+          NOW()
+        )
+        ON CONFLICT (shop_id, user_id)
+        DO UPDATE SET
+          role = EXCLUDED.role,
+          is_active = EXCLUDED.is_active,
+          updated_at = NOW()
+        RETURNING *
+      `;
+
+      await client`
+        UPDATE employee_link_tokens
+        SET status = 'cancelled',
+            updated_at = NOW()
+        WHERE shop_id = ${shop.id}
+          AND user_id = ${userId}
+          AND provider = 'telegram'
+          AND purpose = 'connect_staff'
+          AND status = 'pending'
+          AND consumed_at IS NULL
+      `;
+
+      const telegramToken = createEmployeeLinkToken();
+      const telegramUsername = body.telegramUsername.trim().replace(/^@/, "");
+
+      await client`
+        INSERT INTO employee_link_tokens (
+          shop_id,
+          user_id,
+          provider,
+          purpose,
+          token,
+          status,
+          expires_at,
+          metadata,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          ${shop.id},
+          ${userId},
+          'telegram',
+          'connect_staff',
+          ${telegramToken},
+          'pending',
+          NOW() + INTERVAL '7 days',
+          CAST(${JSON.stringify({
+            source: "admin_employee_create",
+            telegramUsername: null
+          })} AS jsonb) || jsonb_build_object(
+            'role', ${body.role},
+            'telegramUsername', NULLIF(${telegramUsername}, '')
+          ),
+          NOW(),
+          NOW()
+        )
+      `;
+
+      return {
+        ok: true,
+        employee: employeeRows[0] ?? null,
+        telegramLinkUrl: telegramStaffLinkUrl(telegramToken)
+      };
     } finally {
       await client.end();
     }

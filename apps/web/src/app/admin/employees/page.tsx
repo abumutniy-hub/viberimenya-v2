@@ -1,5 +1,6 @@
 import { AdminTable } from "../components/admin-table";
 import { fetchAdmin, type AdminRow } from "../lib/admin-api";
+import { EmployeeForm } from "./employee-form";
 
 export const dynamic = "force-dynamic";
 
@@ -42,6 +43,16 @@ export default async function AdminEmployeesPage() {
           <h1>Сотрудники</h1>
         </div>
       </div>
+
+      <section className="admin-panel admin-employee-create-panel">
+        <div className="admin-panel-head">
+          <div>
+            <span>Новый сотрудник</span>
+            <h2>Добавить в команду</h2>
+          </div>
+        </div>
+        <EmployeeForm />
+      </section>
 
       <section className="admin-panel">
         <AdminTable

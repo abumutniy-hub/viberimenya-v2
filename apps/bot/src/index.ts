@@ -559,6 +559,127 @@ async function handleCustomerLinkToken(message: TelegramMessage, payload: string
   return true;
 }
 
+async function handleEmployeeLinkToken(message: TelegramMessage, payload: string) {
+  const token = payload.replace(/^staff_/, "").trim();
+  const telegramId = String(message.chat.id);
+  const shopId = await getDefaultShopId();
+
+  if (!shopId || !token) {
+    await sendTelegramMessage(message.chat.id, "Ссылка подключения сотрудника недействительна.");
+    return true;
+  }
+
+  const tokenRows = await sql<{
+    id: string;
+    user_id: string;
+    role: string | null;
+    name: string | null;
+  }[]>`
+    SELECT
+      elt.id,
+      elt.user_id,
+      su.role,
+      u.name
+    FROM employee_link_tokens elt
+    JOIN users u ON u.id = elt.user_id
+    JOIN shop_users su
+      ON su.shop_id = elt.shop_id
+     AND su.user_id = elt.user_id
+     AND su.is_active = true
+    WHERE elt.shop_id = ${shopId}
+      AND elt.provider = 'telegram'
+      AND elt.purpose = 'connect_staff'
+      AND elt.token = ${token}
+      AND elt.status = 'pending'
+      AND elt.consumed_at IS NULL
+      AND elt.expires_at > NOW()
+    LIMIT 1
+  `;
+
+  const linkToken = tokenRows[0];
+
+  if (!linkToken) {
+    await sendTelegramMessage(message.chat.id, "Ссылка подключения сотрудника недействительна или срок её действия истёк.");
+    return true;
+  }
+
+  const existingRows = await sql<{ user_id: string | null }[]>`
+    SELECT user_id
+    FROM telegram_accounts
+    WHERE shop_id = ${shopId}
+      AND telegram_id = ${telegramId}
+      AND is_active = true
+    LIMIT 1
+  `;
+
+  const existing = existingRows[0];
+
+  if (existing?.user_id && existing.user_id !== linkToken.user_id) {
+    await sendTelegramMessage(message.chat.id, "Этот Telegram уже связан с другим сотрудником. Для смены привязки обратитесь к владельцу.");
+    return true;
+  }
+
+  await sql`
+    INSERT INTO telegram_accounts (
+      shop_id,
+      user_id,
+      telegram_id,
+      username,
+      first_name,
+      last_name,
+      is_active,
+      linked_at,
+      created_at,
+      updated_at
+    )
+    VALUES (
+      ${shopId},
+      ${linkToken.user_id},
+      ${telegramId},
+      ${message.from?.username || null},
+      ${message.from?.first_name || null},
+      ${message.from?.last_name || null},
+      true,
+      NOW(),
+      NOW(),
+      NOW()
+    )
+    ON CONFLICT (shop_id, telegram_id)
+    DO UPDATE SET
+      user_id = ${linkToken.user_id},
+      username = EXCLUDED.username,
+      first_name = EXCLUDED.first_name,
+      last_name = EXCLUDED.last_name,
+      is_active = true,
+      updated_at = NOW()
+  `;
+
+  await sql`
+    UPDATE employee_link_tokens
+    SET status = 'consumed',
+        consumed_at = NOW(),
+        updated_at = NOW()
+    WHERE id = ${linkToken.id}
+  `;
+
+  await sendTelegramMessage(
+    message.chat.id,
+    [
+      "✅ Telegram сотрудника подключён",
+      "",
+      linkToken.name ? `Сотрудник: ${linkToken.name}` : "",
+      `Роль: ${linkToken.role || "staff"}`,
+      "",
+      "Теперь бот будет показывать рабочее меню и сможет присылать задачи по заказам."
+    ].filter(Boolean).join("\n"),
+    {
+      reply_markup: await mainKeyboardForChat(message.chat.id)
+    }
+  );
+
+  return true;
+}
+
 async function handleStart(update: TelegramUpdate) {
   const message = update.message;
   if (!message) return;
@@ -567,6 +688,11 @@ async function handleStart(update: TelegramUpdate) {
 
   if (payload.startsWith("link_")) {
     const handled = await handleCustomerLinkToken(message, payload);
+    if (handled) return;
+  }
+
+  if (payload.startsWith("staff_")) {
+    const handled = await handleEmployeeLinkToken(message, payload);
     if (handled) return;
   }
 

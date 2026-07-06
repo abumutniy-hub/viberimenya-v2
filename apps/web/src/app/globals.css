@@ -5019,3 +5019,139 @@ body {
     width: 100%;
   }
 }
+
+/* Block 3.4.2 — admin employee create form */
+.admin-employee-create-panel {
+  margin-bottom: 18px;
+}
+
+.admin-employee-form {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr 1.2fr 0.9fr auto;
+  gap: 12px;
+  align-items: end;
+  padding: 18px 20px 20px;
+}
+
+.admin-employee-form label {
+  display: block;
+  margin-bottom: 7px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(25, 23, 22, 0.5);
+}
+
+.admin-employee-form input,
+.admin-employee-form select {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid rgba(25, 23, 22, 0.12);
+  border-radius: 14px;
+  background: #fff;
+  padding: 0 13px;
+  font: inherit;
+  color: #171414;
+}
+
+.admin-employee-form button {
+  min-height: 42px;
+  border: 0;
+  border-radius: 999px;
+  background: #171414;
+  color: #fff;
+  padding: 0 18px;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.admin-employee-form button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+@media (max-width: 1100px) {
+  .admin-employee-form {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 680px) {
+  .admin-employee-form {
+    grid-template-columns: 1fr;
+    padding: 16px;
+  }
+}
+
+/* Block 3.4.3 — employee Telegram link */
+.admin-employee-form-wrap {
+  padding-bottom: 18px;
+}
+
+.admin-employee-form {
+  grid-template-columns: 1fr 1fr 1.2fr 1fr 0.9fr auto;
+}
+
+.admin-employee-telegram-link {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: center;
+  margin: 0 20px 2px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(38, 119, 77, 0.09);
+  border: 1px solid rgba(38, 119, 77, 0.16);
+}
+
+.admin-employee-telegram-link strong,
+.admin-employee-telegram-link span {
+  display: block;
+}
+
+.admin-employee-telegram-link strong {
+  font-size: 14px;
+  color: #183b2a;
+}
+
+.admin-employee-telegram-link span {
+  margin-top: 3px;
+  font-size: 12px;
+  color: rgba(24, 59, 42, 0.68);
+}
+
+.admin-employee-telegram-link button {
+  min-height: 38px;
+  border: 0;
+  border-radius: 999px;
+  background: #183b2a;
+  color: #fff;
+  padding: 0 15px;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+@media (max-width: 1100px) {
+  .admin-employee-form {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .admin-employee-telegram-link {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 680px) {
+  .admin-employee-form {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-employee-telegram-link {
+    margin-left: 16px;
+    margin-right: 16px;
+  }
+}
