@@ -3940,3 +3940,43 @@ body {
     padding: 0 12px;
   }
 }
+
+/* Block 2.4.5 — delivery and pickup form polish */
+.checkout-delivery {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: -4px;
+  margin-bottom: 6px;
+  color: rgba(25, 23, 22, 0.68);
+  font-weight: 900;
+}
+
+.checkout-delivery strong {
+  color: #171414;
+  text-align: right;
+}
+
+.pickup-note {
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+  border: 1px solid rgba(25, 23, 22, 0.08);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.pickup-note strong {
+  color: #171414;
+  font-size: 15px;
+  font-weight: 900;
+}
+
+.pickup-note p {
+  margin: 0;
+  color: rgba(25, 23, 22, 0.58);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.4;
+}

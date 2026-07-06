@@ -43,6 +43,7 @@ function writeCart(items: CartItem[]) {
 export function CartClient() {
   const [items, setItems] = useState<CartItem[]>([]);
   const [delivery, setDelivery] = useState<DeliveryData>({ zones: [], intervals: [] });
+  const [deliveryType, setDeliveryType] = useState<"delivery" | "pickup">("delivery");
   const [zoneId, setZoneId] = useState("");
   const [promoCode, setPromoCode] = useState("");
   const [promoMessage, setPromoMessage] = useState("");
@@ -91,7 +92,8 @@ export function CartClient() {
     [items]
   );
 
-  const deliveryPrice = Number(delivery.zones.find((zone) => zone.id === zoneId)?.price ?? 0);
+  const isDelivery = deliveryType === "delivery";
+  const deliveryPrice = isDelivery ? Number(delivery.zones.find((zone) => zone.id === zoneId)?.price ?? 0) : 0;
   const amountBeforeBonus = Math.max(0, subtotal + deliveryPrice - discountTotal);
   const total = Math.max(0, amountBeforeBonus - bonusToSpend);
 
@@ -229,11 +231,11 @@ export function CartClient() {
           customerPhone: form.get("customerPhone"),
           recipientName: form.get("recipientName"),
           recipientPhone: form.get("recipientPhone"),
-          deliveryType: form.get("deliveryType"),
-          deliveryAddress: form.get("deliveryAddress"),
-          deliveryDate: form.get("deliveryDate"),
-          deliveryIntervalText: form.get("deliveryIntervalText"),
-          deliveryZoneId: form.get("deliveryZoneId"),
+          deliveryType,
+          deliveryAddress: isDelivery ? form.get("deliveryAddress") : "",
+          deliveryDate: isDelivery ? form.get("deliveryDate") : "",
+          deliveryIntervalText: isDelivery ? form.get("deliveryIntervalText") : "",
+          deliveryZoneId: isDelivery ? zoneId : "",
           paymentMethod: form.get("paymentMethod"),
           customerComment: form.get("customerComment"),
           promoCode,
@@ -339,6 +341,18 @@ export function CartClient() {
         </div>
 
 
+        {isDelivery ? (
+          <div className="checkout-delivery">
+            <span>Доставка</span>
+            <strong>{deliveryPrice > 0 ? money(deliveryPrice) : "Выберите зону"}</strong>
+          </div>
+        ) : (
+          <div className="checkout-delivery">
+            <span>Самовывоз</span>
+            <strong>0 ₽</strong>
+          </div>
+        )}
+
         {discountTotal > 0 ? (
           <div className="checkout-discount">
             <span>Скидка</span>
@@ -395,35 +409,63 @@ export function CartClient() {
 
         <label>
           <span>Способ получения</span>
-          <select name="deliveryType" defaultValue="delivery">
+          <select
+            name="deliveryType"
+            value={deliveryType}
+            onChange={(event) => {
+              const nextDeliveryType = event.target.value === "pickup" ? "pickup" : "delivery";
+
+              setDeliveryType(nextDeliveryType);
+              if (nextDeliveryType === "pickup") {
+                setZoneId("");
+              }
+              resetCartAdjustments();
+            }}
+          >
             <option value="delivery">Доставка</option>
             <option value="pickup">Самовывоз</option>
           </select>
         </label>
 
-        <label>
-          <span>Зона доставки</span>
-          <select name="deliveryZoneId" value={zoneId} onChange={(e) => setZoneId(e.target.value)}>
-            <option value="">Выберите зону</option>
-            {delivery.zones.map((zone) => (
-              <option key={zone.id} value={zone.id}>{zone.name} — {money(zone.price)}</option>
-            ))}
-          </select>
-        </label>
+        {isDelivery ? (
+          <>
+            <label>
+              <span>Зона доставки</span>
+              <select
+                name="deliveryZoneId"
+                value={zoneId}
+                onChange={(event) => {
+                  setZoneId(event.target.value);
+                  resetCartAdjustments();
+                }}
+              >
+                <option value="">Выберите зону</option>
+                {delivery.zones.map((zone) => (
+                  <option key={zone.id} value={zone.id}>{zone.name} — {money(zone.price)}</option>
+                ))}
+              </select>
+            </label>
 
-        <label><span>Дата доставки</span><input name="deliveryDate" type="date" /></label>
+            <label><span>Дата доставки</span><input name="deliveryDate" type="date" /></label>
 
-        <label>
-          <span>Интервал</span>
-          <select name="deliveryIntervalText">
-            <option value="">Выберите интервал</option>
-            {delivery.intervals.map((interval) => (
-              <option key={interval.id} value={interval.name}>{interval.name}</option>
-            ))}
-          </select>
-        </label>
+            <label>
+              <span>Интервал</span>
+              <select name="deliveryIntervalText">
+                <option value="">Выберите интервал</option>
+                {delivery.intervals.map((interval) => (
+                  <option key={interval.id} value={interval.name}>{interval.name}</option>
+                ))}
+              </select>
+            </label>
 
-        <label className="wide"><span>Адрес доставки</span><input name="deliveryAddress" /></label>
+            <label className="wide"><span>Адрес доставки</span><input name="deliveryAddress" /></label>
+          </>
+        ) : (
+          <div className="pickup-note">
+            <strong>Самовывоз</strong>
+            <p>После оформления менеджер подтвердит адрес и время получения заказа.</p>
+          </div>
+        )}
 
         <label>
           <span>Оплата</span>
