@@ -121,8 +121,10 @@ export function OrderAssigneesForm({
           })}
         </select>
         {!members.length ? (
-          <small>Нет активных сотрудников с этой ролью</small>
-        ) : null}
+          <small>Нет активных сотрудников</small>
+        ) : (
+          <small>&nbsp;</small>
+        )}
       </label>
     );
   }

@@ -5367,3 +5367,44 @@ body {
     padding: 16px;
   }
 }
+
+/* Block 3.4.6 — align order assignees */
+.admin-order-assignees-grid {
+  align-items: start;
+}
+
+.admin-order-assignee-field {
+  min-width: 0;
+}
+
+.admin-order-assignee-field select {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-order-assignee-field small {
+  display: block;
+  min-height: 17px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.admin-order-assignees-note {
+  max-width: 720px;
+  line-height: 1.4;
+}
+
+.admin-order-assignees-form > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+@media (min-width: 901px) {
+  .admin-order-assignees-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
