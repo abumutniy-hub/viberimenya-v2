@@ -4525,3 +4525,114 @@ body {
     min-width: 0;
   }
 }
+
+/* Block 3.1.1 — CRM orders table readability */
+.admin-orders-page .admin-table th,
+.admin-orders-page .admin-table td {
+  vertical-align: top;
+}
+
+.admin-order-main-cell,
+.admin-order-customer-cell,
+.admin-order-delivery-cell,
+.admin-order-payment-cell,
+.admin-order-total-cell {
+  display: grid;
+  gap: 5px;
+  min-width: 120px;
+}
+
+.admin-order-main-cell strong,
+.admin-order-customer-cell strong,
+.admin-order-delivery-cell strong,
+.admin-order-total-cell strong {
+  color: #171414;
+  font-weight: 900;
+}
+
+.admin-order-main-cell span,
+.admin-order-customer-cell span,
+.admin-order-delivery-cell span,
+.admin-order-payment-cell span,
+.admin-order-total-cell span {
+  color: rgba(25, 23, 22, 0.58);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.admin-order-delivery-cell em {
+  width: fit-content;
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: rgba(25, 23, 22, 0.06);
+  color: rgba(25, 23, 22, 0.74);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.admin-status-chip {
+  width: fit-content;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(25, 23, 22, 0.07);
+  color: #171414;
+  font-size: 12px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.admin-status-chip.status-new {
+  background: rgba(77, 111, 199, 0.12);
+  color: #294a9a;
+}
+
+.admin-status-chip.status-confirmed,
+.admin-status-chip.payment-paid {
+  background: rgba(69, 132, 76, 0.13);
+  color: #2e7137;
+}
+
+.admin-status-chip.status-assembling,
+.admin-status-chip.status-ready,
+.admin-status-chip.status-assigned_courier,
+.admin-status-chip.status-delivering,
+.admin-status-chip.payment-pending {
+  background: rgba(183, 123, 43, 0.14);
+  color: #865313;
+}
+
+.admin-status-chip.status-cancelled,
+.admin-status-chip.status-problem,
+.admin-status-chip.payment-failed,
+.admin-status-chip.payment-cancelled {
+  background: rgba(164, 45, 45, 0.12);
+  color: #9f2f2f;
+}
+
+.admin-order-payment-cell {
+  min-width: 160px;
+}
+
+.admin-order-total-cell {
+  min-width: 110px;
+}
+
+.admin-order-actions {
+  min-width: 220px;
+}
+
+@media (max-width: 1180px) {
+  .admin-orders-page .admin-table-wrap {
+    overflow-x: auto;
+  }
+
+  .admin-orders-page .admin-table {
+    min-width: 1080px;
+  }
+}
