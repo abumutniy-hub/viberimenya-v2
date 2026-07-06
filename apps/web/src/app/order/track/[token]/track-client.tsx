@@ -412,7 +412,6 @@ export function TrackClient({ token }: { token: string }) {
 
       <section className="track-actions-card">
         <a href="/catalog" className="track-dark-link">Вернуться в каталог</a>
-        <a href="/account" className="track-light-link">Личный кабинет</a>
       </section>
     </main>
   );

@@ -48,11 +48,18 @@ export function DesktopCartIndicator() {
   }
 
   return (
-    <a className="desktop-cart-indicator" href="/cart" aria-label={`Корзина, товаров: ${count}`}>
-      <span className="desktop-cart-icon">🛒</span>
-      <strong>Корзина</strong>
-      {count > 0 ? <em>{count}</em> : null}
-    </a>
+    <div className="desktop-quick-actions" aria-label="Быстрые действия">
+      <a className="desktop-profile-indicator" href="/account" aria-label="Профиль">
+        <span className="desktop-profile-icon">👤</span>
+        <strong>Профиль</strong>
+      </a>
+
+      <a className="desktop-cart-indicator" href="/cart" aria-label={`Корзина, товаров: ${count}`}>
+        <span className="desktop-cart-icon">🛒</span>
+        <strong>Корзина</strong>
+        {count > 0 ? <em>{count}</em> : null}
+      </a>
+    </div>
   );
 }
 
