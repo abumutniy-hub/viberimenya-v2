@@ -281,22 +281,26 @@ export function CartClient() {
 
   if (success) {
     return (
-      <section className="cart-success">
+      <section className="cart-success cart-success-polished">
+        <div className="cart-success-icon">✓</div>
         <span>Заказ оформлен</span>
         <h1>{success.orderNumber}</h1>
-        <p>Мы получили заказ. Менеджер проверит детали и свяжется с вами.</p>
-        <strong>{money(success.totalAmount)}</strong>
+        <p>
+          Мы получили заказ. Менеджер проверит детали, подтвердит состав и свяжется с вами.
+        </p>
 
-        {success.telegramLinkUrl ? (
-          <div className="cart-success-actions">
-            <a href={success.telegramLinkUrl} className="dark-button" target="_blank" rel="noreferrer">
-              Подключить Telegram
-            </a>
+        <div className="cart-success-summary">
+          <div>
+            <small>Сумма заказа</small>
+            <strong>{money(success.totalAmount)}</strong>
           </div>
-        ) : null}
+          <div>
+            <small>Статус</small>
+            <strong>Принят</strong>
+          </div>
+        </div>
 
-        <div className="cart-success-actions">
-          <a href="/catalog" className="light-button">Вернуться в каталог</a>
+        <div className="cart-success-actions cart-success-main-actions">
           {success.trackingToken ? (
             <a href={`/order/track/${success.trackingToken}`} className="dark-button">
               Отследить заказ
@@ -304,7 +308,18 @@ export function CartClient() {
           ) : (
             <a href="/account" className="dark-button">Личный кабинет</a>
           )}
+          <a href="/catalog" className="light-button">Вернуться в каталог</a>
         </div>
+
+        {success.telegramLinkUrl ? (
+          <div className="cart-success-telegram">
+            <strong>Telegram-уведомления</strong>
+            <p>Подключите Telegram, чтобы получать сообщения по заказу и быстро открыть личный кабинет.</p>
+            <a href={success.telegramLinkUrl} className="light-button" target="_blank" rel="noreferrer">
+              Подключить Telegram
+            </a>
+          </div>
+        ) : null}
       </section>
     );
   }
