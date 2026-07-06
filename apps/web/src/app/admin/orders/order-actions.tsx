@@ -248,16 +248,22 @@ export function OrderActions({
 
   return (
     <div className="admin-order-actions">
-      {trackingToken ? (
-        <div className="admin-order-link-actions">
-          <a className="admin-small-link" href={trackingUrl} target="_blank" rel="noreferrer">
-            Открыть заказ
-          </a>
-          <button type="button" className="admin-copy-link" onClick={copyTrackingLink}>
-            Копировать ссылку
-          </button>
-        </div>
-      ) : null}
+      <div className="admin-order-link-actions">
+        <a className="admin-small-link" href={`/admin/orders/${orderId}`}>
+          Детали
+        </a>
+
+        {trackingToken ? (
+          <>
+            <a className="admin-small-link" href={trackingUrl} target="_blank" rel="noreferrer">
+              Открыть заказ
+            </a>
+            <button type="button" className="admin-copy-link" onClick={copyTrackingLink}>
+              Копировать ссылку
+            </button>
+          </>
+        ) : null}
+      </div>
 
       {status === "new" ? (
         <button

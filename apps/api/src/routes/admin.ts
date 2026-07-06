@@ -217,6 +217,73 @@ export async function adminRoutes(app: FastifyInstance) {
     }
   });
 
+  app.get("/api/admin/orders/:id", async (request, reply) => {
+    const params = z.object({
+      id: z.string().uuid()
+    }).parse(request.params ?? {});
+
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+
+      const orderRows = await client`
+        SELECT
+          o.*,
+          c.phone AS customer_phone,
+          c.name AS customer_name,
+          c.email AS customer_email,
+          p.payment_url AS payment_url,
+          p.status AS latest_payment_status,
+          p.method AS latest_payment_method,
+          p.provider AS latest_payment_provider,
+          p.created_at AS latest_payment_created_at
+        FROM orders o
+        LEFT JOIN customers c ON c.id = o.customer_id
+        LEFT JOIN LATERAL (
+          SELECT provider, method, status, payment_url, created_at
+          FROM payments
+          WHERE order_id = o.id
+          ORDER BY created_at DESC
+          LIMIT 1
+        ) p ON true
+        WHERE o.shop_id = ${shop.id}
+          AND o.id = ${params.id}
+        LIMIT 1
+      `;
+
+      const order = orderRows[0];
+
+      if (!order) {
+        return reply.status(404).send({
+          ok: false,
+          message: "Заказ не найден"
+        });
+      }
+
+      const items = await client`
+        SELECT
+          product_id,
+          product_name,
+          quantity,
+          price,
+          total,
+          created_at
+        FROM order_items
+        WHERE order_id = ${params.id}
+        ORDER BY created_at ASC
+      `;
+
+      return {
+        ok: true,
+        order,
+        items
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
   app.get("/api/admin/orders/:id/internal-chat", async (request, reply) => {
     const params = z.object({
       id: z.string().uuid()
