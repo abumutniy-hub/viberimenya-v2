@@ -53,7 +53,8 @@ export function OrderActions({
   trackingToken,
   internalChatCount = 0,
   internalChatPreview = "",
-  showDetailsLink = true
+  showDetailsLink = true,
+  showStatusActions = false
 }: {
   orderId: string;
   status: string;
@@ -63,6 +64,7 @@ export function OrderActions({
   internalChatCount?: number;
   internalChatPreview?: string;
   showDetailsLink?: boolean;
+  showStatusActions?: boolean;
 }) {
   const [isConfirming, setIsConfirming] = useState(false);
   const [isPaying, setIsPaying] = useState(false);
@@ -340,8 +342,9 @@ export function OrderActions({
         <span className="admin-muted-badge">Оплата после подтверждения</span>
       )}
 
-      <div className="admin-status-actions">
-        {status !== "assembling" && status !== "cancelled" && status !== "delivered" ? (
+      {showStatusActions ? (
+        <div className="admin-status-actions">
+          {status !== "assembling" && status !== "cancelled" && status !== "delivered" ? (
           <button type="button" className="admin-action-button secondary" onClick={() => changeStatus("assembling", "Собирается")}>
             Собирается
           </button>
@@ -377,12 +380,13 @@ export function OrderActions({
           </button>
         ) : null}
 
-        {status !== "cancelled" && status !== "delivered" ? (
-          <button type="button" className="admin-action-button danger" onClick={() => changeStatus("cancelled", "Отменён")}>
-            Отменить
-          </button>
-        ) : null}
-      </div>
+          {status !== "cancelled" && status !== "delivered" ? (
+            <button type="button" className="admin-action-button danger" onClick={() => changeStatus("cancelled", "Отменён")}>
+              Отменить
+            </button>
+          ) : null}
+        </div>
+      ) : null}
 
       <button
         type="button"

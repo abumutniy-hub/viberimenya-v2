@@ -153,6 +153,7 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
           internalChatCount={0}
           internalChatPreview=""
           showDetailsLink={false}
+          showStatusActions
         />
       </section>
 
