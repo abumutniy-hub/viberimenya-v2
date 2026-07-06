@@ -1315,6 +1315,11 @@ export async function adminRoutes(app: FastifyInstance) {
 
       const telegramToken = createEmployeeLinkToken();
       const telegramUsername = body.telegramUsername.trim().replace(/^@/, "");
+      const employeeLinkMetadata = {
+        source: "admin_employee_create",
+        role: body.role,
+        telegramUsername: telegramUsername || null
+      };
 
       await client`
         INSERT INTO employee_link_tokens (
@@ -1337,13 +1342,7 @@ export async function adminRoutes(app: FastifyInstance) {
           ${telegramToken},
           'pending',
           NOW() + INTERVAL '7 days',
-          CAST(${JSON.stringify({
-            source: "admin_employee_create",
-            telegramUsername: null
-          })} AS jsonb) || jsonb_build_object(
-            'role', ${body.role},
-            'telegramUsername', NULLIF(${telegramUsername}, '')
-          ),
+          CAST(${JSON.stringify(employeeLinkMetadata)} AS jsonb),
           NOW(),
           NOW()
         )
