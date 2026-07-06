@@ -22,6 +22,7 @@ type TrackOrder = {
   bonusEarned: number;
   total: number;
   trackingToken: string;
+  bouquetPhotoUrl: string | null;
   createdAt: string;
 };
 
@@ -76,6 +77,21 @@ function paymentText(status: string) {
   };
 
   return map[status] || status;
+}
+
+function deliveryTypeText(type: string) {
+  return type === "pickup" ? "Самовывоз" : "Доставка";
+}
+
+function paymentMethodText(method: string) {
+  const map: Record<string, string> = {
+    cash_on_delivery: "При получении",
+    transfer_after_confirm: "Перевод после подтверждения",
+    online_card: "Онлайн-картой",
+    sbp: "СБП"
+  };
+
+  return map[method] || method;
 }
 
 type OrderStepState = "done" | "active" | "waiting";
@@ -261,15 +277,16 @@ export function TrackClient({ token }: { token: string }) {
 
   return (
     <main className="track-page">
-      <section className="track-hero">
+      <section className="track-hero track-hero-polished">
         <div>
           <p className="eyebrow">Заказ</p>
           <h1>{order.orderNumber}</h1>
-          <p>Статус: {statusText(order.status)}</p>
+          <p>{orderProgressText(order)}</p>
         </div>
 
-        <div className="track-status-pill">
-          {paymentText(order.paymentStatus)}
+        <div className="track-hero-badges">
+          <div className="track-status-pill">{statusText(order.status)}</div>
+          <div className="track-status-pill light">{paymentText(order.paymentStatus)}</div>
         </div>
       </section>
 
@@ -303,6 +320,11 @@ export function TrackClient({ token }: { token: string }) {
         <article className="track-card">
           <h2>Оплата</h2>
 
+          <div className="track-lines">
+            <span>Статус: {paymentText(order.paymentStatus)}</span>
+            <span>Способ: {paymentMethodText(order.paymentMethod)}</span>
+          </div>
+
           {order.paymentStatus === "paid" ? (
             <p>Заказ оплачен. Спасибо!</p>
           ) : payment?.payment_url ? (
@@ -311,19 +333,37 @@ export function TrackClient({ token }: { token: string }) {
               <a href={payment.payment_url} className="track-dark-link">Оплатить заказ</a>
             </>
           ) : (
-            <p>После подтверждения менеджером здесь появится ссылка на оплату.</p>
+            <p>После подтверждения менеджером здесь появится ссылка или инструкция для оплаты.</p>
           )}
         </article>
 
         <article className="track-card">
-          <h2>Доставка</h2>
-          <div className="track-lines">
-            <span>Дата: {dateText(order.deliveryDate)}</span>
-            <span>Интервал: {order.deliveryInterval || "—"}</span>
-            <span>Адрес: {order.deliveryAddress || "—"}</span>
-          </div>
+          <h2>{deliveryTypeText(order.deliveryType)}</h2>
+
+          {order.deliveryType === "pickup" ? (
+            <div className="track-lines">
+              <span>Формат: самовывоз</span>
+              <span>Менеджер подтвердит адрес и время получения.</span>
+            </div>
+          ) : (
+            <div className="track-lines">
+              <span>Дата: {dateText(order.deliveryDate)}</span>
+              <span>Интервал: {order.deliveryInterval || "—"}</span>
+              <span>Адрес: {order.deliveryAddress || "—"}</span>
+            </div>
+          )}
         </article>
       </section>
+
+      {order.bouquetPhotoUrl ? (
+        <section className="track-card track-bouquet-card">
+          <div>
+            <h2>Фото букета</h2>
+            <p>Когда флорист добавит фото готовой композиции, оно будет отображаться здесь.</p>
+          </div>
+          <img src={order.bouquetPhotoUrl} alt={`Фото заказа ${order.orderNumber}`} />
+        </section>
+      ) : null}
 
       <section className="track-card">
         <h2>Состав заказа</h2>
@@ -348,7 +388,7 @@ export function TrackClient({ token }: { token: string }) {
           <span>Товары</span>
           <strong>{money(order.subtotal)}</strong>
 
-          <span>Доставка</span>
+          <span>{order.deliveryType === "pickup" ? "Самовывоз" : "Доставка"}</span>
           <strong>{money(order.deliveryPrice)}</strong>
 
           {order.discountTotal > 0 ? (
@@ -368,6 +408,11 @@ export function TrackClient({ token }: { token: string }) {
           <span>К оплате</span>
           <strong>{money(order.total)}</strong>
         </div>
+      </section>
+
+      <section className="track-actions-card">
+        <a href="/catalog" className="track-dark-link">Вернуться в каталог</a>
+        <a href="/account" className="track-light-link">Личный кабинет</a>
       </section>
     </main>
   );

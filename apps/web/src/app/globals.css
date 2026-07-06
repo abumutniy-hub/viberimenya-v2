@@ -4346,3 +4346,115 @@ body {
     font-size: 22px;
   }
 }
+
+/* Block 2.5.2 — polished public tracking page */
+.track-hero-polished {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.track-hero-polished h1 {
+  margin-bottom: 12px;
+}
+
+.track-hero-polished p {
+  margin: 0;
+  color: rgba(25, 23, 22, 0.62);
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.track-hero-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.track-status-pill.light {
+  background: rgba(255, 255, 255, 0.72);
+  color: #171414;
+  border: 1px solid rgba(25, 23, 22, 0.08);
+}
+
+.track-bouquet-card {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(260px, 1.1fr);
+  gap: 20px;
+  align-items: center;
+}
+
+.track-bouquet-card p {
+  margin: 8px 0 0;
+  color: rgba(25, 23, 22, 0.58);
+}
+
+.track-bouquet-card img {
+  width: 100%;
+  max-height: 420px;
+  object-fit: cover;
+  border-radius: 24px;
+  box-shadow: 0 18px 44px rgba(23, 20, 20, 0.12);
+}
+
+.track-actions-card {
+  width: min(1120px, calc(100% - 32px));
+  margin: 18px auto 0;
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+}
+
+.track-light-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
+  padding: 0 22px;
+  border: 1px solid rgba(25, 23, 22, 0.1);
+  border-radius: 999px;
+  background: #fffaf4;
+  color: #171414;
+  font-weight: 900;
+  text-decoration: none;
+}
+
+@media (max-width: 760px) {
+  .track-page {
+    padding-bottom: 132px;
+  }
+
+  .track-hero-polished {
+    display: grid;
+    gap: 16px;
+  }
+
+  .track-hero-badges {
+    justify-content: flex-start;
+  }
+
+  .track-status-pill {
+    width: auto;
+  }
+
+  .track-bouquet-card {
+    grid-template-columns: 1fr;
+  }
+
+  .track-bouquet-card img {
+    max-height: 360px;
+    border-radius: 22px;
+  }
+
+  .track-actions-card {
+    width: min(100% - 24px, 560px);
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .track-actions-card a {
+    width: 100%;
+  }
+}
