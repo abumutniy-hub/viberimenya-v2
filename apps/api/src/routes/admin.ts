@@ -359,8 +359,15 @@ export async function adminRoutes(app: FastifyInstance) {
       const floristId = body.floristId.trim() || null;
       const courierId = body.courierId.trim() || null;
 
-      const orderRows = await client<{ id: string; order_number: string }[]>`
-        SELECT id, order_number
+      const orderRows = await client<{
+        id: string;
+        order_number: string;
+        florist_id: string | null;
+        total: number | null;
+        delivery_date: string | null;
+        tracking_token: string | null;
+      }[]>`
+        SELECT id, order_number, florist_id, total, delivery_date, tracking_token
         FROM orders
         WHERE shop_id = ${shop.id}
           AND id = ${params.id}
@@ -408,6 +415,66 @@ export async function adminRoutes(app: FastifyInstance) {
           AND id = ${order.id}
         RETURNING id, manager_id, florist_id, courier_id, updated_at
       `;
+
+      if (floristId && floristId !== order.florist_id) {
+        const floristRows = await client<{ telegram_id: string; name: string | null }[]>`
+          SELECT ta.telegram_id, u.name
+          FROM shop_users su
+          JOIN users u ON u.id = su.user_id
+          JOIN telegram_accounts ta
+            ON ta.shop_id = su.shop_id
+           AND ta.user_id = su.user_id
+           AND ta.is_active = true
+          WHERE su.shop_id = ${shop.id}
+            AND su.user_id = ${floristId}
+            AND su.role = 'florist'
+            AND su.is_active = true
+          ORDER BY ta.linked_at DESC
+          LIMIT 1
+        `;
+
+        const florist = floristRows[0];
+
+        if (florist?.telegram_id) {
+          const notificationPayload = {
+            orderId: order.id,
+            orderNumber: order.order_number,
+            floristId,
+            floristName: florist.name,
+            totalAmount: order.total,
+            deliveryDate: order.delivery_date,
+            trackingUrl: order.tracking_token ? `/order/track/${order.tracking_token}` : null,
+            crmUrl: `/admin/orders/${order.id}`
+          };
+
+          await client`
+            INSERT INTO notification_events (
+              shop_id,
+              order_id,
+              type,
+              channel,
+              recipient_type,
+              recipient_telegram_id,
+              status,
+              payload,
+              created_at,
+              updated_at
+            )
+            VALUES (
+              ${shop.id},
+              ${order.id},
+              'florist_order_assigned',
+              'telegram',
+              'staff',
+              ${florist.telegram_id},
+              'pending',
+              CAST(${JSON.stringify(notificationPayload)} AS jsonb),
+              NOW(),
+              NOW()
+            )
+          `;
+        }
+      }
 
       return {
         ok: true,

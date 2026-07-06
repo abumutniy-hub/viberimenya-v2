@@ -2746,6 +2746,22 @@ function formatEvent(event: NotificationEvent): string {
     ].filter(Boolean).join("\n");
   }
 
+  if (event.type === "florist_order_assigned") {
+    const floristName = payloadText(payload, "floristName", "florist_name");
+    const deliveryDate = payloadText(payload, "deliveryDate", "delivery_date");
+    const crmUrl = absoluteUrl(payloadValue(payload, "crmUrl", "crm_url"));
+
+    return [
+      `💐 Вам назначен заказ ${orderTitle}`,
+      floristName ? `Флорист: ${floristName}` : "",
+      totalText ? `Сумма: ${totalText}` : "",
+      deliveryDate ? `Дата доставки: ${shortDateText(deliveryDate)}` : "",
+      "",
+      "Откройте заказ в CRM и возьмите его в работу.",
+      crmUrl ? `CRM: ${crmUrl}` : ""
+    ].filter(Boolean).join("\n");
+  }
+
   if (event.type === "order_created") {
     return [
       `🆕 Новый заказ ${orderNumber || "без номера"}`,
