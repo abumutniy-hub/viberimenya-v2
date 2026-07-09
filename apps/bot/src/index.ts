@@ -2384,6 +2384,141 @@ async function handleContact(chatId: number) {
   );
 }
 
+async function handleFloristAssemblyOrders(chatId: number) {
+  const replyMarkup = await mainKeyboardForChat(chatId);
+  const profile = await getTelegramProfile(String(chatId));
+
+  if (!profile?.user_id) {
+    await sendTelegramMessage(chatId, "💐 Раздел сборки доступен только сотруднику.", {
+      reply_markup: replyMarkup
+    });
+    return;
+  }
+
+  if (!["owner", "admin", "florist"].includes(profile.role || "")) {
+    await sendTelegramMessage(chatId, "💐 Раздел сборки доступен только флористу.", {
+      reply_markup: replyMarkup
+    });
+    return;
+  }
+
+  const orders = await sql<{
+    id: string;
+    order_number: string;
+    status: string;
+    delivery_date: string | null;
+    delivery_address_text: string | null;
+    recipient_name: string | null;
+    product_name: string | null;
+    created_at: string;
+  }[]>`
+    SELECT
+      o.id,
+      o.order_number,
+      o.status,
+      o.delivery_date,
+      o.delivery_address_text,
+      o.recipient_name,
+      o.created_at,
+      COALESCE((
+        SELECT string_agg(
+          oi.product_name || CASE WHEN oi.quantity > 1 THEN ' ×' || oi.quantity::text ELSE '' END,
+          ', '
+          ORDER BY oi.created_at
+        )
+        FROM order_items oi
+        WHERE oi.order_id = o.id
+      ), '') AS product_name
+    FROM orders o
+    WHERE o.shop_id = ${profile.shop_id}
+      AND o.florist_id = ${profile.user_id}
+      AND o.status IN ('new', 'confirmed', 'assembling', 'ready')
+    ORDER BY
+      CASE o.status
+        WHEN 'assembling' THEN 1
+        WHEN 'confirmed' THEN 2
+        WHEN 'new' THEN 3
+        WHEN 'ready' THEN 4
+        ELSE 5
+      END,
+      o.delivery_date NULLS LAST,
+      o.created_at DESC
+    LIMIT 10
+  `;
+
+  if (!orders.length) {
+    await sendTelegramMessage(
+      chatId,
+      [
+        "💐 Сборка заказов",
+        "",
+        "У вас пока нет активных заказов на сборку."
+      ].join("\n"),
+      {
+        reply_markup: replyMarkup
+      }
+    );
+    return;
+  }
+
+  await sendTelegramMessage(
+    chatId,
+    [
+      "💐 Сборка заказов",
+      "",
+      `Активных заказов: ${orders.length}`,
+      "Ниже отправляю карточки заказов с действиями."
+    ].join("\n"),
+    {
+      reply_markup: replyMarkup
+    }
+  );
+
+  for (const order of orders) {
+    const rows: TelegramInlineKeyboardButton[][] = [];
+
+    if (order.status === "new" || order.status === "confirmed") {
+      rows.push([
+        {
+          text: "💐 Взять в работу",
+          callback_data: `florist:take:${order.id}`
+        }
+      ]);
+    }
+
+    if (order.status === "assembling") {
+      rows.push([
+        {
+          text: "✅ Готово",
+          callback_data: `florist:ready:${order.id}`
+        }
+      ]);
+    }
+
+    rows.push([
+      {
+        text: "🔄 Обновить список",
+        callback_data: "florist:list"
+      }
+    ]);
+
+    await sendTelegramMessage(
+      chatId,
+      [
+        `Заказ ${order.order_number}`,
+        `Статус: ${orderStatusText(order.status)}`,
+        order.product_name ? `Товар: ${order.product_name}` : "",
+        order.delivery_date ? `Дата доставки: ${shortDateText(order.delivery_date)}` : "",
+        order.recipient_name ? `Получатель: ${order.recipient_name}` : "",
+        order.delivery_address_text ? `Адрес: ${order.delivery_address_text}` : ""
+      ].filter(Boolean).join("\n"),
+      {
+        reply_markup: inlineKeyboard(rows)
+      }
+    );
+  }
+}
+
 async function handleFloristTakeOrder(callbackQuery: TelegramCallbackQuery, orderId: string) {
   const message = callbackQuery.message;
 
@@ -2692,6 +2827,12 @@ async function handleCallbackQuery(callbackQuery: TelegramCallbackQuery) {
     return;
   }
 
+  if (data === "florist:list") {
+    await answerCallbackQuery(callbackQuery.id);
+    await handleFloristAssemblyOrders(chatId);
+    return;
+  }
+
 
   if (data === "checkout:start") {
     await answerCallbackQuery(callbackQuery.id);
@@ -2792,10 +2933,7 @@ async function handleUpdate(update: TelegramUpdate) {
   }
 
   if (text === "💐 Сборка заказов") {
-    const replyMarkup = await mainKeyboardForChat(message.chat.id);
-    await sendTelegramMessage(message.chat.id, "💐 Раздел сборки заказов закреплён за ролью флориста.", {
-      reply_markup: replyMarkup
-    });
+    await handleFloristAssemblyOrders(message.chat.id);
     return;
   }
 
