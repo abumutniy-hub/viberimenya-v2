@@ -3,6 +3,7 @@ import { OrderActions } from "../order-actions";
 import { OrderAssigneesForm, type OrderStaffMember } from "./order-assignees-form";
 import { ContactActions } from "./contact-actions";
 import { InternalCommentForm } from "./internal-comment-form";
+import { DeliveryAddressActions } from "./delivery-address-actions";
 
 export const dynamic = "force-dynamic";
 
@@ -247,6 +248,9 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
           {!isPickup ? <InfoRow label="Дата" value={dateOnly(order.delivery_date)} /> : null}
           {!isPickup ? <InfoRow label="Интервал" value={order.delivery_comment} /> : null}
           {!isPickup ? <InfoRow label="Адрес" value={order.delivery_address_text} /> : null}
+          {!isPickup && order.delivery_address_text ? (
+            <DeliveryAddressActions address={String(order.delivery_address_text || "")} />
+          ) : null}
           <InfoRow label={isPickup ? "Стоимость" : "Доставка"} value={money(order.delivery_price)} />
         </article>
 

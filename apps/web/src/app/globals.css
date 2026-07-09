@@ -5649,3 +5649,47 @@ body {
     width: 100%;
   }
 }
+
+/* CRM order delivery address actions */
+.admin-delivery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 18px 16px;
+  border-top: 1px solid rgba(25, 23, 22, 0.07);
+}
+
+.admin-delivery-action {
+  appearance: none;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(25, 23, 22, 0.06);
+  color: #171414;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 0 13px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 900;
+  text-decoration: none;
+  transition: background 0.18s ease, transform 0.18s ease;
+}
+
+.admin-delivery-action:hover {
+  background: rgba(25, 23, 22, 0.11);
+  transform: translateY(-1px);
+}
+
+@media (max-width: 760px) {
+  .admin-delivery-actions {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .admin-delivery-action {
+    flex: 1 1 auto;
+  }
+}
