@@ -300,6 +300,31 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
         <article className="admin-panel admin-order-detail-card">
           <div className="admin-panel-head">
             <div>
+              <span>Контроль качества</span>
+              <h2>Фото готового букета</h2>
+            </div>
+          </div>
+
+          {order.bouquet_photo_url ? (
+            <div className="admin-bouquet-photo-card">
+              <img
+                src={String(order.bouquet_photo_url)}
+                alt={`Фото готового букета по заказу ${String(order.order_number || "")}`}
+              />
+              <a href={String(order.bouquet_photo_url)} target="_blank" rel="noreferrer">
+                Открыть фото
+              </a>
+            </div>
+          ) : (
+            <p className="admin-order-comment">
+              Фото пока не загружено. Позже флорист сможет прикреплять фото готового букета через Telegram.
+            </p>
+          )}
+        </article>
+
+        <article className="admin-panel admin-order-detail-card">
+          <div className="admin-panel-head">
+            <div>
               <span>От клиента</span>
               <h2>Комментарий клиента</h2>
             </div>

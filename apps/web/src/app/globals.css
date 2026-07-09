@@ -5602,4 +5602,50 @@ body {
   .admin-internal-comment-actions button {
     width: 100%;
   }
+}\n\n/* CRM order bouquet photo */
+.admin-bouquet-photo-card {
+  display: grid;
+  gap: 12px;
+  padding: 16px 18px 18px;
+  border-top: 1px solid rgba(25, 23, 22, 0.07);
+}
+
+.admin-bouquet-photo-card img {
+  display: block;
+  width: 100%;
+  max-height: 420px;
+  object-fit: cover;
+  border-radius: 20px;
+  border: 1px solid rgba(25, 23, 22, 0.08);
+  background: rgba(25, 23, 22, 0.04);
+}
+
+.admin-bouquet-photo-card a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: 999px;
+  background: rgba(25, 23, 22, 0.06);
+  color: #171414;
+  font-size: 13px;
+  font-weight: 900;
+  text-decoration: none;
+}
+
+.admin-bouquet-photo-card a:hover {
+  background: rgba(25, 23, 22, 0.11);
+}
+
+@media (max-width: 760px) {
+  .admin-bouquet-photo-card {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .admin-bouquet-photo-card a {
+    width: 100%;
+  }
 }
