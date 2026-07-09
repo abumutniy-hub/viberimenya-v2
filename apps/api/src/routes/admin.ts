@@ -299,6 +299,20 @@ export async function adminRoutes(app: FastifyInstance) {
         ORDER BY created_at ASC
       `;
 
+      const history = await client`
+        SELECT
+          id,
+          from_status,
+          to_status,
+          comment,
+          created_at
+        FROM order_status_history
+        WHERE shop_id = ${shop.id}
+          AND order_id = ${params.id}
+        ORDER BY created_at DESC
+        LIMIT 50
+      `;
+
       const staff = await client`
         SELECT
           su.user_id,
@@ -337,6 +351,7 @@ export async function adminRoutes(app: FastifyInstance) {
         ok: true,
         order,
         items,
+        history,
         staff
       };
     } finally {

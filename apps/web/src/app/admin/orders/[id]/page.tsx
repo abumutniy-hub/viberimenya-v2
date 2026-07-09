@@ -12,6 +12,7 @@ type Response = {
   ok: boolean;
   order: AdminRow;
   items: AdminRow[];
+  history: AdminRow[];
   staff: OrderStaffMember[];
 };
 
@@ -98,6 +99,7 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
   const data = await fetchAdmin<Response>(`/api/admin/orders/${id}`);
   const order = data?.order;
   const items = data?.items ?? [];
+  const history = data?.history ?? [];
   const staff = data?.staff ?? [];
 
   if (!order) {
@@ -175,6 +177,44 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
           currentCourierId={String(order.courier_id || "")}
           staff={staff}
         />
+      </section>
+
+      <section className="admin-panel admin-order-detail-card admin-order-history-card">
+        <div className="admin-panel-head">
+          <div>
+            <span>Движение заказа</span>
+            <h2>История статусов</h2>
+          </div>
+        </div>
+
+        {history.length ? (
+          <div className="admin-order-history-list">
+            {history.map((event, index) => {
+              const fromStatus = String(event.from_status || "");
+              const toStatus = String(event.to_status || "");
+              const eventKey = String(event.id || `${event.created_at}-${index}`);
+
+              return (
+                <article key={eventKey} className="admin-order-history-item">
+                  <div className="admin-order-history-dot" />
+                  <div className="admin-order-history-body">
+                    <div className="admin-order-history-top">
+                      <strong>{dateTime(event.created_at)}</strong>
+                      <span>
+                        {orderStatusLabels[fromStatus] || fromStatus || "—"}
+                        {" → "}
+                        {orderStatusLabels[toStatus] || toStatus || "—"}
+                      </span>
+                    </div>
+                    <p>{text(event.comment)}</p>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="admin-order-comment">История статусов пока пустая.</p>
+        )}
       </section>
 
       <section className="admin-order-detail-grid">

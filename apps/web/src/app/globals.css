@@ -5408,3 +5408,78 @@ body {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
+
+/* CRM order status history */
+.admin-order-history-card {
+  margin-top: 18px;
+}
+
+.admin-order-history-list {
+  display: grid;
+  padding: 4px 20px 18px;
+}
+
+.admin-order-history-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 12px;
+  padding: 14px 0;
+  border-top: 1px solid rgba(25, 23, 22, 0.07);
+}
+
+.admin-order-history-item:first-child {
+  border-top: 0;
+}
+
+.admin-order-history-dot {
+  width: 10px;
+  height: 10px;
+  margin-top: 7px;
+  border-radius: 999px;
+  background: #171414;
+  box-shadow: 0 0 0 5px rgba(25, 23, 22, 0.08);
+}
+
+.admin-order-history-body {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.admin-order-history-top {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+}
+
+.admin-order-history-top strong {
+  color: #171414;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.admin-order-history-top span {
+  color: rgba(25, 23, 22, 0.62);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.admin-order-history-body p {
+  margin: 0;
+  color: rgba(25, 23, 22, 0.68);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+@media (max-width: 760px) {
+  .admin-order-history-list {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .admin-order-history-item {
+    grid-template-columns: 18px minmax(0, 1fr);
+  }
+}
