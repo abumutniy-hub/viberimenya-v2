@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { resolve } from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
+import { extname, join, resolve } from "node:path";
 import { config } from "dotenv";
 import postgres from "postgres";
 
@@ -34,9 +35,18 @@ type TelegramChat = {
   username?: string;
 };
 
+type TelegramPhotoSize = {
+  file_id: string;
+  file_unique_id: string;
+  width: number;
+  height: number;
+  file_size?: number;
+};
+
 type TelegramMessage = {
   message_id: number;
   text?: string;
+  photo?: TelegramPhotoSize[];
   from?: TelegramUser;
   chat: TelegramChat;
 };
@@ -68,6 +78,15 @@ const POLL_INTERVAL_MS = envNumber("BOT_POLL_INTERVAL_MS", 1000, 300, 2000);
 const TELEGRAM_UPDATES_TIMEOUT_SECONDS = envNumber("BOT_GET_UPDATES_TIMEOUT_SECONDS", 5, 1, 25);
 const SITE_URL = process.env.PUBLIC_SITE_URL || process.env.NEXT_PUBLIC_SITE_URL || "http://viberimenya.ru";
 const DEFAULT_SHOP_SLUG = process.env.DEFAULT_SHOP_SLUG || "viberimenya";
+const UPLOADS_DIR = process.env.UPLOADS_DIR || resolve(process.cwd(), "../../storage/uploads");
+
+const pendingBouquetPhotoRequests = new Map<number, {
+  orderId: string;
+  orderNumber: string;
+  shopId: string;
+  userId: string;
+  createdAt: number;
+}>();
 
 if (!DATABASE_URL) {
   throw new Error("DATABASE_URL is required");
@@ -2753,6 +2772,205 @@ async function handleFloristProblemOrder(callbackQuery: TelegramCallbackQuery, o
   );
 }
 
+async function downloadTelegramFile(fileId: string, fileNamePrefix: string) {
+  const file = await telegramApi<{
+    file_id: string;
+    file_unique_id: string;
+    file_size?: number;
+    file_path?: string;
+  }>(`getFile?file_id=${encodeURIComponent(fileId)}`);
+
+  if (!file.file_path) {
+    throw new Error("Telegram не вернул путь к файлу");
+  }
+
+  const extension = extname(file.file_path) || ".jpg";
+  const safePrefix = fileNamePrefix.replace(/[^a-z0-9_-]/gi, "-");
+  const fileName = `${safePrefix}-${Date.now()}-${randomUUID()}${extension}`;
+  const uploadDir = join(UPLOADS_DIR, "bouquets");
+  const fullPath = join(uploadDir, fileName);
+  const publicUrl = `/uploads/bouquets/${fileName}`;
+
+  await mkdir(uploadDir, { recursive: true });
+
+  const response = await fetch(`https://api.telegram.org/file/bot${TELEGRAM_BOT_TOKEN}/${file.file_path}`);
+
+  if (!response.ok) {
+    throw new Error(`Не удалось скачать файл Telegram: ${response.status}`);
+  }
+
+  const arrayBuffer = await response.arrayBuffer();
+  await writeFile(fullPath, Buffer.from(arrayBuffer));
+
+  return publicUrl;
+}
+
+function pickLargestTelegramPhoto(photos: TelegramPhotoSize[]) {
+  let best: TelegramPhotoSize | null = null;
+
+  for (const current of photos) {
+    if (!best) {
+      best = current;
+      continue;
+    }
+
+    const bestScore = Number(best.file_size || best.width * best.height || 0);
+    const currentScore = Number(current.file_size || current.width * current.height || 0);
+
+    if (currentScore > bestScore) {
+      best = current;
+    }
+  }
+
+  return best;
+}
+
+async function handleFloristBouquetPhotoMessage(message: TelegramMessage) {
+  const chatId = message.chat.id;
+  const request = pendingBouquetPhotoRequests.get(chatId);
+
+  if (!request) {
+    return false;
+  }
+
+  if (Date.now() - request.createdAt > 15 * 60 * 1000) {
+    pendingBouquetPhotoRequests.delete(chatId);
+
+    await sendTelegramMessage(
+      chatId,
+      "Время ожидания фото истекло. Нажмите «📸 Загрузить фото» ещё раз.",
+      {
+        reply_markup: await mainKeyboardForChat(chatId)
+      }
+    );
+
+    return true;
+  }
+
+  const photos = message.photo || [];
+
+  if (!photos.length) {
+    return false;
+  }
+
+  const profile = await getTelegramProfile(String(chatId));
+
+  if (!profile?.user_id || profile.user_id !== request.userId || profile.shop_id !== request.shopId) {
+    pendingBouquetPhotoRequests.delete(chatId);
+    await sendTelegramMessage(chatId, "Не удалось подтвердить сотрудника для загрузки фото.");
+    return true;
+  }
+
+  try {
+    const photo = pickLargestTelegramPhoto(photos);
+
+    if (!photo) {
+      await sendTelegramMessage(
+        chatId,
+        "Не удалось получить фото. Отправьте изображение ещё раз.",
+        {
+          reply_markup: await mainKeyboardForChat(chatId)
+        }
+      );
+
+      return true;
+    }
+
+    const publicUrl = await downloadTelegramFile(photo.file_id, `bouquet-${request.orderId}`);
+
+    const updatedRows = await sql<{
+      id: string;
+      order_number: string;
+      status: string;
+      bouquet_photo_url: string | null;
+    }[]>`
+      UPDATE orders
+      SET bouquet_photo_url = ${publicUrl},
+          updated_at = NOW()
+      WHERE id = ${request.orderId}
+        AND shop_id = ${request.shopId}
+        AND florist_id = ${request.userId}
+        AND status IN ('assembling', 'ready')
+      RETURNING id, order_number, status, bouquet_photo_url
+    `;
+
+    const updatedOrder = updatedRows[0];
+
+    if (!updatedOrder) {
+      pendingBouquetPhotoRequests.delete(chatId);
+
+      await sendTelegramMessage(
+        chatId,
+        "Фото получено, но заказ уже недоступен для загрузки фото.",
+        {
+          reply_markup: await mainKeyboardForChat(chatId)
+        }
+      );
+
+      return true;
+    }
+
+    await sql`
+      INSERT INTO order_status_history (
+        shop_id,
+        order_id,
+        from_status,
+        to_status,
+        comment,
+        created_at
+      )
+      VALUES (
+        ${request.shopId},
+        ${updatedOrder.id},
+        ${updatedOrder.status}::order_status,
+        ${updatedOrder.status}::order_status,
+        'Флорист загрузил фото готового букета через Telegram',
+        NOW()
+      )
+    `;
+
+    pendingBouquetPhotoRequests.delete(chatId);
+
+    await sendTelegramMessage(
+      chatId,
+      [
+        `✅ Фото по заказу ${updatedOrder.order_number} сохранено`,
+        "",
+        "Фото теперь отображается в CRM-карточке заказа.",
+        `Ссылка: ${absoluteUrl(publicUrl)}`
+      ].join("\n"),
+      {
+        reply_markup: inlineKeyboard([
+          [
+            {
+              text: "✅ Готово",
+              callback_data: `florist:ready:${updatedOrder.id}`
+            }
+          ],
+          [
+            {
+              text: "🔄 Сборка заказов",
+              callback_data: "florist:list"
+            }
+          ]
+        ])
+      }
+    );
+
+    return true;
+  } catch (error) {
+    await sendTelegramMessage(
+      chatId,
+      error instanceof Error ? error.message : "Не удалось сохранить фото. Попробуйте ещё раз.",
+      {
+        reply_markup: await mainKeyboardForChat(chatId)
+      }
+    );
+
+    return true;
+  }
+}
+
 async function handleFloristPhotoRequest(callbackQuery: TelegramCallbackQuery, orderId: string) {
   const message = callbackQuery.message;
 
@@ -2799,6 +3017,14 @@ async function handleFloristPhotoRequest(callbackQuery: TelegramCallbackQuery, o
     return;
   }
 
+  pendingBouquetPhotoRequests.set(chatId, {
+    orderId: order.id,
+    orderNumber: order.order_number,
+    shopId: profile.shop_id,
+    userId: profile.user_id,
+    createdAt: Date.now()
+  });
+
   await answerCallbackQuery(callbackQuery.id, "Отправьте фото букета");
 
   await sendTelegramMessage(
@@ -2807,7 +3033,7 @@ async function handleFloristPhotoRequest(callbackQuery: TelegramCallbackQuery, o
       `📸 Фото для заказа ${order.order_number}`,
       "",
       "Отправьте фото готового букета следующим сообщением.",
-      "На следующем шаге подключим сохранение фото в CRM."
+      "После отправки фото оно появится в CRM-карточке заказа."
     ].join("\n"),
     {
       reply_markup: await mainKeyboardForChat(chatId)
@@ -3561,13 +3787,26 @@ async function handleUpdate(update: TelegramUpdate) {
   }
 
   const message = update.message;
-  const text = message?.text?.trim();
 
-  if (!message || message.chat.type !== "private" || !text) {
+  if (!message || message.chat.type !== "private") {
     return;
   }
 
   await ensureTelegramAccount(update);
+
+  if (message.photo?.length) {
+    const photoHandled = await handleFloristBouquetPhotoMessage(message);
+
+    if (photoHandled) {
+      return;
+    }
+  }
+
+  const text = message.text?.trim();
+
+  if (!text) {
+    return;
+  }
 
   if (text.startsWith("/start")) {
     await handleStart(update);
