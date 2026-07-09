@@ -2432,6 +2432,26 @@ async function handleFloristTakeOrder(callbackQuery: TelegramCallbackQuery, orde
 
   if (order.status === "assembling") {
     await answerCallbackQuery(callbackQuery.id, "Заказ уже в работе");
+
+    await sendTelegramMessage(
+      chatId,
+      [
+        `💐 Заказ ${order.order_number} уже в работе`,
+        "",
+        "Когда букет будет собран, нажмите «Готово»."
+      ].join("\n"),
+      {
+        reply_markup: inlineKeyboard([
+          [
+            {
+              text: "✅ Готово",
+              callback_data: `florist:ready:${order.id}`
+            }
+          ]
+        ])
+      }
+    );
+
     return;
   }
 
