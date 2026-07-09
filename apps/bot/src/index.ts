@@ -2469,7 +2469,109 @@ async function handleFloristTakeOrder(callbackQuery: TelegramCallbackQuery, orde
     [
       `✅ Заказ ${order.order_number} взят в работу`,
       "",
-      "Статус в CRM изменён на «Собирается»."
+      "Статус в CRM изменён на «Собирается».",
+      "Когда букет будет собран, нажмите «Готово»."
+    ].join("\n"),
+    {
+      reply_markup: inlineKeyboard([
+        [
+          {
+            text: "✅ Готово",
+            callback_data: `florist:ready:${order.id}`
+          }
+        ]
+      ])
+    }
+  );
+}
+
+async function handleFloristReadyOrder(callbackQuery: TelegramCallbackQuery, orderId: string) {
+  const message = callbackQuery.message;
+
+  if (!message || message.chat.type !== "private") {
+    await answerCallbackQuery(callbackQuery.id);
+    return;
+  }
+
+  const chatId = message.chat.id;
+  const profile = await getTelegramProfile(String(chatId));
+
+  if (!profile?.user_id) {
+    await answerCallbackQuery(callbackQuery.id, "Доступно только сотруднику");
+    return;
+  }
+
+  const orderRows = await sql<{
+    id: string;
+    order_number: string;
+    status: string;
+    florist_id: string | null;
+  }[]>`
+    SELECT id, order_number, status, florist_id
+    FROM orders
+    WHERE id = ${orderId}
+      AND shop_id = ${profile.shop_id}
+    LIMIT 1
+  `;
+
+  const order = orderRows[0];
+
+  if (!order) {
+    await answerCallbackQuery(callbackQuery.id, "Заказ не найден");
+    return;
+  }
+
+  if (order.florist_id !== profile.user_id) {
+    await answerCallbackQuery(callbackQuery.id, "Заказ назначен другому флористу");
+    return;
+  }
+
+  if (order.status === "ready") {
+    await answerCallbackQuery(callbackQuery.id, "Заказ уже отмечен готовым");
+    return;
+  }
+
+  if (order.status !== "assembling") {
+    await answerCallbackQuery(callbackQuery.id, "Сначала возьмите заказ в работу");
+    return;
+  }
+
+  await sql`
+    UPDATE orders
+    SET status = 'ready',
+        updated_at = NOW()
+    WHERE id = ${order.id}
+      AND shop_id = ${profile.shop_id}
+  `;
+
+  await sql`
+    INSERT INTO order_status_history (
+      shop_id,
+      order_id,
+      from_status,
+      to_status,
+      comment,
+      created_at
+    )
+    VALUES (
+      ${profile.shop_id},
+      ${order.id},
+      ${order.status}::order_status,
+      'ready',
+      'Флорист отметил заказ готовым через Telegram',
+      NOW()
+    )
+  `;
+
+  await answerCallbackQuery(callbackQuery.id, "Заказ готов");
+
+  await sendTelegramMessage(
+    chatId,
+    [
+      `✅ Заказ ${order.order_number} готов`,
+      "",
+      "Статус в CRM изменён на «Готов».",
+      "Следующий шаг — передача курьеру."
     ].join("\n"),
     {
       reply_markup: await mainKeyboardForChat(chatId)
@@ -2561,6 +2663,12 @@ async function handleCallbackQuery(callbackQuery: TelegramCallbackQuery) {
   if (data.startsWith("florist:take:")) {
     const orderId = data.slice("florist:take:".length);
     await handleFloristTakeOrder(callbackQuery, orderId);
+    return;
+  }
+
+  if (data.startsWith("florist:ready:")) {
+    const orderId = data.slice("florist:ready:".length);
+    await handleFloristReadyOrder(callbackQuery, orderId);
     return;
   }
 
