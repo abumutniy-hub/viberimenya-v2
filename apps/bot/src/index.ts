@@ -2384,6 +2384,99 @@ async function handleContact(chatId: number) {
   );
 }
 
+async function handleFloristTakeOrder(callbackQuery: TelegramCallbackQuery, orderId: string) {
+  const message = callbackQuery.message;
+
+  if (!message || message.chat.type !== "private") {
+    await answerCallbackQuery(callbackQuery.id);
+    return;
+  }
+
+  const chatId = message.chat.id;
+  const profile = await getTelegramProfile(String(chatId));
+
+  if (!profile?.user_id) {
+    await answerCallbackQuery(callbackQuery.id, "Доступно только сотруднику");
+    return;
+  }
+
+  const orderRows = await sql<{
+    id: string;
+    order_number: string;
+    status: string;
+    florist_id: string | null;
+  }[]>`
+    SELECT id, order_number, status, florist_id
+    FROM orders
+    WHERE id = ${orderId}
+      AND shop_id = ${profile.shop_id}
+    LIMIT 1
+  `;
+
+  const order = orderRows[0];
+
+  if (!order) {
+    await answerCallbackQuery(callbackQuery.id, "Заказ не найден");
+    return;
+  }
+
+  if (order.florist_id !== profile.user_id) {
+    await answerCallbackQuery(callbackQuery.id, "Заказ назначен другому флористу");
+    return;
+  }
+
+  if (order.status === "cancelled" || order.status === "delivered") {
+    await answerCallbackQuery(callbackQuery.id, "Заказ уже закрыт");
+    return;
+  }
+
+  if (order.status === "assembling") {
+    await answerCallbackQuery(callbackQuery.id, "Заказ уже в работе");
+    return;
+  }
+
+  await sql`
+    UPDATE orders
+    SET status = 'assembling',
+        updated_at = NOW()
+    WHERE id = ${order.id}
+      AND shop_id = ${profile.shop_id}
+  `;
+
+  await sql`
+    INSERT INTO order_status_history (
+      shop_id,
+      order_id,
+      from_status,
+      to_status,
+      comment,
+      created_at
+    )
+    VALUES (
+      ${profile.shop_id},
+      ${order.id},
+      ${order.status}::order_status,
+      'assembling',
+      'Флорист взял заказ в работу через Telegram',
+      NOW()
+    )
+  `;
+
+  await answerCallbackQuery(callbackQuery.id, "Заказ взят в работу");
+
+  await sendTelegramMessage(
+    chatId,
+    [
+      `✅ Заказ ${order.order_number} взят в работу`,
+      "",
+      "Статус в CRM изменён на «Собирается»."
+    ].join("\n"),
+    {
+      reply_markup: await mainKeyboardForChat(chatId)
+    }
+  );
+}
+
 async function handleCallbackQuery(callbackQuery: TelegramCallbackQuery) {
   const data = callbackQuery.data || "";
   const message = callbackQuery.message;
@@ -2462,6 +2555,12 @@ async function handleCallbackQuery(callbackQuery: TelegramCallbackQuery) {
 
   if (data === "cart:noop") {
     await answerCallbackQuery(callbackQuery.id);
+    return;
+  }
+
+  if (data.startsWith("florist:take:")) {
+    const orderId = data.slice("florist:take:".length);
+    await handleFloristTakeOrder(callbackQuery, orderId);
     return;
   }
 
@@ -2889,9 +2988,43 @@ async function processNotificationEvents() {
       for (const chatId of recipients) {
         const payload = eventPayload(event);
         const productImageUrl = absoluteUrl(payloadValue(payload, "productImageUrl", "product_image_url"));
+        const orderId = payloadText(payload, "orderId", "order_id");
+        const crmUrl = absoluteUrl(payloadValue(payload, "crmUrl", "crm_url"));
+
+        const floristButtonRows: TelegramInlineKeyboardButton[][] = [];
+
+        if (event.type === "florist_order_assigned" && orderId) {
+          floristButtonRows.push([
+            {
+              text: "💐 Взять в работу",
+              callback_data: `florist:take:${orderId}`
+            }
+          ]);
+
+          if (crmUrl) {
+            floristButtonRows.push([
+              {
+                text: "Открыть CRM",
+                url: crmUrl
+              }
+            ]);
+          }
+        }
+
+        const floristReplyMarkup = floristButtonRows.length ? inlineKeyboard(floristButtonRows) : null;
 
         if (event.type === "florist_order_assigned" && productImageUrl) {
           await sendTelegramPhoto(chatId, productImageUrl, message);
+
+          if (floristReplyMarkup) {
+            await sendTelegramMessage(chatId, "Действие по заказу:", {
+              reply_markup: floristReplyMarkup
+            });
+          }
+        } else if (floristReplyMarkup) {
+          await sendTelegramMessage(chatId, message, {
+            reply_markup: floristReplyMarkup
+          });
         } else {
           await sendTelegramMessage(chatId, message);
         }
