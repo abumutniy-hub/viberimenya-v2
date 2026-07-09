@@ -292,23 +292,22 @@ function clientMainKeyboard() {
 }
 
 function staffMainKeyboard(role: string) {
-  const rows = [
-    [{ text: "🛍 Каталог" }, { text: "📦 Заказы" }],
-    [{ text: "🔔 Уведомления" }, { text: "👤 Профиль" }]
+  const rows: { text: string }[][] = [
+    [{ text: "👤 Профиль" }, { text: "🔔 Уведомления" }]
   ];
 
   if (["owner", "admin", "manager"].includes(role)) {
-    rows.push([{ text: "🧾 CRM" }, { text: "⚙️ Настройки" }]);
+    rows.push([{ text: "🧾 CRM" }, { text: "📦 Заказы" }]);
   }
 
-  if (["owner", "admin", "florist"].includes(role)) {
+  if (["owner", "admin"].includes(role)) {
+    rows.push([{ text: "💐 Сборка заказов" }, { text: "🚚 Доставка" }]);
+    rows.push([{ text: "⚙️ Настройки" }]);
+  } else if (role === "florist") {
     rows.push([{ text: "💐 Сборка заказов" }]);
-  }
-
-  if (["owner", "admin", "courier"].includes(role)) {
+  } else if (role === "courier") {
     rows.push([{ text: "🚚 Доставка" }]);
   }
-
 
   return {
     keyboard: rows,
