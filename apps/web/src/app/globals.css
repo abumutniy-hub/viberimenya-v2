@@ -5693,3 +5693,54 @@ body {
     flex: 1 1 auto;
   }
 }
+
+/* CRM order item thumbnails */
+.admin-order-item-row-with-image {
+  align-items: center;
+}
+
+.admin-order-item-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.admin-order-item-image,
+.admin-order-item-image-placeholder {
+  width: 58px;
+  height: 58px;
+  flex: 0 0 58px;
+  border-radius: 16px;
+  border: 1px solid rgba(25, 23, 22, 0.08);
+  background: rgba(25, 23, 22, 0.04);
+}
+
+.admin-order-item-image {
+  object-fit: cover;
+  display: block;
+}
+
+.admin-order-item-image-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(25, 23, 22, 0.44);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+@media (max-width: 760px) {
+  .admin-order-item-main {
+    align-items: flex-start;
+  }
+
+  .admin-order-item-image,
+  .admin-order-item-image-placeholder {
+    width: 48px;
+    height: 48px;
+    flex-basis: 48px;
+    border-radius: 14px;
+  }
+}

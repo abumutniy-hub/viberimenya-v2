@@ -246,7 +246,10 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
           </div>
           <InfoRow label="Тип" value={isPickup ? "Самовывоз" : "Доставка"} />
           {!isPickup ? <InfoRow label="Дата" value={dateOnly(order.delivery_date)} /> : null}
-          {!isPickup ? <InfoRow label="Интервал" value={order.delivery_comment} /> : null}
+          {!isPickup ? <InfoRow label="Интервал" value={order.delivery_interval_name} /> : null}
+          {!isPickup && order.delivery_comment ? (
+            <InfoRow label="Комментарий к доставке" value={order.delivery_comment} />
+          ) : null}
           {!isPickup ? <InfoRow label="Адрес" value={order.delivery_address_text} /> : null}
           {!isPickup && order.delivery_address_text ? (
             <DeliveryAddressActions address={String(order.delivery_address_text || "")} />
@@ -271,10 +274,22 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
 
         <div className="admin-order-items-list">
           {items.map((item, index) => (
-            <article key={`${text(item.product_id)}-${index}`} className="admin-order-item-row">
-              <div>
-                <strong>{text(item.product_name)}</strong>
-                <span>{Number(item.quantity || 0)} × {money(item.price)}</span>
+            <article key={`${text(item.product_id)}-${index}`} className="admin-order-item-row admin-order-item-row-with-image">
+              <div className="admin-order-item-main">
+                {item.image_url ? (
+                  <img
+                    className="admin-order-item-image"
+                    src={String(item.image_url)}
+                    alt={text(item.product_name)}
+                  />
+                ) : (
+                  <div className="admin-order-item-image-placeholder">Фото</div>
+                )}
+
+                <div>
+                  <strong>{text(item.product_name)}</strong>
+                  <span>{Number(item.quantity || 0)} × {money(item.price)}</span>
+                </div>
               </div>
               <strong>{money(item.total)}</strong>
             </article>

@@ -292,15 +292,24 @@ export async function adminRoutes(app: FastifyInstance) {
 
       const items = await client`
         SELECT
-          product_id,
-          product_name,
-          quantity,
-          price,
-          total,
-          created_at
-        FROM order_items
-        WHERE order_id = ${params.id}
-        ORDER BY created_at ASC
+          oi.product_id,
+          oi.product_name,
+          oi.quantity,
+          oi.price,
+          oi.total,
+          oi.created_at,
+          pi.url AS image_url
+        FROM order_items oi
+        LEFT JOIN LATERAL (
+          SELECT url
+          FROM product_images
+          WHERE shop_id = ${shop.id}
+            AND product_id = oi.product_id
+          ORDER BY is_main DESC, sort_order ASC, created_at ASC
+          LIMIT 1
+        ) pi ON true
+        WHERE oi.order_id = ${params.id}
+        ORDER BY oi.created_at ASC
       `;
 
       const history = await client`
