@@ -1,6 +1,7 @@
 import { fetchAdmin, type AdminRow } from "../../lib/admin-api";
 import { OrderActions } from "../order-actions";
 import { OrderAssigneesForm, type OrderStaffMember } from "./order-assignees-form";
+import { ContactActions } from "./contact-actions";
 
 export const dynamic = "force-dynamic";
 
@@ -224,6 +225,7 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
           </div>
           <InfoRow label="Имя" value={order.customer_name} />
           <InfoRow label="Телефон" value={order.customer_phone} />
+          <ContactActions phone={String(order.customer_phone || "")} />
           <InfoRow label="Email" value={order.customer_email} />
         </article>
 
@@ -233,6 +235,7 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
           </div>
           <InfoRow label="Имя" value={order.recipient_name} />
           <InfoRow label="Телефон" value={order.recipient_phone} />
+          <ContactActions phone={String(order.recipient_phone || "")} />
         </article>
 
         <article className="admin-panel admin-order-detail-card">
