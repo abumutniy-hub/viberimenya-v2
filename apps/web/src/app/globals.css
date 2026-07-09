@@ -5744,3 +5744,35 @@ body {
     border-radius: 14px;
   }
 }
+
+/* CRM order item row layout fix */
+.admin-order-items-list .admin-order-item-row-with-image {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.admin-order-items-list .admin-order-item-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.admin-order-items-list .admin-order-item-main > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.admin-order-items-list .admin-order-item-main strong,
+.admin-order-items-list .admin-order-item-main span {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 760px) {
+  .admin-order-items-list .admin-order-item-row-with-image {
+    align-items: flex-start;
+  }
+}

@@ -125,6 +125,13 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
   const deliveryType = String(order.delivery_type || "");
   const isPickup = deliveryType === "pickup";
   const trackingToken = String(order.tracking_token || "");
+  const deliveryIntervalText = text(order.delivery_interval_name) || text(order.delivery_comment);
+  const deliveryCommentText = text(order.delivery_comment);
+  const isDeliveryCommentJustInterval = /^\d{1,2}:\d{2}\s*[—–-]\s*\d{1,2}:\d{2}$/.test(deliveryCommentText);
+  const visibleDeliveryComment =
+    deliveryCommentText && deliveryCommentText !== deliveryIntervalText && !isDeliveryCommentJustInterval
+      ? deliveryCommentText
+      : "";
 
   return (
     <div className="admin-page admin-order-detail-page">
@@ -246,9 +253,9 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
           </div>
           <InfoRow label="Тип" value={isPickup ? "Самовывоз" : "Доставка"} />
           {!isPickup ? <InfoRow label="Дата" value={dateOnly(order.delivery_date)} /> : null}
-          {!isPickup ? <InfoRow label="Интервал" value={order.delivery_interval_name} /> : null}
-          {!isPickup && order.delivery_comment ? (
-            <InfoRow label="Комментарий к доставке" value={order.delivery_comment} />
+          {!isPickup ? <InfoRow label="Интервал" value={deliveryIntervalText} /> : null}
+          {!isPickup && visibleDeliveryComment ? (
+            <InfoRow label="Комментарий к доставке" value={visibleDeliveryComment} />
           ) : null}
           {!isPickup ? <InfoRow label="Адрес" value={order.delivery_address_text} /> : null}
           {!isPickup && order.delivery_address_text ? (
@@ -282,9 +289,7 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
                     src={String(item.image_url)}
                     alt={text(item.product_name)}
                   />
-                ) : (
-                  <div className="admin-order-item-image-placeholder">Фото</div>
-                )}
+                ) : null}
 
                 <div>
                   <strong>{text(item.product_name)}</strong>
