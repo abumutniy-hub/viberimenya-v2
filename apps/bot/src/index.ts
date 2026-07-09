@@ -2935,6 +2935,24 @@ async function handleCourierDeliveryOrders(chatId: number) {
       ]);
     }
 
+    if (order.status === "assigned_courier") {
+      rows.push([
+        {
+          text: "🚗 Выехал",
+          callback_data: `courier:start:${order.id}`
+        }
+      ]);
+    }
+
+    if (order.status === "delivering") {
+      rows.push([
+        {
+          text: "✅ Доставлено",
+          callback_data: `courier:delivered:${order.id}`
+        }
+      ]);
+    }
+
     if (order.delivery_address_text) {
       rows.push([
         {
@@ -2968,6 +2986,233 @@ async function handleCourierDeliveryOrders(chatId: number) {
       }
     );
   }
+}
+
+async function handleCourierStartDelivery(callbackQuery: TelegramCallbackQuery, orderId: string) {
+  const message = callbackQuery.message;
+
+  if (!message || message.chat.type !== "private") {
+    await answerCallbackQuery(callbackQuery.id);
+    return;
+  }
+
+  const chatId = message.chat.id;
+  const profile = await getTelegramProfile(String(chatId));
+
+  if (!profile?.user_id) {
+    await answerCallbackQuery(callbackQuery.id, "Доступно только сотруднику");
+    return;
+  }
+
+  const orderRows = await sql<{
+    id: string;
+    order_number: string;
+    status: string;
+    courier_id: string | null;
+  }[]>`
+    SELECT id, order_number, status, courier_id
+    FROM orders
+    WHERE id = ${orderId}
+      AND shop_id = ${profile.shop_id}
+    LIMIT 1
+  `;
+
+  const order = orderRows[0];
+
+  if (!order) {
+    await answerCallbackQuery(callbackQuery.id, "Заказ не найден");
+    return;
+  }
+
+  if (order.courier_id !== profile.user_id) {
+    await answerCallbackQuery(callbackQuery.id, "Заказ назначен другому курьеру");
+    return;
+  }
+
+  if (order.status === "delivering") {
+    await answerCallbackQuery(callbackQuery.id, "Вы уже в пути");
+
+    await sendTelegramMessage(
+      chatId,
+      [
+        `🚗 Вы уже в пути по заказу ${order.order_number}`,
+        "",
+        "После вручения заказа нажмите «Доставлено»."
+      ].join("\n"),
+      {
+        reply_markup: inlineKeyboard([
+          [
+            {
+              text: "✅ Доставлено",
+              callback_data: `courier:delivered:${order.id}`
+            }
+          ],
+          [
+            {
+              text: "🔄 Обновить список",
+              callback_data: "courier:list"
+            }
+          ]
+        ])
+      }
+    );
+
+    return;
+  }
+
+  if (order.status !== "assigned_courier") {
+    await answerCallbackQuery(callbackQuery.id, "Сначала примите доставку");
+    return;
+  }
+
+  await sql`
+    UPDATE orders
+    SET status = 'delivering',
+        updated_at = NOW()
+    WHERE id = ${order.id}
+      AND shop_id = ${profile.shop_id}
+  `;
+
+  await sql`
+    INSERT INTO order_status_history (
+      shop_id,
+      order_id,
+      from_status,
+      to_status,
+      comment,
+      created_at
+    )
+    VALUES (
+      ${profile.shop_id},
+      ${order.id},
+      ${order.status}::order_status,
+      'delivering',
+      'Курьер выехал на доставку через Telegram',
+      NOW()
+    )
+  `;
+
+  await answerCallbackQuery(callbackQuery.id, "Статус: в доставке");
+
+  await sendTelegramMessage(
+    chatId,
+    [
+      `🚗 Вы выехали по заказу ${order.order_number}`,
+      "",
+      "Статус в CRM изменён на «В доставке».",
+      "После вручения заказа нажмите «Доставлено»."
+    ].join("\n"),
+    {
+      reply_markup: inlineKeyboard([
+        [
+          {
+            text: "✅ Доставлено",
+            callback_data: `courier:delivered:${order.id}`
+          }
+        ],
+        [
+          {
+            text: "🔄 Обновить список",
+            callback_data: "courier:list"
+          }
+        ]
+      ])
+    }
+  );
+}
+
+async function handleCourierDeliveredOrder(callbackQuery: TelegramCallbackQuery, orderId: string) {
+  const message = callbackQuery.message;
+
+  if (!message || message.chat.type !== "private") {
+    await answerCallbackQuery(callbackQuery.id);
+    return;
+  }
+
+  const chatId = message.chat.id;
+  const profile = await getTelegramProfile(String(chatId));
+
+  if (!profile?.user_id) {
+    await answerCallbackQuery(callbackQuery.id, "Доступно только сотруднику");
+    return;
+  }
+
+  const orderRows = await sql<{
+    id: string;
+    order_number: string;
+    status: string;
+    courier_id: string | null;
+  }[]>`
+    SELECT id, order_number, status, courier_id
+    FROM orders
+    WHERE id = ${orderId}
+      AND shop_id = ${profile.shop_id}
+    LIMIT 1
+  `;
+
+  const order = orderRows[0];
+
+  if (!order) {
+    await answerCallbackQuery(callbackQuery.id, "Заказ не найден");
+    return;
+  }
+
+  if (order.courier_id !== profile.user_id) {
+    await answerCallbackQuery(callbackQuery.id, "Заказ назначен другому курьеру");
+    return;
+  }
+
+  if (order.status === "delivered") {
+    await answerCallbackQuery(callbackQuery.id, "Заказ уже доставлен");
+    return;
+  }
+
+  if (order.status !== "delivering") {
+    await answerCallbackQuery(callbackQuery.id, "Сначала отметьте выезд");
+    return;
+  }
+
+  await sql`
+    UPDATE orders
+    SET status = 'delivered',
+        delivered_at = NOW(),
+        updated_at = NOW()
+    WHERE id = ${order.id}
+      AND shop_id = ${profile.shop_id}
+  `;
+
+  await sql`
+    INSERT INTO order_status_history (
+      shop_id,
+      order_id,
+      from_status,
+      to_status,
+      comment,
+      created_at
+    )
+    VALUES (
+      ${profile.shop_id},
+      ${order.id},
+      ${order.status}::order_status,
+      'delivered',
+      'Курьер отметил доставку через Telegram',
+      NOW()
+    )
+  `;
+
+  await answerCallbackQuery(callbackQuery.id, "Заказ доставлен");
+
+  await sendTelegramMessage(
+    chatId,
+    [
+      `✅ Заказ ${order.order_number} доставлен`,
+      "",
+      "Статус в CRM изменён на «Доставлен»."
+    ].join("\n"),
+    {
+      reply_markup: await mainKeyboardForChat(chatId)
+    }
+  );
 }
 
 async function handleCourierAcceptOrder(callbackQuery: TelegramCallbackQuery, orderId: string) {
@@ -3056,10 +3301,24 @@ async function handleCourierAcceptOrder(callbackQuery: TelegramCallbackQuery, or
     [
       `🚚 Доставка по заказу ${order.order_number} принята`,
       "",
-      "Статус в CRM изменён на «Передан курьеру»."
+      "Статус в CRM изменён на «Передан курьеру».",
+      "Когда вы выедете к получателю, нажмите «Выехал»."
     ].join("\n"),
     {
-      reply_markup: await mainKeyboardForChat(chatId)
+      reply_markup: inlineKeyboard([
+        [
+          {
+            text: "🚗 Выехал",
+            callback_data: `courier:start:${order.id}`
+          }
+        ],
+        [
+          {
+            text: "🔄 Обновить список",
+            callback_data: "courier:list"
+          }
+        ]
+      ])
     }
   );
 }
@@ -3172,6 +3431,18 @@ async function handleCallbackQuery(callbackQuery: TelegramCallbackQuery) {
   if (data.startsWith("courier:accept:")) {
     const orderId = data.slice("courier:accept:".length);
     await handleCourierAcceptOrder(callbackQuery, orderId);
+    return;
+  }
+
+  if (data.startsWith("courier:start:")) {
+    const orderId = data.slice("courier:start:".length);
+    await handleCourierStartDelivery(callbackQuery, orderId);
+    return;
+  }
+
+  if (data.startsWith("courier:delivered:")) {
+    const orderId = data.slice("courier:delivered:".length);
+    await handleCourierDeliveredOrder(callbackQuery, orderId);
     return;
   }
 
