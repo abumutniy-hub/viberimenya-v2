@@ -125,9 +125,10 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
   const deliveryType = String(order.delivery_type || "");
   const isPickup = deliveryType === "pickup";
   const trackingToken = String(order.tracking_token || "");
-  const deliveryIntervalText = text(order.delivery_interval_name) || text(order.delivery_comment);
-  const deliveryCommentText = text(order.delivery_comment);
+  const deliveryIntervalName = String(order.delivery_interval_name || "").trim();
+  const deliveryCommentText = String(order.delivery_comment || "").trim();
   const isDeliveryCommentJustInterval = /^\d{1,2}:\d{2}\s*[—–-]\s*\d{1,2}:\d{2}$/.test(deliveryCommentText);
+  const deliveryIntervalText = deliveryIntervalName || (isDeliveryCommentJustInterval ? deliveryCommentText : "");
   const visibleDeliveryComment =
     deliveryCommentText && deliveryCommentText !== deliveryIntervalText && !isDeliveryCommentJustInterval
       ? deliveryCommentText
