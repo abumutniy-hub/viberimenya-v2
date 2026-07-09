@@ -2497,6 +2497,13 @@ async function handleFloristAssemblyOrders(chatId: number) {
 
     rows.push([
       {
+        text: "⚠️ Проблема",
+        callback_data: `florist:problem:${order.id}`
+      }
+    ]);
+
+    rows.push([
+      {
         text: "🔄 Обновить список",
         callback_data: "florist:list"
       }
@@ -2636,6 +2643,100 @@ async function handleFloristTakeOrder(callbackQuery: TelegramCallbackQuery, orde
           }
         ]
       ])
+    }
+  );
+}
+
+async function handleFloristProblemOrder(callbackQuery: TelegramCallbackQuery, orderId: string) {
+  const message = callbackQuery.message;
+
+  if (!message || message.chat.type !== "private") {
+    await answerCallbackQuery(callbackQuery.id);
+    return;
+  }
+
+  const chatId = message.chat.id;
+  const profile = await getTelegramProfile(String(chatId));
+
+  if (!profile?.user_id) {
+    await answerCallbackQuery(callbackQuery.id, "Доступно только сотруднику");
+    return;
+  }
+
+  const orderRows = await sql<{
+    id: string;
+    order_number: string;
+    status: string;
+    florist_id: string | null;
+  }[]>`
+    SELECT id, order_number, status, florist_id
+    FROM orders
+    WHERE id = ${orderId}
+      AND shop_id = ${profile.shop_id}
+    LIMIT 1
+  `;
+
+  const order = orderRows[0];
+
+  if (!order) {
+    await answerCallbackQuery(callbackQuery.id, "Заказ не найден");
+    return;
+  }
+
+  if (order.florist_id !== profile.user_id) {
+    await answerCallbackQuery(callbackQuery.id, "Заказ назначен другому флористу");
+    return;
+  }
+
+  if (order.status === "delivered" || order.status === "cancelled") {
+    await answerCallbackQuery(callbackQuery.id, "Заказ уже закрыт");
+    return;
+  }
+
+  if (order.status === "problem") {
+    await answerCallbackQuery(callbackQuery.id, "Проблема уже отмечена");
+    return;
+  }
+
+  await sql`
+    UPDATE orders
+    SET status = 'problem',
+        updated_at = NOW()
+    WHERE id = ${order.id}
+      AND shop_id = ${profile.shop_id}
+  `;
+
+  await sql`
+    INSERT INTO order_status_history (
+      shop_id,
+      order_id,
+      from_status,
+      to_status,
+      comment,
+      created_at
+    )
+    VALUES (
+      ${profile.shop_id},
+      ${order.id},
+      ${order.status}::order_status,
+      'problem',
+      'Флорист отметил проблему через Telegram',
+      NOW()
+    )
+  `;
+
+  await answerCallbackQuery(callbackQuery.id, "Проблема отмечена");
+
+  await sendTelegramMessage(
+    chatId,
+    [
+      `⚠️ По заказу ${order.order_number} отмечена проблема`,
+      "",
+      "Статус в CRM изменён на «Проблема».",
+      "Менеджеру нужно проверить заказ."
+    ].join("\n"),
+    {
+      reply_markup: await mainKeyboardForChat(chatId)
     }
   );
 }
@@ -2824,6 +2925,12 @@ async function handleCallbackQuery(callbackQuery: TelegramCallbackQuery) {
   if (data.startsWith("florist:ready:")) {
     const orderId = data.slice("florist:ready:".length);
     await handleFloristReadyOrder(callbackQuery, orderId);
+    return;
+  }
+
+  if (data.startsWith("florist:problem:")) {
+    const orderId = data.slice("florist:problem:".length);
+    await handleFloristProblemOrder(callbackQuery, orderId);
     return;
   }
 
