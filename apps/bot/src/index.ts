@@ -2488,6 +2488,13 @@ async function handleFloristAssemblyOrders(chatId: number) {
     if (order.status === "assembling") {
       rows.push([
         {
+          text: "📸 Загрузить фото",
+          callback_data: `florist:photo:${order.id}`
+        }
+      ]);
+
+      rows.push([
+        {
           text: "✅ Готово",
           callback_data: `florist:ready:${order.id}`
         }
@@ -2637,6 +2644,12 @@ async function handleFloristTakeOrder(callbackQuery: TelegramCallbackQuery, orde
       reply_markup: inlineKeyboard([
         [
           {
+            text: "📸 Загрузить фото",
+            callback_data: `florist:photo:${order.id}`
+          }
+        ],
+        [
+          {
             text: "✅ Готово",
             callback_data: `florist:ready:${order.id}`
           }
@@ -2733,6 +2746,68 @@ async function handleFloristProblemOrder(callbackQuery: TelegramCallbackQuery, o
       "",
       "Статус в CRM изменён на «Проблема».",
       "Менеджеру нужно проверить заказ."
+    ].join("\n"),
+    {
+      reply_markup: await mainKeyboardForChat(chatId)
+    }
+  );
+}
+
+async function handleFloristPhotoRequest(callbackQuery: TelegramCallbackQuery, orderId: string) {
+  const message = callbackQuery.message;
+
+  if (!message || message.chat.type !== "private") {
+    await answerCallbackQuery(callbackQuery.id);
+    return;
+  }
+
+  const chatId = message.chat.id;
+  const profile = await getTelegramProfile(String(chatId));
+
+  if (!profile?.user_id) {
+    await answerCallbackQuery(callbackQuery.id, "Доступно только сотруднику");
+    return;
+  }
+
+  const orderRows = await sql<{
+    id: string;
+    order_number: string;
+    status: string;
+    florist_id: string | null;
+  }[]>`
+    SELECT id, order_number, status, florist_id
+    FROM orders
+    WHERE id = ${orderId}
+      AND shop_id = ${profile.shop_id}
+    LIMIT 1
+  `;
+
+  const order = orderRows[0];
+
+  if (!order) {
+    await answerCallbackQuery(callbackQuery.id, "Заказ не найден");
+    return;
+  }
+
+  if (order.florist_id !== profile.user_id) {
+    await answerCallbackQuery(callbackQuery.id, "Заказ назначен другому флористу");
+    return;
+  }
+
+  if (order.status !== "assembling" && order.status !== "ready") {
+    await answerCallbackQuery(callbackQuery.id, "Фото можно загрузить для заказа в сборке");
+    return;
+  }
+
+  await answerCallbackQuery(callbackQuery.id, "Отправьте фото букета");
+
+  await sendTelegramMessage(
+    chatId,
+    [
+      `📸 Фото для заказа ${order.order_number}`,
+      "",
+      "Отправьте фото готового букета следующим сообщением.",
+      "На следующем шаге подключим сохранение фото в CRM."
     ].join("\n"),
     {
       reply_markup: await mainKeyboardForChat(chatId)
@@ -3406,6 +3481,12 @@ async function handleCallbackQuery(callbackQuery: TelegramCallbackQuery) {
   if (data.startsWith("florist:take:")) {
     const orderId = data.slice("florist:take:".length);
     await handleFloristTakeOrder(callbackQuery, orderId);
+    return;
+  }
+
+  if (data.startsWith("florist:photo:")) {
+    const orderId = data.slice("florist:photo:".length);
+    await handleFloristPhotoRequest(callbackQuery, orderId);
     return;
   }
 
