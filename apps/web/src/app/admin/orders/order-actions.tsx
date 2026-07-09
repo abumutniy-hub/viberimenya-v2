@@ -45,6 +45,22 @@ function roleText(role: string) {
   return map[role] || role;
 }
 
+function orderStatusText(status: string) {
+  const map: Record<string, string> = {
+    new: "Новый",
+    confirmed: "Подтверждён",
+    assembling: "Собирается",
+    ready: "Готов",
+    assigned_courier: "Передан курьеру",
+    delivering: "В доставке",
+    delivered: "Доставлен",
+    cancelled: "Отменён",
+    problem: "Проблема"
+  };
+
+  return map[status] || status || "—";
+}
+
 export function OrderActions({
   orderId,
   status,
@@ -306,7 +322,7 @@ export function OrderActions({
           {isConfirming ? "..." : "Подтвердить"}
         </button>
       ) : (
-        <span className="admin-status-badge">{status === "confirmed" ? "Подтверждён" : status}</span>
+        <span className="admin-status-badge">{orderStatusText(status)}</span>
       )}
 
       {canAddPaymentLink ? (
