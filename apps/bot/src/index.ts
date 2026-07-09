@@ -2835,6 +2835,235 @@ async function handleFloristReadyOrder(callbackQuery: TelegramCallbackQuery, ord
   );
 }
 
+async function handleCourierDeliveryOrders(chatId: number) {
+  const replyMarkup = await mainKeyboardForChat(chatId);
+  const profile = await getTelegramProfile(String(chatId));
+
+  if (!profile?.user_id) {
+    await sendTelegramMessage(chatId, "🚚 Раздел доставки доступен только сотруднику.", {
+      reply_markup: replyMarkup
+    });
+    return;
+  }
+
+  if (!["owner", "admin", "courier"].includes(profile.role || "")) {
+    await sendTelegramMessage(chatId, "🚚 Раздел доставки доступен только курьеру.", {
+      reply_markup: replyMarkup
+    });
+    return;
+  }
+
+  const orders = await sql<{
+    id: string;
+    order_number: string;
+    status: string;
+    delivery_date: string | null;
+    delivery_interval_name: string | null;
+    delivery_address_text: string | null;
+    delivery_comment: string | null;
+    recipient_name: string | null;
+    recipient_phone: string | null;
+    created_at: string;
+  }[]>`
+    SELECT
+      o.id,
+      o.order_number,
+      o.status,
+      o.delivery_date,
+      di.name AS delivery_interval_name,
+      o.delivery_address_text,
+      o.delivery_comment,
+      o.recipient_name,
+      o.recipient_phone,
+      o.created_at
+    FROM orders o
+    LEFT JOIN delivery_intervals di
+      ON di.id = o.delivery_interval_id
+     AND di.shop_id = o.shop_id
+    WHERE o.shop_id = ${profile.shop_id}
+      AND o.courier_id = ${profile.user_id}
+      AND o.status IN ('ready', 'assigned_courier', 'delivering')
+    ORDER BY
+      CASE o.status
+        WHEN 'ready' THEN 1
+        WHEN 'assigned_courier' THEN 2
+        WHEN 'delivering' THEN 3
+        ELSE 4
+      END,
+      o.delivery_date NULLS LAST,
+      o.created_at DESC
+    LIMIT 10
+  `;
+
+  if (!orders.length) {
+    await sendTelegramMessage(
+      chatId,
+      [
+        "🚚 Доставка",
+        "",
+        "У вас пока нет активных доставок."
+      ].join("\n"),
+      {
+        reply_markup: replyMarkup
+      }
+    );
+    return;
+  }
+
+  await sendTelegramMessage(
+    chatId,
+    [
+      "🚚 Доставка",
+      "",
+      `Активных доставок: ${orders.length}`,
+      "Ниже отправляю карточки заказов."
+    ].join("\n"),
+    {
+      reply_markup: replyMarkup
+    }
+  );
+
+  for (const order of orders) {
+    const rows: TelegramInlineKeyboardButton[][] = [];
+
+    if (order.status === "ready") {
+      rows.push([
+        {
+          text: "🚚 Принять доставку",
+          callback_data: `courier:accept:${order.id}`
+        }
+      ]);
+    }
+
+    if (order.delivery_address_text) {
+      rows.push([
+        {
+          text: "🗺 Маршрут",
+          url: `https://yandex.ru/maps/?text=${encodeURIComponent(order.delivery_address_text)}`
+        }
+      ]);
+    }
+
+    rows.push([
+      {
+        text: "🔄 Обновить список",
+        callback_data: "courier:list"
+      }
+    ]);
+
+    await sendTelegramMessage(
+      chatId,
+      [
+        `Заказ ${order.order_number}`,
+        `Статус: ${orderStatusText(order.status)}`,
+        order.delivery_date ? `Дата: ${shortDateText(order.delivery_date)}` : "",
+        order.delivery_interval_name ? `Интервал: ${order.delivery_interval_name}` : "",
+        order.delivery_address_text ? `Адрес: ${order.delivery_address_text}` : "",
+        order.recipient_name ? `Получатель: ${order.recipient_name}` : "",
+        order.recipient_phone ? `Телефон: ${order.recipient_phone}` : "",
+        order.delivery_comment ? `Комментарий: ${order.delivery_comment}` : ""
+      ].filter(Boolean).join("\n"),
+      {
+        reply_markup: inlineKeyboard(rows)
+      }
+    );
+  }
+}
+
+async function handleCourierAcceptOrder(callbackQuery: TelegramCallbackQuery, orderId: string) {
+  const message = callbackQuery.message;
+
+  if (!message || message.chat.type !== "private") {
+    await answerCallbackQuery(callbackQuery.id);
+    return;
+  }
+
+  const chatId = message.chat.id;
+  const profile = await getTelegramProfile(String(chatId));
+
+  if (!profile?.user_id) {
+    await answerCallbackQuery(callbackQuery.id, "Доступно только сотруднику");
+    return;
+  }
+
+  const orderRows = await sql<{
+    id: string;
+    order_number: string;
+    status: string;
+    courier_id: string | null;
+  }[]>`
+    SELECT id, order_number, status, courier_id
+    FROM orders
+    WHERE id = ${orderId}
+      AND shop_id = ${profile.shop_id}
+    LIMIT 1
+  `;
+
+  const order = orderRows[0];
+
+  if (!order) {
+    await answerCallbackQuery(callbackQuery.id, "Заказ не найден");
+    return;
+  }
+
+  if (order.courier_id !== profile.user_id) {
+    await answerCallbackQuery(callbackQuery.id, "Заказ назначен другому курьеру");
+    return;
+  }
+
+  if (order.status === "assigned_courier") {
+    await answerCallbackQuery(callbackQuery.id, "Доставка уже принята");
+    await handleCourierDeliveryOrders(chatId);
+    return;
+  }
+
+  if (order.status !== "ready") {
+    await answerCallbackQuery(callbackQuery.id, "Заказ ещё не готов к доставке");
+    return;
+  }
+
+  await sql`
+    UPDATE orders
+    SET status = 'assigned_courier',
+        updated_at = NOW()
+    WHERE id = ${order.id}
+      AND shop_id = ${profile.shop_id}
+  `;
+
+  await sql`
+    INSERT INTO order_status_history (
+      shop_id,
+      order_id,
+      from_status,
+      to_status,
+      comment,
+      created_at
+    )
+    VALUES (
+      ${profile.shop_id},
+      ${order.id},
+      ${order.status}::order_status,
+      'assigned_courier',
+      'Курьер принял доставку через Telegram',
+      NOW()
+    )
+  `;
+
+  await answerCallbackQuery(callbackQuery.id, "Доставка принята");
+
+  await sendTelegramMessage(
+    chatId,
+    [
+      `🚚 Доставка по заказу ${order.order_number} принята`,
+      "",
+      "Статус в CRM изменён на «Передан курьеру»."
+    ].join("\n"),
+    {
+      reply_markup: await mainKeyboardForChat(chatId)
+    }
+  );
+}
+
 async function handleCallbackQuery(callbackQuery: TelegramCallbackQuery) {
   const data = callbackQuery.data || "";
   const message = callbackQuery.message;
@@ -2937,6 +3166,18 @@ async function handleCallbackQuery(callbackQuery: TelegramCallbackQuery) {
   if (data === "florist:list") {
     await answerCallbackQuery(callbackQuery.id);
     await handleFloristAssemblyOrders(chatId);
+    return;
+  }
+
+  if (data.startsWith("courier:accept:")) {
+    const orderId = data.slice("courier:accept:".length);
+    await handleCourierAcceptOrder(callbackQuery, orderId);
+    return;
+  }
+
+  if (data === "courier:list") {
+    await answerCallbackQuery(callbackQuery.id);
+    await handleCourierDeliveryOrders(chatId);
     return;
   }
 
@@ -3045,10 +3286,7 @@ async function handleUpdate(update: TelegramUpdate) {
   }
 
   if (text === "🚚 Доставка") {
-    const replyMarkup = await mainKeyboardForChat(message.chat.id);
-    await sendTelegramMessage(message.chat.id, "🚚 Раздел доставки закреплён за ролью курьера.", {
-      reply_markup: replyMarkup
-    });
+    await handleCourierDeliveryOrders(message.chat.id);
     return;
   }
 
@@ -3195,7 +3433,28 @@ function formatEvent(event: NotificationEvent): string {
       ].filter(Boolean).join("\n");
     }
 
-    if (event.type === "order_created") {
+    if (event.type === "courier_order_assigned") {
+    const deliveryDate = payloadText(payload, "deliveryDate", "delivery_date");
+    const deliveryIntervalName = payloadText(payload, "deliveryIntervalName", "delivery_interval_name");
+    const deliveryAddressText = payloadText(payload, "deliveryAddressText", "delivery_address_text");
+    const deliveryComment = payloadText(payload, "deliveryComment", "delivery_comment");
+    const recipientName = payloadText(payload, "recipientName", "recipient_name");
+    const recipientPhone = payloadText(payload, "recipientPhone", "recipient_phone");
+
+    return [
+      `🚚 Вам назначена доставка по заказу ${orderTitle}`,
+      deliveryDate ? `Дата: ${shortDateText(deliveryDate)}` : "",
+      deliveryIntervalName ? `Интервал: ${deliveryIntervalName}` : "",
+      deliveryAddressText ? `Адрес: ${deliveryAddressText}` : "",
+      recipientName ? `Получатель: ${recipientName}` : "",
+      recipientPhone ? `Телефон: ${recipientPhone}` : "",
+      deliveryComment ? `Комментарий: ${deliveryComment}` : "",
+      "",
+      "Откройте раздел доставки и примите заказ в работу."
+    ].filter(Boolean).join("\n");
+  }
+
+  if (event.type === "order_created") {
       return [
         `🌸 Заказ ${orderTitle} принят`,
         totalText ? `Сумма заказа: ${totalText}` : "",
@@ -3364,39 +3623,58 @@ async function processNotificationEvents() {
         const orderId = payloadText(payload, "orderId", "order_id");
         const crmUrl = absoluteUrl(payloadValue(payload, "crmUrl", "crm_url"));
 
-        const floristButtonRows: TelegramInlineKeyboardButton[][] = [];
+        const deliveryAddressText = payloadText(payload, "deliveryAddressText", "delivery_address_text");
+        const actionButtonRows: TelegramInlineKeyboardButton[][] = [];
 
         if (event.type === "florist_order_assigned" && orderId) {
-          floristButtonRows.push([
+          actionButtonRows.push([
             {
               text: "💐 Взять в работу",
               callback_data: `florist:take:${orderId}`
             }
           ]);
+        }
 
-          if (crmUrl) {
-            floristButtonRows.push([
+        if (event.type === "courier_order_assigned" && orderId) {
+          actionButtonRows.push([
+            {
+              text: "🚚 Принять доставку",
+              callback_data: `courier:accept:${orderId}`
+            }
+          ]);
+
+          if (deliveryAddressText) {
+            actionButtonRows.push([
               {
-                text: "Открыть CRM",
-                url: crmUrl
+                text: "🗺 Маршрут",
+                url: `https://yandex.ru/maps/?text=${encodeURIComponent(deliveryAddressText)}`
               }
             ]);
           }
         }
 
-        const floristReplyMarkup = floristButtonRows.length ? inlineKeyboard(floristButtonRows) : null;
+        if ((event.type === "florist_order_assigned" || event.type === "courier_order_assigned") && crmUrl) {
+          actionButtonRows.push([
+            {
+              text: "Открыть CRM",
+              url: crmUrl
+            }
+          ]);
+        }
+
+        const actionReplyMarkup = actionButtonRows.length ? inlineKeyboard(actionButtonRows) : null;
 
         if (event.type === "florist_order_assigned" && productImageUrl) {
           await sendTelegramPhoto(chatId, productImageUrl, message);
 
-          if (floristReplyMarkup) {
+          if (actionReplyMarkup) {
             await sendTelegramMessage(chatId, "Действие по заказу:", {
-              reply_markup: floristReplyMarkup
+              reply_markup: actionReplyMarkup
             });
           }
-        } else if (floristReplyMarkup) {
+        } else if (actionReplyMarkup) {
           await sendTelegramMessage(chatId, message, {
-            reply_markup: floristReplyMarkup
+            reply_markup: actionReplyMarkup
           });
         } else {
           await sendTelegramMessage(chatId, message);

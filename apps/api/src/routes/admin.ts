@@ -363,14 +363,35 @@ export async function adminRoutes(app: FastifyInstance) {
         id: string;
         order_number: string;
         florist_id: string | null;
+        courier_id: string | null;
         total: number | null;
         delivery_date: string | null;
+        delivery_address_text: string | null;
+        delivery_comment: string | null;
+        recipient_name: string | null;
+        recipient_phone: string | null;
+        delivery_interval_name: string | null;
         tracking_token: string | null;
       }[]>`
-        SELECT id, order_number, florist_id, total, delivery_date, tracking_token
-        FROM orders
-        WHERE shop_id = ${shop.id}
-          AND id = ${params.id}
+        SELECT
+          o.id,
+          o.order_number,
+          o.florist_id,
+          o.courier_id,
+          o.total,
+          o.delivery_date,
+          o.delivery_address_text,
+          o.delivery_comment,
+          o.recipient_name,
+          o.recipient_phone,
+          di.name AS delivery_interval_name,
+          o.tracking_token
+        FROM orders o
+        LEFT JOIN delivery_intervals di
+          ON di.id = o.delivery_interval_id
+         AND di.shop_id = o.shop_id
+        WHERE o.shop_id = ${shop.id}
+          AND o.id = ${params.id}
         LIMIT 1
       `;
 
@@ -491,6 +512,70 @@ export async function adminRoutes(app: FastifyInstance) {
               'telegram',
               'staff',
               ${florist.telegram_id},
+              'pending',
+              CAST(${JSON.stringify(notificationPayload)} AS jsonb),
+              NOW(),
+              NOW()
+            )
+          `;
+        }
+      }
+
+      if (courierId && courierId !== order.courier_id) {
+        const courierRows = await client<{ telegram_id: string; name: string | null }[]>`
+          SELECT ta.telegram_id, u.name
+          FROM shop_users su
+          JOIN users u ON u.id = su.user_id
+          JOIN telegram_accounts ta
+            ON ta.shop_id = su.shop_id
+           AND ta.user_id = su.user_id
+           AND ta.is_active = true
+          WHERE su.shop_id = ${shop.id}
+            AND su.user_id = ${courierId}
+            AND su.role = 'courier'
+            AND su.is_active = true
+          ORDER BY ta.linked_at DESC
+          LIMIT 1
+        `;
+
+        const courier = courierRows[0];
+
+        if (courier?.telegram_id) {
+          const notificationPayload = {
+            orderId: order.id,
+            orderNumber: order.order_number,
+            courierId,
+            courierName: courier.name,
+            deliveryDate: order.delivery_date,
+            deliveryIntervalName: order.delivery_interval_name,
+            deliveryAddressText: order.delivery_address_text,
+            deliveryComment: order.delivery_comment,
+            recipientName: order.recipient_name,
+            recipientPhone: order.recipient_phone,
+            trackingUrl: order.tracking_token ? `/order/track/${order.tracking_token}` : null,
+            crmUrl: `/admin/orders/${order.id}`
+          };
+
+          await client`
+            INSERT INTO notification_events (
+              shop_id,
+              order_id,
+              type,
+              channel,
+              recipient_type,
+              recipient_telegram_id,
+              status,
+              payload,
+              created_at,
+              updated_at
+            )
+            VALUES (
+              ${shop.id},
+              ${order.id},
+              'courier_order_assigned',
+              'telegram',
+              'staff',
+              ${courier.telegram_id},
               'pending',
               CAST(${JSON.stringify(notificationPayload)} AS jsonb),
               NOW(),
