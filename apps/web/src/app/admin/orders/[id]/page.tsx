@@ -2,6 +2,7 @@ import { fetchAdmin, type AdminRow } from "../../lib/admin-api";
 import { OrderActions } from "../order-actions";
 import { OrderAssigneesForm, type OrderStaffMember } from "./order-assignees-form";
 import { ContactActions } from "./contact-actions";
+import { InternalCommentForm } from "./internal-comment-form";
 
 export const dynamic = "force-dynamic";
 
@@ -298,9 +299,26 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
 
         <article className="admin-panel admin-order-detail-card">
           <div className="admin-panel-head">
-            <h2>Комментарий</h2>
+            <div>
+              <span>От клиента</span>
+              <h2>Комментарий клиента</h2>
+            </div>
           </div>
           <p className="admin-order-comment">{text(order.customer_comment)}</p>
+        </article>
+
+        <article className="admin-panel admin-order-detail-card">
+          <div className="admin-panel-head">
+            <div>
+              <span>Только для CRM</span>
+              <h2>Внутренний комментарий</h2>
+            </div>
+          </div>
+
+          <InternalCommentForm
+            orderId={String(order.id)}
+            initialValue={String(order.internal_comment || "")}
+          />
         </article>
       </section>
     </div>

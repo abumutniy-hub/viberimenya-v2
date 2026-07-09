@@ -72,6 +72,10 @@ const orderAssigneesSchema = z.object({
   courierId: z.string().uuid().optional().or(z.literal("")).default("")
 });
 
+const orderInternalCommentSchema = z.object({
+  internalComment: z.string().max(3000).optional().default("")
+});
+
 function slugify(value: string) {
   const map: Record<string, string> = {
     а: "a", б: "b", в: "v", г: "g", д: "d", е: "e", ё: "e", ж: "zh", з: "z",
@@ -353,6 +357,45 @@ export async function adminRoutes(app: FastifyInstance) {
         items,
         history,
         staff
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.patch("/api/admin/orders/:id/internal-comment", async (request, reply) => {
+    const params = z.object({
+      id: z.string().uuid()
+    }).parse(request.params ?? {});
+
+    const body = orderInternalCommentSchema.parse(request.body ?? {});
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+      const internalComment = body.internalComment.trim() || null;
+
+      const updatedRows = await client`
+        UPDATE orders
+        SET internal_comment = ${internalComment},
+            updated_at = NOW()
+        WHERE shop_id = ${shop.id}
+          AND id = ${params.id}
+        RETURNING id, order_number, internal_comment, updated_at
+      `;
+
+      const updatedOrder = updatedRows[0];
+
+      if (!updatedOrder) {
+        return reply.status(404).send({
+          ok: false,
+          message: "Заказ не найден"
+        });
+      }
+
+      return {
+        ok: true,
+        order: updatedOrder
       };
     } finally {
       await client.end();

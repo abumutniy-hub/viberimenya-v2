@@ -5527,3 +5527,79 @@ body {
     flex: 1 1 auto;
   }
 }
+
+/* CRM order internal comment */
+.admin-internal-comment-form {
+  display: grid;
+  gap: 12px;
+  padding: 16px 18px 18px;
+  border-top: 1px solid rgba(25, 23, 22, 0.07);
+}
+
+.admin-internal-comment-form textarea {
+  width: 100%;
+  min-height: 150px;
+  resize: vertical;
+  border: 1px solid rgba(25, 23, 22, 0.12);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.78);
+  color: #171414;
+  padding: 14px 15px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1.45;
+  outline: none;
+}
+
+.admin-internal-comment-form textarea:focus {
+  border-color: rgba(25, 23, 22, 0.32);
+  box-shadow: 0 0 0 4px rgba(25, 23, 22, 0.06);
+}
+
+.admin-internal-comment-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.admin-internal-comment-actions button {
+  appearance: none;
+  border: 0;
+  border-radius: 999px;
+  background: #171414;
+  color: #fff;
+  cursor: pointer;
+  min-height: 38px;
+  padding: 0 16px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.admin-internal-comment-actions button:disabled {
+  cursor: progress;
+  opacity: 0.65;
+}
+
+.admin-internal-comment-actions span {
+  color: rgba(25, 23, 22, 0.62);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.admin-internal-comment-actions .is-error {
+  color: #b42318;
+}
+
+@media (max-width: 760px) {
+  .admin-internal-comment-form {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .admin-internal-comment-actions button {
+    width: 100%;
+  }
+}
