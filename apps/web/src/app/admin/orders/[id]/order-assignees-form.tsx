@@ -51,6 +51,31 @@ function staffLabel(member: OrderStaffMember) {
   return parts.join(" · ");
 }
 
+function staffHint(role: "manager" | "florist" | "courier", members: OrderStaffMember[]) {
+  if (!members.length) {
+    if (role === "manager") return "Нет активных менеджеров";
+    if (role === "florist") return "Нет активных флористов";
+    return "Нет активных курьеров";
+  }
+
+  const linkedCount = members.filter((member) => text(member.telegram_id)).length;
+
+  if (role === "florist") {
+    return linkedCount
+      ? `Telegram привязан: ${linkedCount} из ${members.length}`
+      : "Telegram не привязан — уведомления не будут приходить";
+  }
+
+  if (role === "courier") {
+    return linkedCount
+      ? `Telegram привязан: ${linkedCount} из ${members.length}`
+      : "Telegram не привязан — доставки не будут приходить";
+  }
+
+  return `Активных менеджеров: ${members.length}`;
+}
+
+
 export function OrderAssigneesForm({
   orderId,
   currentManagerId,
@@ -120,11 +145,7 @@ export function OrderAssigneesForm({
             );
           })}
         </select>
-        {!members.length ? (
-          <small>Нет активных сотрудников</small>
-        ) : (
-          <small>&nbsp;</small>
-        )}
+        <small>{staffHint(role, members)}</small>
       </label>
     );
   }
