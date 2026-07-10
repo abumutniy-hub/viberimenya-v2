@@ -3285,11 +3285,32 @@ async function handleCourierDeliveryOrders(chatId: number) {
       ]);
     }
 
-    if (order.delivery_address_text) {
+    const recipientPhone = normalizePhone(String(order.recipient_phone || ""));
+
+    if (recipientPhone) {
       rows.push([
         {
-          text: "🗺 Маршрут",
-          url: `https://yandex.ru/maps/?text=${encodeURIComponent(order.delivery_address_text)}`
+          text: "📞 Позвонить",
+          url: `tel:+${recipientPhone}`
+        },
+        {
+          text: "WhatsApp",
+          url: `https://wa.me/${recipientPhone}`
+        }
+      ]);
+    }
+
+    if (order.delivery_address_text) {
+      const encodedAddress = encodeURIComponent(order.delivery_address_text);
+
+      rows.push([
+        {
+          text: "Яндекс.Карты",
+          url: `https://yandex.ru/maps/?text=${encodedAddress}`
+        },
+        {
+          text: "Google Maps",
+          url: `https://www.google.com/maps/search/?api=1&query=${encodedAddress}`
         }
       ]);
     }
