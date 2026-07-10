@@ -3062,8 +3062,9 @@ async function handleFloristReadyOrder(callbackQuery: TelegramCallbackQuery, ord
     order_number: string;
     status: string;
     florist_id: string | null;
+    bouquet_photo_url: string | null;
   }[]>`
-    SELECT id, order_number, status, florist_id
+    SELECT id, order_number, status, florist_id, bouquet_photo_url
     FROM orders
     WHERE id = ${orderId}
       AND shop_id = ${profile.shop_id}
@@ -3089,6 +3090,37 @@ async function handleFloristReadyOrder(callbackQuery: TelegramCallbackQuery, ord
 
   if (order.status !== "assembling") {
     await answerCallbackQuery(callbackQuery.id, "Сначала возьмите заказ в работу");
+    return;
+  }
+
+  if (!order.bouquet_photo_url) {
+    await answerCallbackQuery(callbackQuery.id, "Сначала загрузите фото букета");
+
+    await sendTelegramMessage(
+      chatId,
+      [
+        `📸 По заказу ${order.order_number} сначала нужно загрузить фото букета`,
+        "",
+        "Нажмите «📸 Загрузить фото» и отправьте фото готовой композиции."
+      ].join("\n"),
+      {
+        reply_markup: inlineKeyboard([
+          [
+            {
+              text: "📸 Загрузить фото",
+              callback_data: `florist:photo:${order.id}`
+            }
+          ],
+          [
+            {
+              text: "🔄 Сборка заказов",
+              callback_data: "florist:list"
+            }
+          ]
+        ])
+      }
+    );
+
     return;
   }
 
