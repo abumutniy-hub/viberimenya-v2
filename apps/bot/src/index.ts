@@ -4177,6 +4177,10 @@ function formatEvent(event: NotificationEvent): string {
 async function getRecipients(event: NotificationEvent): Promise<string[]> {
   const directRecipient = valueToText(event.recipient_telegram_id).trim();
 
+  if (event.recipient_type === "staff" && event.type === "order_confirmed") {
+    return [];
+  }
+
   if (directRecipient) {
     return [directRecipient];
   }
