@@ -189,14 +189,14 @@ async function queueCustomerOrderNotification(params: {
     SELECT
       o.shop_id,
       o.id,
-      ${params.type},
+      ${params.type}::text,
       'telegram',
       'customer',
       'pending',
       jsonb_build_object(
         'orderId', o.id,
         'orderNumber', o.order_number,
-        'status', ${params.status},
+        'status', ${params.status}::text,
         'customerName', c.name,
         'customerPhone', c.phone,
         'recipientName', o.recipient_name,
