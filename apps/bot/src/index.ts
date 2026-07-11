@@ -88,6 +88,14 @@ const pendingBouquetPhotoRequests = new Map<number, {
   createdAt: number;
 }>();
 
+const pendingFloristProblemRequests = new Map<number, {
+  orderId: string;
+  orderNumber: string;
+  shopId: string;
+  userId: string;
+  createdAt: number;
+}>();
+
 if (!DATABASE_URL) {
   throw new Error("DATABASE_URL is required");
 }
@@ -3137,7 +3145,10 @@ async function handleFloristTakeOrder(callbackQuery: TelegramCallbackQuery, orde
   );
 }
 
-async function handleFloristProblemOrder(callbackQuery: TelegramCallbackQuery, orderId: string) {
+async function handleFloristProblemOrder(
+  callbackQuery: TelegramCallbackQuery,
+  orderId: string
+) {
   const message = callbackQuery.message;
 
   if (!message || message.chat.type !== "private") {
@@ -3149,7 +3160,10 @@ async function handleFloristProblemOrder(callbackQuery: TelegramCallbackQuery, o
   const profile = await getTelegramProfile(String(chatId));
 
   if (!profile?.user_id) {
-    await answerCallbackQuery(callbackQuery.id, "Доступно только сотруднику");
+    await answerCallbackQuery(
+      callbackQuery.id,
+      "Доступно только сотруднику"
+    );
     return;
   }
 
@@ -3159,7 +3173,11 @@ async function handleFloristProblemOrder(callbackQuery: TelegramCallbackQuery, o
     status: string;
     florist_id: string | null;
   }[]>`
-    SELECT id, order_number, status, florist_id
+    SELECT
+      id,
+      order_number,
+      status,
+      florist_id
     FROM orders
     WHERE id = ${orderId}
       AND shop_id = ${profile.shop_id}
@@ -3169,32 +3187,273 @@ async function handleFloristProblemOrder(callbackQuery: TelegramCallbackQuery, o
   const order = orderRows[0];
 
   if (!order) {
-    await answerCallbackQuery(callbackQuery.id, "Заказ не найден");
+    await answerCallbackQuery(
+      callbackQuery.id,
+      "Заказ не найден"
+    );
     return;
   }
 
   if (order.florist_id !== profile.user_id) {
-    await answerCallbackQuery(callbackQuery.id, "Заказ назначен другому флористу");
+    await answerCallbackQuery(
+      callbackQuery.id,
+      "Заказ назначен другому флористу"
+    );
     return;
   }
 
-  if (order.status === "delivered" || order.status === "cancelled") {
-    await answerCallbackQuery(callbackQuery.id, "Заказ уже закрыт");
+  if (
+    order.status === "delivered" ||
+    order.status === "cancelled"
+  ) {
+    await answerCallbackQuery(
+      callbackQuery.id,
+      "Заказ уже закрыт"
+    );
     return;
   }
 
   if (order.status === "problem") {
-    await answerCallbackQuery(callbackQuery.id, "Проблема уже отмечена");
+    await answerCallbackQuery(
+      callbackQuery.id,
+      "Проблема уже отмечена"
+    );
     return;
   }
 
-  await sql`
-    UPDATE orders
-    SET status = 'problem',
-        updated_at = NOW()
-    WHERE id = ${order.id}
-      AND shop_id = ${profile.shop_id}
+  pendingBouquetPhotoRequests.delete(chatId);
+
+  pendingFloristProblemRequests.set(chatId, {
+    orderId: order.id,
+    orderNumber: order.order_number,
+    shopId: profile.shop_id,
+    userId: profile.user_id,
+    createdAt: Date.now()
+  });
+
+  await answerCallbackQuery(
+    callbackQuery.id,
+    "Опишите проблему"
+  );
+
+  await sendTelegramMessage(
+    chatId,
+    [
+      `⚠️ Опишите проблему по заказу ${order.order_number}`,
+      "",
+      "Напишите одним сообщением, что произошло и что требуется от менеджера.",
+      "",
+      "Например:",
+      "«Нет нужного сорта роз, требуется согласовать замену с клиентом».",
+      "",
+      "Для отмены отправьте /cancel.",
+      "Запрос действует 15 минут."
+    ].join("\n"),
+    {
+      reply_markup: await mainKeyboardForChat(chatId)
+    }
+  );
+}
+
+async function handleFloristProblemReasonMessage(
+  message: TelegramMessage,
+  text: string
+): Promise<boolean> {
+  const chatId = message.chat.id;
+  const request = pendingFloristProblemRequests.get(chatId);
+
+  if (!request) {
+    return false;
+  }
+
+  const navigationTexts = new Set([
+    "👤 Профиль",
+    "🛍 Каталог",
+    "📦 Мои заказы",
+    "📦 Заказы",
+    "🎁 Бонусы",
+    "☎️ Связь",
+    "🧺 Корзина",
+    "🧾 CRM",
+    "⚙️ Настройки",
+    "💐 Сборка заказов",
+    "🚚 Доставка",
+    "🔔 Уведомления"
+  ]);
+
+  if (
+    text.startsWith("/start") ||
+    text === "/menu" ||
+    navigationTexts.has(text)
+  ) {
+    pendingFloristProblemRequests.delete(chatId);
+    return false;
+  }
+
+  if (text === "/cancel") {
+    pendingFloristProblemRequests.delete(chatId);
+
+    await sendTelegramMessage(
+      chatId,
+      [
+        `Отметка проблемы по заказу ${request.orderNumber} отменена.`,
+        "",
+        "Статус заказа не изменялся."
+      ].join("\n"),
+      {
+        reply_markup: await mainKeyboardForChat(chatId)
+      }
+    );
+
+    return true;
+  }
+
+  if (Date.now() - request.createdAt > 15 * 60 * 1000) {
+    pendingFloristProblemRequests.delete(chatId);
+
+    await sendTelegramMessage(
+      chatId,
+      [
+        `Время ввода причины по заказу ${request.orderNumber} истекло.`,
+        "",
+        "Нажмите «⚠️ Проблема» ещё раз."
+      ].join("\n"),
+      {
+        reply_markup: await mainKeyboardForChat(chatId)
+      }
+    );
+
+    return true;
+  }
+
+  const reason = text.trim();
+
+  if (reason.length < 3) {
+    await sendTelegramMessage(
+      chatId,
+      "Опишите проблему подробнее — минимум 3 символа."
+    );
+    return true;
+  }
+
+  if (reason.length > 1000) {
+    await sendTelegramMessage(
+      chatId,
+      "Описание слишком длинное. Сократите его до 1000 символов."
+    );
+    return true;
+  }
+
+  const profile = await getTelegramProfile(String(chatId));
+
+  if (
+    !profile?.user_id ||
+    profile.shop_id !== request.shopId ||
+    profile.user_id !== request.userId
+  ) {
+    pendingFloristProblemRequests.delete(chatId);
+
+    await sendTelegramMessage(
+      chatId,
+      "Не удалось подтвердить профиль флориста. Откройте раздел сборки заказов повторно."
+    );
+
+    return true;
+  }
+
+  const orderRows = await sql<{
+    id: string;
+    order_number: string;
+    status: string;
+    florist_id: string | null;
+    manager_id: string | null;
+  }[]>`
+    SELECT
+      id,
+      order_number,
+      status,
+      florist_id,
+      manager_id
+    FROM orders
+    WHERE id = ${request.orderId}
+      AND shop_id = ${request.shopId}
+    LIMIT 1
   `;
+
+  const order = orderRows[0];
+
+  if (!order) {
+    pendingFloristProblemRequests.delete(chatId);
+
+    await sendTelegramMessage(
+      chatId,
+      "Заказ больше не найден."
+    );
+
+    return true;
+  }
+
+  if (order.florist_id !== profile.user_id) {
+    pendingFloristProblemRequests.delete(chatId);
+
+    await sendTelegramMessage(
+      chatId,
+      "Заказ больше не назначен вам."
+    );
+
+    return true;
+  }
+
+  if (
+    order.status === "delivered" ||
+    order.status === "cancelled"
+  ) {
+    pendingFloristProblemRequests.delete(chatId);
+
+    await sendTelegramMessage(
+      chatId,
+      "Заказ уже закрыт. Отметить проблему нельзя."
+    );
+
+    return true;
+  }
+
+  if (order.status === "problem") {
+    pendingFloristProblemRequests.delete(chatId);
+
+    await sendTelegramMessage(
+      chatId,
+      "По этому заказу проблема уже отмечена."
+    );
+
+    return true;
+  }
+
+  const updatedRows = await sql<{ id: string }[]>`
+    UPDATE orders
+    SET
+      status = 'problem',
+      updated_at = NOW()
+    WHERE id = ${order.id}
+      AND shop_id = ${request.shopId}
+      AND florist_id = ${profile.user_id}
+      AND status = ${order.status}::order_status
+    RETURNING id
+  `;
+
+  if (updatedRows.length === 0) {
+    pendingFloristProblemRequests.delete(chatId);
+
+    await sendTelegramMessage(
+      chatId,
+      "Статус заказа уже изменился. Обновите список заказов."
+    );
+
+    return true;
+  }
+
+  const historyComment =
+    `Проблема от флориста через Telegram: ${reason}`;
 
   await sql`
     INSERT INTO order_status_history (
@@ -3202,33 +3461,128 @@ async function handleFloristProblemOrder(callbackQuery: TelegramCallbackQuery, o
       order_id,
       from_status,
       to_status,
+      changed_by_user_id,
       comment,
       created_at
     )
     VALUES (
-      ${profile.shop_id},
+      ${request.shopId},
       ${order.id},
       ${order.status}::order_status,
       'problem',
-      'Флорист отметил проблему через Telegram',
+      ${profile.user_id},
+      ${historyComment},
       NOW()
     )
   `;
 
-  await answerCallbackQuery(callbackQuery.id, "Проблема отмечена");
+  pendingFloristProblemRequests.delete(chatId);
+
+  type StaffRecipient = {
+    telegram_id: string;
+  };
+
+  let recipients: StaffRecipient[] = [];
+  let recipientLabel = "менеджеру";
+
+  if (order.manager_id) {
+    recipients = await sql<StaffRecipient[]>`
+      SELECT DISTINCT
+        ta.telegram_id
+      FROM telegram_accounts ta
+      JOIN shop_users su
+        ON su.shop_id = ta.shop_id
+       AND su.user_id = ta.user_id
+       AND su.is_active = true
+      WHERE ta.shop_id = ${request.shopId}
+        AND ta.user_id = ${order.manager_id}
+        AND ta.is_active = true
+        AND ta.notifications_enabled = true
+    `;
+  }
+
+  if (recipients.length === 0) {
+    recipientLabel = "владельцу магазина";
+
+    recipients = await sql<StaffRecipient[]>`
+      SELECT DISTINCT
+        ta.telegram_id
+      FROM telegram_accounts ta
+      JOIN shop_users su
+        ON su.shop_id = ta.shop_id
+       AND su.user_id = ta.user_id
+       AND su.is_active = true
+      WHERE ta.shop_id = ${request.shopId}
+        AND su.role IN ('owner', 'admin')
+        AND ta.is_active = true
+        AND ta.notifications_enabled = true
+      ORDER BY ta.telegram_id
+    `;
+  }
+
+  const crmUrl = `${SITE_URL}/admin/orders/${order.id}`;
+
+  let notifiedCount = 0;
+
+  for (const recipient of recipients) {
+    try {
+      await sendTelegramMessage(
+        recipient.telegram_id,
+        [
+          `⚠️ Проблема по заказу ${order.order_number}`,
+          "",
+          "Флорист сообщил о проблеме:",
+          reason,
+          "",
+          "Статус заказа изменён на «Проблема».",
+          "Проверьте заказ в CRM."
+        ].join("\n"),
+        {
+          reply_markup: inlineKeyboard([
+            [
+              {
+                text: "Открыть заказ в CRM",
+                url: crmUrl
+              }
+            ]
+          ])
+        }
+      );
+
+      notifiedCount += 1;
+    } catch (error) {
+      console.error(
+        `[bot-worker] florist problem notification failed order=${order.id} recipient=${recipient.telegram_id}`,
+        error instanceof Error ? error.message : error
+      );
+    }
+  }
 
   await sendTelegramMessage(
     chatId,
     [
-      `⚠️ По заказу ${order.order_number} отмечена проблема`,
+      `✅ Проблема по заказу ${order.order_number} сохранена`,
+      "",
+      `Причина: ${reason}`,
       "",
       "Статус в CRM изменён на «Проблема».",
-      "Менеджеру нужно проверить заказ."
+      notifiedCount > 0
+        ? `Уведомление отправлено ${recipientLabel}.`
+        : "Активный получатель Telegram не найден. Причина сохранена в истории заказа."
     ].join("\n"),
     {
-      reply_markup: await mainKeyboardForChat(chatId)
+      reply_markup: inlineKeyboard([
+        [
+          {
+            text: "🔄 Сборка заказов",
+            callback_data: "florist:list"
+          }
+        ]
+      ])
     }
   );
+
+  return true;
 }
 
 async function downloadTelegramFile(fileId: string, fileNamePrefix: string) {
@@ -4330,6 +4684,13 @@ async function handleCallbackQuery(callbackQuery: TelegramCallbackQuery) {
     return;
   }
 
+  if (
+    data.startsWith("florist:") &&
+    !data.startsWith("florist:problem:")
+  ) {
+    pendingFloristProblemRequests.delete(chatId);
+  }
+
   if (data.startsWith("florist:take:")) {
     const orderId = data.slice("florist:take:".length);
     await handleFloristTakeOrder(callbackQuery, orderId);
@@ -4623,6 +4984,13 @@ async function handleUpdate(update: TelegramUpdate) {
   const text = message.text?.trim();
 
   if (!text) {
+    return;
+  }
+
+  const floristProblemHandled =
+    await handleFloristProblemReasonMessage(message, text);
+
+  if (floristProblemHandled) {
     return;
   }
 
