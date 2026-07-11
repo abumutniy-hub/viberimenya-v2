@@ -168,6 +168,7 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
           trackingToken={trackingToken}
           internalChatCount={Number(order.internal_chat_unread_count || 0)}
           internalChatPreview={String(order.internal_chat_last_message || "")}
+          problemReturnStatus={String(order.problem_return_status || "")}
           showDetailsLink={false}
           showStatusActions
         />

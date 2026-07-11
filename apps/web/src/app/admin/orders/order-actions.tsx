@@ -61,6 +61,47 @@ function orderStatusText(status: string) {
   return map[status] || status || "—";
 }
 
+
+type OrderStatusAction = {
+  status: string;
+  label: string;
+  buttonLabel?: string;
+};
+
+const nextOrderStatusActionByStatus: Record<
+  string,
+  OrderStatusAction
+> = {
+  confirmed: {
+    status: "assembling",
+    label: "Собирается"
+  },
+  assembling: {
+    status: "ready",
+    label: "Готов"
+  },
+  ready: {
+    status: "assigned_courier",
+    label: "Передан курьеру"
+  },
+  assigned_courier: {
+    status: "delivering",
+    label: "В доставке"
+  },
+  delivering: {
+    status: "delivered",
+    label: "Доставлен"
+  }
+};
+
+const problemEligibleOrderStatuses = new Set([
+  "confirmed",
+  "assembling",
+  "ready",
+  "assigned_courier",
+  "delivering"
+]);
+
 export function OrderActions({
   orderId,
   status,
@@ -69,6 +110,7 @@ export function OrderActions({
   trackingToken,
   internalChatCount = 0,
   internalChatPreview = "",
+  problemReturnStatus = "",
   showDetailsLink = true,
   showStatusActions = false
 }: {
@@ -79,6 +121,7 @@ export function OrderActions({
   trackingToken?: string;
   internalChatCount?: number;
   internalChatPreview?: string;
+  problemReturnStatus?: string;
   showDetailsLink?: boolean;
   showStatusActions?: boolean;
 }) {
@@ -101,6 +144,34 @@ export function OrderActions({
   const canAddPaymentLink = status === "confirmed" && paymentStatus !== "paid";
   const trackingUrl = trackingToken ? `/order/track/${trackingToken}` : "";
   const hiddenChatBadge = !isChatOpen && chatCount > 0;
+
+  const validProblemReturnStatus =
+    problemEligibleOrderStatuses.has(problemReturnStatus)
+      ? problemReturnStatus
+      : "";
+
+  const returnFromProblemAction: OrderStatusAction | null =
+    status === "problem" && validProblemReturnStatus
+      ? {
+          status: validProblemReturnStatus,
+          label: orderStatusText(validProblemReturnStatus),
+          buttonLabel: `Вернуть: ${orderStatusText(
+            validProblemReturnStatus
+          )}`
+        }
+      : null;
+
+  const nextStatusAction =
+    returnFromProblemAction
+    || nextOrderStatusActionByStatus[status]
+    || null;
+
+  const canSetProblem =
+    problemEligibleOrderStatuses.has(status);
+
+  const canCancel =
+    status !== "delivered"
+    && status !== "cancelled";
 
   async function loadInternalChat() {
     setIsChatLoading(true);
@@ -360,46 +431,49 @@ export function OrderActions({
 
       {showStatusActions ? (
         <div className="admin-status-actions">
-          {status !== "assembling" && status !== "cancelled" && status !== "delivered" ? (
-          <button type="button" className="admin-action-button secondary" onClick={() => changeStatus("assembling", "Собирается")}>
-            Собирается
-          </button>
-        ) : null}
+          {nextStatusAction ? (
+            <button
+              type="button"
+              className="admin-action-button secondary"
+              onClick={() => changeStatus(
+                nextStatusAction.status,
+                nextStatusAction.label
+              )}
+            >
+              {nextStatusAction.buttonLabel || nextStatusAction.label}
+            </button>
+          ) : null}
 
-        {status !== "ready" && status !== "cancelled" && status !== "delivered" ? (
-          <button type="button" className="admin-action-button secondary" onClick={() => changeStatus("ready", "Готов")}>
-            Готов
-          </button>
-        ) : null}
+          {canSetProblem ? (
+            <button
+              type="button"
+              className="admin-action-button warning"
+              onClick={() => changeStatus("problem", "Проблема")}
+            >
+              Проблема
+            </button>
+          ) : null}
 
-        {status !== "assigned_courier" && status !== "cancelled" && status !== "delivered" ? (
-          <button type="button" className="admin-action-button secondary" onClick={() => changeStatus("assigned_courier", "Курьер")}>
-            Курьер
-          </button>
-        ) : null}
+          {status === "problem" && !validProblemReturnStatus ? (
+            <span className="admin-muted-badge">
+              Этап возврата не найден
+            </span>
+          ) : null}
 
-        {status !== "delivering" && status !== "cancelled" && status !== "delivered" ? (
-          <button type="button" className="admin-action-button secondary" onClick={() => changeStatus("delivering", "В доставке")}>
-            В доставке
-          </button>
-        ) : null}
-
-        {status !== "delivered" && status !== "cancelled" ? (
-          <button type="button" className="admin-action-button secondary" onClick={() => changeStatus("delivered", "Доставлен")}>
-            Доставлен
-          </button>
-        ) : null}
-
-        {status !== "problem" && status !== "cancelled" && status !== "delivered" ? (
-          <button type="button" className="admin-action-button warning" onClick={() => changeStatus("problem", "Проблема")}>
-            Проблема
-          </button>
-        ) : null}
-
-          {status !== "cancelled" && status !== "delivered" ? (
-            <button type="button" className="admin-action-button danger" onClick={() => changeStatus("cancelled", "Отменён")}>
+          {canCancel ? (
+            <button
+              type="button"
+              className="admin-action-button danger"
+              onClick={() => changeStatus("cancelled", "Отменён")}
+            >
               Отменить
             </button>
+          ) : null}
+
+          {!nextStatusAction && !canSetProblem && !canCancel ? (
+            <span className="admin-muted-badge">
+              Статус завершён
+            </span>
           ) : null}
         </div>
       ) : null}

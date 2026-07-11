@@ -806,9 +806,25 @@ export async function adminRoutes(app: FastifyInstance) {
         internal_chat_last_at: null
       };
 
+      const problemReturnRows = await client<{
+        problem_return_status: string | null;
+      }[]>`
+        SELECT from_status::text AS problem_return_status
+        FROM order_status_history
+        WHERE shop_id = ${shop.id}
+          AND order_id = ${params.id}
+          AND to_status = 'problem'
+        ORDER BY created_at DESC
+        LIMIT 1
+      `;
+
+      const problemReturnStatus =
+        problemReturnRows[0]?.problem_return_status ?? null;
+
       const orderWithChat = {
         ...order,
-        ...chatSummary
+        ...chatSummary,
+        problem_return_status: problemReturnStatus
       };
 
       const items = await client`
@@ -1493,14 +1509,115 @@ export async function adminRoutes(app: FastifyInstance) {
         };
       }
 
-      await client`
+      const forwardStatusByCurrent: Partial<Record<string, string>> = {
+        confirmed: "assembling",
+        assembling: "ready",
+        ready: "assigned_courier",
+        assigned_courier: "delivering",
+        delivering: "delivered"
+      };
+
+      const problemEligibleStatuses = new Set([
+        "confirmed",
+        "assembling",
+        "ready",
+        "assigned_courier",
+        "delivering"
+      ]);
+
+      const terminalStatuses = new Set([
+        "delivered",
+        "cancelled"
+      ]);
+
+      const allowedStatuses = new Set<string>();
+
+      if (order.status === "problem") {
+        const problemReturnRows = await client<{
+          from_status: string | null;
+        }[]>`
+          SELECT from_status::text AS from_status
+          FROM order_status_history
+          WHERE shop_id = ${shop.id}
+            AND order_id = ${order.id}
+            AND to_status = 'problem'
+          ORDER BY created_at DESC
+          LIMIT 1
+        `;
+
+        const problemReturnStatus = String(
+          problemReturnRows[0]?.from_status || ""
+        );
+
+        if (problemEligibleStatuses.has(problemReturnStatus)) {
+          allowedStatuses.add(problemReturnStatus);
+        }
+      } else {
+        const forwardStatus = forwardStatusByCurrent[order.status];
+
+        if (forwardStatus) {
+          allowedStatuses.add(forwardStatus);
+        }
+
+        if (problemEligibleStatuses.has(order.status)) {
+          allowedStatuses.add("problem");
+        }
+      }
+
+      if (!terminalStatuses.has(order.status)) {
+        allowedStatuses.add("cancelled");
+      }
+
+      if (!allowedStatuses.has(body.status)) {
+        const statusLabels: Record<string, string> = {
+          new: "Новый",
+          confirmed: "Подтверждён",
+          assembling: "Собирается",
+          ready: "Готов",
+          assigned_courier: "Передан курьеру",
+          delivering: "В доставке",
+          delivered: "Доставлен",
+          cancelled: "Отменён",
+          problem: "Проблема"
+        };
+
+        const allowedText = Array.from(allowedStatuses)
+          .map((item) => statusLabels[item] || item)
+          .join(", ");
+
+        return reply.status(409).send({
+          ok: false,
+          message: allowedText
+            ? `Из статуса «${statusLabels[order.status] || order.status}» доступны только: ${allowedText}`
+            : `Статус «${statusLabels[order.status] || order.status}» является завершённым`
+        });
+      }
+
+      const updatedRows = await client<{ id: string }[]>`
         UPDATE orders
         SET status = ${body.status}::order_status,
-            delivered_at = CASE WHEN ${body.status} = 'delivered' THEN NOW() ELSE delivered_at END,
-            cancelled_at = CASE WHEN ${body.status} = 'cancelled' THEN NOW() ELSE cancelled_at END,
+            delivered_at = CASE
+              WHEN ${body.status} = 'delivered'
+              THEN NOW()
+              ELSE delivered_at
+            END,
+            cancelled_at = CASE
+              WHEN ${body.status} = 'cancelled'
+              THEN NOW()
+              ELSE cancelled_at
+            END,
             updated_at = NOW()
         WHERE id = ${order.id}
+          AND status = ${order.status}::order_status
+        RETURNING id
       `;
+
+      if (!updatedRows[0]) {
+        return reply.status(409).send({
+          ok: false,
+          message: "Статус заказа уже изменился. Обновите страницу."
+        });
+      }
 
       await client`
         INSERT INTO order_status_history (
