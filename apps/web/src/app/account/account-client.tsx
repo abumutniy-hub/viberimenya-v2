@@ -104,6 +104,7 @@ export function AccountClient() {
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
   const [bonuses, setBonuses] = useState<Bonus[]>([]);
+  const [telegramCode, setTelegramCode] = useState("");
 
   async function loadAccount() {
     try {
@@ -186,6 +187,27 @@ export function AccountClient() {
     setCustomer(data.customer);
     setMessage("");
     await loadAccount();
+  }
+
+  async function createTelegramCode() {
+    setMessage("");
+
+    const response = await fetch("/api/public/account/telegram-code", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: "{}"
+    });
+
+    const data = await response.json();
+
+    if (!response.ok || !data.ok) {
+      setMessage(data?.message || "Не удалось создать код Telegram");
+      return;
+    }
+
+    setTelegramCode(data.telegramLinkCode || "");
+    setMessage("Код создан. Откройте Telegram-бота, нажмите «🔗 Привязать аккаунт» и введите этот код.");
   }
 
   async function logout() {
@@ -318,6 +340,22 @@ export function AccountClient() {
           <span>Покупки</span>
           <strong>{money(customer.total_spent)}</strong>
         </article>
+      </section>
+
+
+      <section className="account-card">
+        <h2>Telegram</h2>
+        <p>Подключите Telegram, чтобы получать уведомления по заказам и быстро открывать личный кабинет.</p>
+        <button type="button" onClick={createTelegramCode}>
+          Сгенерировать код Telegram
+        </button>
+        {telegramCode ? (
+          <div className="account-telegram-code">
+            <span>Код для бота</span>
+            <strong>{telegramCode}</strong>
+            <p>Код действует 30 минут. В Telegram нажмите «🔗 Привязать аккаунт» и отправьте этот код.</p>
+          </div>
+        ) : null}
       </section>
 
       <section className="account-card">

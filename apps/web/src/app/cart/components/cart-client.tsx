@@ -3,12 +3,15 @@
 import { useEffect, useMemo, useState } from "react";
 
 type CartItem = {
+  cartLineId: string;
   productId: string;
   slug: string;
   name: string;
   price: number;
   quantity: number;
 };
+
+type StoredCartItem = Record<string, unknown>;
 
 type DeliveryData = {
   zones: Array<{ id: string; name: string; price: number }>;
@@ -26,10 +29,50 @@ function money(value: number) {
   return `${Number(value || 0).toLocaleString("ru-RU")} ₽`;
 }
 
+function createCartLineId(productId: string) {
+  return `${productId}-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
+}
+
+function normalizeCartItem(value: unknown): CartItem | null {
+  if (!value || typeof value !== "object") return null;
+
+  const item = value as StoredCartItem;
+  const productId = String(item.productId ?? item.id ?? "").trim();
+  const name = String(item.name ?? "").trim();
+  const slug = String(item.slug ?? "").trim();
+  const price = Number(item.price ?? 0);
+  const quantity = Math.max(1, Number(item.quantity ?? 1) || 1);
+
+  if (!productId || !name || !slug || !Number.isFinite(price) || price < 0) {
+    return null;
+  }
+
+  return {
+    cartLineId: String(item.cartLineId ?? "").trim() || createCartLineId(productId),
+    productId,
+    slug,
+    name,
+    price,
+    quantity
+  };
+}
+
 function readCart(): CartItem[] {
   try {
     const raw = window.localStorage.getItem("viberimenya_cart");
-    return raw ? JSON.parse(raw) : [];
+    const parsed = raw ? JSON.parse(raw) : [];
+
+    if (!Array.isArray(parsed)) return [];
+
+    const items = parsed
+      .map((item) => normalizeCartItem(item))
+      .filter((item): item is CartItem => Boolean(item));
+
+    if (JSON.stringify(parsed) !== JSON.stringify(items)) {
+      writeCart(items);
+    }
+
+    return items;
   } catch {
     return [];
   }
@@ -74,7 +117,7 @@ export function CartClient() {
     orderNumber: string;
     totalAmount: number;
     trackingToken?: string;
-    telegramLinkUrl?: string;
+    telegramLinkCode?: string;
   } | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -120,10 +163,10 @@ export function CartClient() {
     setBonusMessage("");
   }
 
-  function updateQty(productId: string, quantity: number) {
+  function updateQty(cartLineId: string, quantity: number) {
     const safeQuantity = Math.max(0, Number(quantity) || 0);
     const next = items
-      .map((item) => (item.productId === productId ? { ...item, quantity: safeQuantity } : item))
+      .map((item) => (item.cartLineId === cartLineId ? { ...item, quantity: safeQuantity } : item))
       .filter((item) => item.quantity > 0);
 
     resetCartAdjustments();
@@ -131,8 +174,8 @@ export function CartClient() {
     writeCart(next);
   }
 
-  function removeItem(productId: string) {
-    const next = items.filter((item) => item.productId !== productId);
+  function removeItem(cartLineId: string) {
+    const next = items.filter((item) => item.cartLineId !== cartLineId);
 
     resetCartAdjustments();
     setItems(next);
@@ -159,6 +202,7 @@ export function CartClient() {
       const response = await fetch("/api/public/promocodes/check", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ code, subtotal })
       });
 
@@ -242,6 +286,7 @@ export function CartClient() {
       const response = await fetch("/api/public/orders", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
           customerName: form.get("customerName"),
           customerPhone: form.get("customerPhone"),
@@ -311,13 +356,12 @@ export function CartClient() {
           <a href="/catalog" className="light-button">Вернуться в каталог</a>
         </div>
 
-        {success.telegramLinkUrl ? (
+        {success.telegramLinkCode ? (
           <div className="cart-success-telegram">
             <strong>Telegram-уведомления</strong>
-            <p>Подключите Telegram, чтобы получать сообщения по заказу и быстро открыть личный кабинет.</p>
-            <a href={success.telegramLinkUrl} className="light-button" target="_blank" rel="noreferrer">
-              Подключить Telegram
-            </a>
+            <p>Откройте бота в Telegram, нажмите «🔗 Привязать аккаунт» и введите код:</p>
+            <div className="cart-success-telegram-code">{success.telegramLinkCode}</div>
+            <p>Код действует 30 минут.</p>
           </div>
         ) : null}
       </section>
@@ -340,7 +384,7 @@ export function CartClient() {
           </div>
         ) : (
           items.map((item) => (
-            <article className="cart-item" key={item.productId}>
+            <article className="cart-item" key={item.cartLineId}>
               <a href={`/product/${item.slug}`} className="cart-item-image">ВМ</a>
 
               <div>
@@ -350,12 +394,12 @@ export function CartClient() {
 
               <div className="cart-item-controls">
                 <div className="quantity-control" aria-label={`Количество: ${item.name}`}>
-                  <button type="button" onClick={() => updateQty(item.productId, item.quantity - 1)}>−</button>
+                  <button type="button" onClick={() => updateQty(item.cartLineId, item.quantity - 1)}>−</button>
                   <span>{item.quantity}</span>
-                  <button type="button" onClick={() => updateQty(item.productId, item.quantity + 1)}>+</button>
+                  <button type="button" onClick={() => updateQty(item.cartLineId, item.quantity + 1)}>+</button>
                 </div>
 
-                <button type="button" className="cart-remove-button" onClick={() => removeItem(item.productId)}>
+                <button type="button" className="cart-remove-button" onClick={() => removeItem(item.cartLineId)}>
                   Удалить
                 </button>
               </div>

@@ -5,12 +5,12 @@ import { useState, type FormEvent } from "react";
 type CreateEmployeeResponse = {
   ok?: boolean;
   message?: string;
-  telegramLinkUrl?: string;
+  telegramLinkCode?: string;
 };
 
 export function EmployeeForm() {
   const [isSaving, setIsSaving] = useState(false);
-  const [telegramLinkUrl, setTelegramLinkUrl] = useState("");
+  const [telegramLinkCode, setTelegramLinkCode] = useState("");
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -23,6 +23,7 @@ export function EmployeeForm() {
       phone: String(formData.get("phone") || "").trim(),
       email: String(formData.get("email") || "").trim(),
       telegramUsername: String(formData.get("telegramUsername") || "").trim(),
+      password: String(formData.get("password") || "").trim(),
       role: String(formData.get("role") || "florist")
     };
 
@@ -31,8 +32,13 @@ export function EmployeeForm() {
       return;
     }
 
+    if (payload.password.length < 6) {
+      alert("Укажите пароль сотрудника минимум из 6 символов");
+      return;
+    }
+
     setIsSaving(true);
-    setTelegramLinkUrl("");
+    setTelegramLinkCode("");
 
     try {
       const response = await fetch("/api/admin/employees", {
@@ -49,8 +55,8 @@ export function EmployeeForm() {
 
       form.reset();
 
-      if (data?.telegramLinkUrl) {
-        setTelegramLinkUrl(data.telegramLinkUrl);
+      if (data?.telegramLinkCode) {
+        setTelegramLinkCode(data.telegramLinkCode);
       }
 
       setIsSaving(false);
@@ -60,14 +66,14 @@ export function EmployeeForm() {
     }
   }
 
-  async function copyTelegramLink() {
-    if (!telegramLinkUrl) return;
+  async function copyTelegramCode() {
+    if (!telegramLinkCode) return;
 
     try {
-      await navigator.clipboard.writeText(telegramLinkUrl);
-      alert("Ссылка скопирована");
+      await navigator.clipboard.writeText(telegramLinkCode);
+      alert("Код скопирован");
     } catch {
-      alert(telegramLinkUrl);
+      alert(telegramLinkCode);
     }
   }
 
@@ -95,6 +101,11 @@ export function EmployeeForm() {
         </div>
 
         <div>
+          <label>Пароль для CRM</label>
+          <input name="password" type="password" placeholder="Минимум 6 символов" autoComplete="new-password" />
+        </div>
+
+        <div>
           <label>Роль</label>
           <select name="role" defaultValue="florist">
             <option value="manager">Менеджер</option>
@@ -109,14 +120,14 @@ export function EmployeeForm() {
         </button>
       </form>
 
-      {telegramLinkUrl ? (
+      {telegramLinkCode ? (
         <div className="admin-employee-telegram-link">
           <div>
-            <strong>Ссылка для привязки Telegram</strong>
-            <span>Отправьте её сотруднику. После перехода бот узнает его роль.</span>
+            <strong>Код для привязки Telegram</strong>
+            <span>Передайте код сотруднику. Он откроет бота, нажмёт «🔗 Привязать аккаунт» и введёт код.</span>
           </div>
-          <button type="button" onClick={copyTelegramLink}>
-            Скопировать ссылку
+          <button type="button" onClick={copyTelegramCode}>
+            Скопировать код
           </button>
         </div>
       ) : null}

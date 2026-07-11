@@ -1,5 +1,7 @@
-import type { FastifyInstance } from "fastify";
-import { randomUUID } from "node:crypto";
+import type { FastifyInstance, FastifyRequest } from "fastify";
+import { pbkdf2Sync, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { mkdir, unlink, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { z } from "zod";
 import { createDb } from "@viberimenya/db";
 import { env } from "../lib/env";
@@ -12,6 +14,18 @@ type ShopRow = {
   status: string;
 };
 
+type AdminRole = "owner" | "admin" | "manager" | "florist" | "courier";
+
+type AdminSessionContext = {
+  userId: string;
+  shopId: string;
+  role: AdminRole;
+};
+
+type AdminRequest = FastifyRequest & {
+  adminContext?: AdminSessionContext;
+};
+
 function numberFromCount(value: unknown) {
   return Number(value ?? 0);
 }
@@ -20,10 +34,111 @@ function createEmployeeLinkToken() {
   return randomUUID().replace(/-/g, "") + randomUUID().replace(/-/g, "");
 }
 
-function telegramStaffLinkUrl(token: string) {
-  const username = process.env.TELEGRAM_BOT_USERNAME || "viberimenya_bot";
-  return `https://t.me/${username}?start=staff_${token}`;
+function createTelegramLinkCode() {
+  return String(Math.floor(100000 + Math.random() * 900000));
 }
+
+const ADMIN_SESSION_COOKIE = "vm_admin_session";
+const ADMIN_SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
+
+function createAdminSessionToken() {
+  return randomUUID().replace(/-/g, "") + randomUUID().replace(/-/g, "");
+}
+
+function hashPassword(password: string) {
+  const iterations = 210000;
+  const salt = randomBytes(16).toString("hex");
+  const hash = pbkdf2Sync(password, salt, iterations, 32, "sha256").toString("hex");
+
+  return `pbkdf2_sha256$${iterations}$${salt}$${hash}`;
+}
+
+function getCookieValue(cookieHeader: string | undefined, name: string) {
+  if (!cookieHeader) return "";
+
+  const parts = cookieHeader.split(";").map((item) => item.trim());
+
+  for (const part of parts) {
+    const [key, ...rest] = part.split("=");
+
+    if (key === name) {
+      return decodeURIComponent(rest.join("="));
+    }
+  }
+
+  return "";
+}
+
+function buildAdminSessionCookie(token: string) {
+  return `${ADMIN_SESSION_COOKIE}=${encodeURIComponent(token)}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${ADMIN_SESSION_MAX_AGE_SECONDS}`;
+}
+
+function clearAdminSessionCookie() {
+  return `${ADMIN_SESSION_COOKIE}=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0`;
+}
+
+const ALL_ADMIN_ROLES: AdminRole[] = ["owner", "admin", "manager", "florist", "courier"];
+const OWNER_ADMIN_ROLES: AdminRole[] = ["owner", "admin"];
+const OPERATIONS_ROLES: AdminRole[] = ["owner", "admin", "manager"];
+
+function getRequiredAdminRoles(path: string, method: string): AdminRole[] {
+  const normalizedMethod = method.toUpperCase();
+
+  if (path.startsWith("/api/admin/auth/")) return ALL_ADMIN_ROLES;
+  if (path.startsWith("/api/admin/dashboard")) return ALL_ADMIN_ROLES;
+  if (path.startsWith("/api/admin/presence")) return ALL_ADMIN_ROLES;
+
+  if (path.startsWith("/api/admin/orders")) {
+    if (normalizedMethod === "GET") return ALL_ADMIN_ROLES;
+    if (path.includes("/internal-chat") || path.endsWith("/status")) return ALL_ADMIN_ROLES;
+
+    return OPERATIONS_ROLES;
+  }
+
+  if (path.startsWith("/api/admin/customers")) return OPERATIONS_ROLES;
+  if (path.startsWith("/api/admin/catalog")) return OPERATIONS_ROLES;
+  if (path.startsWith("/api/admin/categories")) return OPERATIONS_ROLES;
+  if (path.startsWith("/api/admin/products")) return OPERATIONS_ROLES;
+  if (path.startsWith("/api/admin/product-images")) return OPERATIONS_ROLES;
+  if (path.startsWith("/api/admin/delivery")) return OPERATIONS_ROLES;
+  if (path.startsWith("/api/admin/employees")) return OWNER_ADMIN_ROLES;
+  if (path.startsWith("/api/admin/settings")) return OWNER_ADMIN_ROLES;
+
+  return OWNER_ADMIN_ROLES;
+}
+
+function normalizePhoneDigits(value: string) {
+  return value.replace(/\D/g, "");
+}
+
+function verifyPassword(password: string, storedHash: string | null | undefined) {
+  if (!storedHash) return false;
+
+  const parts = storedHash.split("$");
+
+  if (parts.length !== 4 || parts[0] !== "pbkdf2_sha256") {
+    return false;
+  }
+
+  const iterations = Number(parts[1]);
+  const salt = parts[2];
+  const expectedHash = parts[3];
+
+  if (!iterations || !salt || !expectedHash) {
+    return false;
+  }
+
+  const actual = pbkdf2Sync(password, salt, iterations, 32, "sha256");
+  const expected = Buffer.from(expectedHash, "hex");
+
+  if (actual.length !== expected.length) {
+    return false;
+  }
+
+  return timingSafeEqual(actual, expected);
+}
+
+
 
 const settingsSchema = z.object({
   phone: z.string().optional().default(""),
@@ -44,6 +159,13 @@ const categorySchema = z.object({
   isActive: z.coerce.boolean().optional().default(true)
 });
 
+const productImageUploadSchema = z.object({
+  imageData: z.string().min(40),
+  fileName: z.string().optional().default(""),
+  alt: z.string().optional().default(""),
+  isMain: z.coerce.boolean().optional().default(true)
+});
+
 const productSchema = z.object({
   categoryId: z.string().uuid().optional().or(z.literal("")).default(""),
   name: z.string().min(2),
@@ -57,12 +179,38 @@ const productSchema = z.object({
   sortOrder: z.coerce.number().int().optional().default(100)
 });
 
+const deliveryZoneSchema = z.object({
+  name: z.string().min(2),
+  description: z.string().optional().default(""),
+  price: z.coerce.number().int().min(0).optional().default(0),
+  freeFromAmount: z.coerce.number().int().min(0).optional().default(0),
+  isExpressAvailable: z.coerce.boolean().optional().default(false),
+  expressPrice: z.coerce.number().int().min(0).optional().default(0),
+  isActive: z.coerce.boolean().optional().default(true),
+  sortOrder: z.coerce.number().int().optional().default(100)
+});
+
+const deliveryIntervalSchema = z.object({
+  name: z.string().min(2),
+  startsAt: z.string().min(1),
+  endsAt: z.string().min(1),
+  isActive: z.coerce.boolean().optional().default(true),
+  sortOrder: z.coerce.number().int().optional().default(100)
+});
+
+
+const adminLoginSchema = z.object({
+  login: z.string().min(3),
+  password: z.string().min(6)
+});
+
 const employeeSchema = z.object({
   name: z.string().min(2),
   phone: z.string().min(5),
   email: z.string().email().optional().or(z.literal("")).default(""),
   telegramUsername: z.string().optional().default(""),
   role: z.enum(["admin", "manager", "florist", "courier"]),
+  password: z.string().optional().default(""),
   isActive: z.coerce.boolean().optional().default(true)
 });
 
@@ -112,7 +260,344 @@ async function getShop(client: ReturnType<typeof createDb>["client"]) {
   return shop;
 }
 
+type CustomerNotificationType =
+  | "order_confirmed"
+  | "payment_link_added"
+  | "order_paid"
+  | "order_ready"
+  | "order_delivering"
+  | "order_delivered";
+
+async function queueCustomerOrderNotification(
+  client: ReturnType<typeof createDb>["client"],
+  params: {
+    shopId: string;
+    orderId: string;
+    type: CustomerNotificationType;
+    status?: string;
+    extraPayload?: Record<string, unknown>;
+  }
+) {
+  await client`
+    INSERT INTO notification_events (
+      shop_id,
+      order_id,
+      type,
+      channel,
+      recipient_type,
+      status,
+      payload,
+      created_at,
+      updated_at
+    )
+    SELECT
+      o.shop_id,
+      o.id,
+      ${params.type},
+      'telegram',
+      'customer',
+      'pending',
+      jsonb_build_object(
+        'orderId', o.id,
+        'orderNumber', o.order_number,
+        'status', COALESCE(${params.status || null}, o.status::text),
+        'paymentStatus', o.payment_status,
+        'totalAmount', o.total,
+        'customerName', c.name,
+        'customerPhone', c.phone,
+        'recipientName', o.recipient_name,
+        'recipientPhone', o.recipient_phone,
+        'deliveryAddressText', o.delivery_address_text,
+        'deliveryComment', o.delivery_comment,
+        'bouquetPhotoUrl', o.bouquet_photo_url,
+        'trackingToken', o.tracking_token,
+        'trackingUrl', CASE
+          WHEN o.tracking_token IS NULL OR o.tracking_token = '' THEN NULL
+          ELSE '/order/track/' || o.tracking_token
+        END
+      ) || CAST(${JSON.stringify(params.extraPayload ?? {})} AS jsonb),
+      NOW(),
+      NOW()
+    FROM orders o
+    LEFT JOIN customers c ON c.id = o.customer_id
+    WHERE o.id = ${params.orderId}
+      AND o.shop_id = ${params.shopId}
+      AND o.customer_id IS NOT NULL
+  `;
+}
+
 export async function adminRoutes(app: FastifyInstance) {
+  app.addHook("preHandler", async (request, reply) => {
+    const path = request.url.split("?")[0] || request.url;
+
+    if (!path.startsWith("/api/admin/") || path.startsWith("/api/admin/auth/") || request.method === "OPTIONS") {
+      return;
+    }
+
+    const token = getCookieValue(request.headers.cookie, ADMIN_SESSION_COOKIE);
+
+    if (!token) {
+      return reply.status(401).send({
+        ok: false,
+        message: "Требуется вход в CRM"
+      });
+    }
+
+    const { client } = createDb();
+
+    try {
+      const rows = await client<{
+        user_id: string;
+        shop_id: string;
+        role: string;
+      }[]>`
+        SELECT
+          s.user_id,
+          s.shop_id,
+          su.role::text AS role
+        FROM admin_sessions s
+        JOIN shops sh ON sh.id = s.shop_id
+        JOIN users u ON u.id = s.user_id
+        JOIN shop_users su
+          ON su.shop_id = s.shop_id
+         AND su.user_id = s.user_id
+        WHERE s.token = ${token}
+          AND sh.slug = ${env.DEFAULT_SHOP_SLUG}
+          AND s.revoked_at IS NULL
+          AND s.expires_at > NOW()
+          AND su.is_active = true
+          AND u.status = 'active'
+        LIMIT 1
+      `;
+
+      const session = rows[0];
+
+      if (!session || !ALL_ADMIN_ROLES.includes(session.role as AdminRole)) {
+        reply.header("Set-Cookie", clearAdminSessionCookie());
+
+        return reply.status(401).send({
+          ok: false,
+          message: "Сессия CRM истекла"
+        });
+      }
+
+      const role = session.role as AdminRole;
+      const requiredRoles = getRequiredAdminRoles(path, request.method);
+
+      if (!requiredRoles.includes(role)) {
+        return reply.status(403).send({
+          ok: false,
+          message: "Недостаточно прав для этого раздела"
+        });
+      }
+
+      (request as AdminRequest).adminContext = {
+        userId: session.user_id,
+        shopId: session.shop_id,
+        role
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.post("/api/admin/auth/login", async (request, reply) => {
+    const body = adminLoginSchema.parse(request.body ?? {});
+    const login = body.login.trim();
+    const loginDigits = normalizePhoneDigits(login);
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+
+      const rows = await client<{
+        id: string;
+        shop_id: string;
+        phone: string | null;
+        email: string | null;
+        name: string | null;
+        password_hash: string | null;
+        role: string;
+      }[]>`
+        SELECT
+          u.id,
+          su.shop_id,
+          u.phone,
+          u.email,
+          u.name,
+          u.password_hash,
+          su.role
+        FROM users u
+        JOIN shop_users su ON su.user_id = u.id
+        WHERE su.shop_id = ${shop.id}
+          AND su.is_active = true
+          AND u.status = 'active'
+          AND su.role IN ('owner', 'admin', 'manager', 'florist', 'courier')
+          AND (
+            LOWER(COALESCE(u.email, '')) = LOWER(${login})
+            OR COALESCE(u.phone, '') = ${login}
+            OR regexp_replace(COALESCE(u.phone, ''), '[^0-9]', '', 'g') = ${loginDigits}
+          )
+        ORDER BY
+          CASE su.role
+            WHEN 'owner' THEN 1
+            WHEN 'admin' THEN 2
+            WHEN 'manager' THEN 3
+            WHEN 'florist' THEN 4
+            WHEN 'courier' THEN 5
+            ELSE 10
+          END,
+          u.created_at ASC
+        LIMIT 1
+      `;
+
+      const user = rows[0];
+
+      if (!user || !verifyPassword(body.password, user.password_hash)) {
+        return reply.status(401).send({
+          ok: false,
+          message: "Неверный логин или пароль"
+        });
+      }
+
+      const sessionToken = createAdminSessionToken();
+
+      await client`
+        INSERT INTO admin_sessions (
+          token,
+          shop_id,
+          user_id,
+          ip,
+          user_agent,
+          expires_at,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          ${sessionToken},
+          ${shop.id},
+          ${user.id},
+          ${request.ip || null},
+          ${request.headers["user-agent"] || null},
+          NOW() + INTERVAL '30 days',
+          NOW(),
+          NOW()
+        )
+      `;
+
+      await client`
+        UPDATE users
+        SET last_login_at = NOW(),
+            updated_at = NOW()
+        WHERE id = ${user.id}
+      `;
+
+      reply.header("Set-Cookie", buildAdminSessionCookie(sessionToken));
+
+      return {
+        ok: true,
+        user: {
+          id: user.id,
+          name: user.name,
+          phone: user.phone,
+          email: user.email,
+          role: user.role
+        }
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.get("/api/admin/auth/me", async (request, reply) => {
+    const token = getCookieValue(request.headers.cookie, ADMIN_SESSION_COOKIE);
+
+    if (!token) {
+      return reply.status(401).send({
+        ok: false,
+        message: "Требуется вход"
+      });
+    }
+
+    const { client } = createDb();
+
+    try {
+      const rows = await client<{
+        id: string;
+        phone: string | null;
+        email: string | null;
+        name: string | null;
+        role: string;
+      }[]>`
+        SELECT
+          u.id,
+          u.phone,
+          u.email,
+          u.name,
+          su.role
+        FROM admin_sessions s
+        JOIN users u ON u.id = s.user_id
+        JOIN shop_users su
+          ON su.shop_id = s.shop_id
+         AND su.user_id = s.user_id
+        WHERE s.token = ${token}
+          AND s.revoked_at IS NULL
+          AND s.expires_at > NOW()
+          AND su.is_active = true
+          AND u.status = 'active'
+        LIMIT 1
+      `;
+
+      const user = rows[0];
+
+      if (!user) {
+        reply.header("Set-Cookie", clearAdminSessionCookie());
+
+        return reply.status(401).send({
+          ok: false,
+          message: "Сессия истекла"
+        });
+      }
+
+      return {
+        ok: true,
+        user: {
+          id: user.id,
+          name: user.name,
+          phone: user.phone,
+          email: user.email,
+          role: user.role
+        }
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.post("/api/admin/auth/logout", async (request, reply) => {
+    const token = getCookieValue(request.headers.cookie, ADMIN_SESSION_COOKIE);
+
+    if (token) {
+      const { client } = createDb();
+
+      try {
+        await client`
+          UPDATE admin_sessions
+          SET revoked_at = NOW(),
+              updated_at = NOW()
+          WHERE token = ${token}
+            AND revoked_at IS NULL
+        `;
+      } finally {
+        await client.end();
+      }
+    }
+
+    reply.header("Set-Cookie", clearAdminSessionCookie());
+
+    return { ok: true };
+  });
+
   app.get("/api/admin/dashboard", async () => {
     const { client } = createDb();
 
@@ -996,6 +1481,22 @@ export async function adminRoutes(app: FastifyInstance) {
         )
       `;
 
+      const customerEventByStatus: Partial<Record<string, CustomerNotificationType>> = {
+        ready: "order_ready",
+        delivering: "order_delivering",
+        delivered: "order_delivered"
+      };
+      const customerEventType = customerEventByStatus[body.status];
+
+      if (customerEventType) {
+        await queueCustomerOrderNotification(client, {
+          shopId: shop.id,
+          orderId: order.id,
+          type: customerEventType,
+          status: body.status
+        });
+      }
+
       return {
         ok: true,
         status: body.status
@@ -1123,6 +1624,13 @@ export async function adminRoutes(app: FastifyInstance) {
             NOW()
           )
         `;
+
+        await queueCustomerOrderNotification(client, {
+          shopId: shop.id,
+          orderId: order.id,
+          type: "order_confirmed",
+          status: "confirmed"
+        });
 
 
       return {
@@ -1257,6 +1765,18 @@ export async function adminRoutes(app: FastifyInstance) {
             NOW()
           )
         `;
+
+        await queueCustomerOrderNotification(client, {
+          shopId: shop.id,
+          orderId: order.id,
+          type: "payment_link_added",
+          status: order.status,
+          extraPayload: {
+            amount: order.total,
+            paymentUrl: body.paymentUrl,
+            paymentId: payment?.id ?? null
+          }
+        });
 
 
       return {
@@ -1420,6 +1940,18 @@ export async function adminRoutes(app: FastifyInstance) {
               NOW()
             )
           `;
+
+          await queueCustomerOrderNotification(client, {
+            shopId: shop.id,
+            orderId: order.id,
+            type: "order_paid",
+            status: order.status,
+            extraPayload: {
+              paymentStatus: "paid",
+              bonusEarned: bonusAmount,
+              balanceAfter
+            }
+          });
         }
 
 
@@ -1463,10 +1995,27 @@ export async function adminRoutes(app: FastifyInstance) {
           ORDER BY sort_order ASC, name ASC
         `,
         client`
-          SELECT *
-          FROM products
-          WHERE shop_id = ${shop.id}
-          ORDER BY created_at DESC
+          SELECT
+            p.*,
+            pi.url AS primary_image_url,
+            COALESCE(pic.images_count, 0) AS images_count
+          FROM products p
+          LEFT JOIN LATERAL (
+            SELECT url
+            FROM product_images
+            WHERE shop_id = p.shop_id
+              AND product_id = p.id
+            ORDER BY is_main DESC, sort_order ASC, created_at ASC
+            LIMIT 1
+          ) pi ON true
+          LEFT JOIN LATERAL (
+            SELECT COUNT(*)::int AS images_count
+            FROM product_images
+            WHERE shop_id = p.shop_id
+              AND product_id = p.id
+          ) pic ON true
+          WHERE p.shop_id = ${shop.id}
+          ORDER BY p.created_at DESC
           LIMIT 100
         `
       ]);
@@ -1544,7 +2093,7 @@ export async function adminRoutes(app: FastifyInstance) {
         last_login_at: string | null;
         linked_telegram_id: string | null;
         linked_telegram_username: string | null;
-        telegram_link_token: string | null;
+        telegram_link_code: string | null;
         telegram_link_expires_at: string | null;
       }[]>`
         SELECT
@@ -1561,7 +2110,7 @@ export async function adminRoutes(app: FastifyInstance) {
           u.last_login_at,
           ta.telegram_id AS linked_telegram_id,
           ta.username AS linked_telegram_username,
-          elt.token AS telegram_link_token,
+          elt.token AS telegram_link_code,
           elt.expires_at AS telegram_link_expires_at
         FROM shop_users su
         JOIN users u ON u.id = su.user_id
@@ -1605,7 +2154,7 @@ export async function adminRoutes(app: FastifyInstance) {
         shop,
         items: items.map((item) => ({
           ...item,
-          telegram_link_url: item.telegram_link_token ? telegramStaffLinkUrl(String(item.telegram_link_token)) : null
+          telegram_link_code: item.telegram_link_code ? String(item.telegram_link_code) : null
         }))
       };
     } finally {
@@ -1623,6 +2172,16 @@ export async function adminRoutes(app: FastifyInstance) {
       const name = body.name.trim();
       const phone = body.phone.trim();
       const email = body.email.trim() || null;
+      const password = body.password.trim();
+
+      if (password && password.length < 6) {
+        return reply.status(400).send({
+          ok: false,
+          message: "Пароль сотрудника должен быть не короче 6 символов"
+        });
+      }
+
+      const passwordHash = password ? hashPassword(password) : null;
 
       const existingRows = email
         ? await client<{ id: string }[]>`
@@ -1647,16 +2206,25 @@ export async function adminRoutes(app: FastifyInstance) {
           SET name = ${name},
               phone = ${phone},
               email = ${email},
+              password_hash = COALESCE(${passwordHash}, password_hash),
               status = 'active',
               updated_at = NOW()
           WHERE id = ${userId}
         `;
       } else {
+        if (!passwordHash) {
+          return reply.status(400).send({
+            ok: false,
+            message: "Укажите пароль сотрудника для входа в CRM"
+          });
+        }
+
         const userRows = await client<{ id: string }[]>`
           INSERT INTO users (
             phone,
             email,
             name,
+            password_hash,
             status,
             created_at,
             updated_at
@@ -1665,6 +2233,7 @@ export async function adminRoutes(app: FastifyInstance) {
             ${phone},
             ${email},
             ${name},
+            ${passwordHash},
             'active',
             NOW(),
             NOW()
@@ -1719,10 +2288,11 @@ export async function adminRoutes(app: FastifyInstance) {
           AND consumed_at IS NULL
       `;
 
-      const telegramToken = createEmployeeLinkToken();
+      const telegramToken = createTelegramLinkCode();
       const telegramUsername = body.telegramUsername.trim().replace(/^@/, "");
       const employeeLinkMetadata = {
         source: "admin_employee_create",
+        mode: "code",
         role: body.role,
         telegramUsername: telegramUsername || null
       };
@@ -1747,7 +2317,7 @@ export async function adminRoutes(app: FastifyInstance) {
           'connect_staff',
           ${telegramToken},
           'pending',
-          NOW() + INTERVAL '7 days',
+          NOW() + INTERVAL '30 minutes',
           CAST(${JSON.stringify(employeeLinkMetadata)} AS jsonb),
           NOW(),
           NOW()
@@ -1757,7 +2327,7 @@ export async function adminRoutes(app: FastifyInstance) {
       return {
         ok: true,
         employee: employeeRows[0] ?? null,
-        telegramLinkUrl: telegramStaffLinkUrl(telegramToken)
+        telegramLinkCode: telegramToken
       };
     } finally {
       await client.end();
@@ -1799,12 +2369,23 @@ export async function adminRoutes(app: FastifyInstance) {
       const name = body.name.trim();
       const phone = body.phone.trim();
       const email = body.email.trim() || null;
+      const password = body.password.trim();
+
+      if (password && password.length < 6) {
+        return reply.status(400).send({
+          ok: false,
+          message: "Пароль сотрудника должен быть не короче 6 символов"
+        });
+      }
+
+      const passwordHash = password ? hashPassword(password) : null;
 
       await client`
         UPDATE users
         SET name = ${name},
             phone = ${phone},
             email = ${email},
+            password_hash = COALESCE(${passwordHash}, password_hash),
             status = 'active',
             updated_at = NOW()
         WHERE id = ${employee.user_id}
@@ -1818,6 +2399,29 @@ export async function adminRoutes(app: FastifyInstance) {
         WHERE shop_id = ${shop.id}
           AND id = ${params.id}
       `;
+
+      if (!body.isActive) {
+        await client`
+          UPDATE telegram_accounts
+          SET is_active = false,
+              updated_at = NOW()
+          WHERE shop_id = ${shop.id}
+            AND user_id = ${employee.user_id}
+            AND is_active = true
+        `;
+
+        await client`
+          UPDATE employee_link_tokens
+          SET status = 'cancelled',
+              updated_at = NOW()
+          WHERE shop_id = ${shop.id}
+            AND user_id = ${employee.user_id}
+            AND provider = 'telegram'
+            AND purpose = 'connect_staff'
+            AND status = 'pending'
+            AND consumed_at IS NULL
+        `;
+      }
 
       return { ok: true };
     } finally {
@@ -1863,7 +2467,7 @@ export async function adminRoutes(app: FastifyInstance) {
           AND consumed_at IS NULL
       `;
 
-      const telegramToken = createEmployeeLinkToken();
+      const telegramToken = createTelegramLinkCode();
 
       await client`
         INSERT INTO employee_link_tokens (
@@ -1885,8 +2489,8 @@ export async function adminRoutes(app: FastifyInstance) {
           'connect_staff',
           ${telegramToken},
           'pending',
-          NOW() + INTERVAL '7 days',
-          CAST(${JSON.stringify({ source: "admin_employee_link_regenerate" })} AS jsonb),
+          NOW() + INTERVAL '30 minutes',
+          CAST(${JSON.stringify({ source: "admin_employee_link_regenerate", mode: "code" })} AS jsonb),
           NOW(),
           NOW()
         )
@@ -1894,8 +2498,66 @@ export async function adminRoutes(app: FastifyInstance) {
 
       return {
         ok: true,
-        telegramLinkUrl: telegramStaffLinkUrl(telegramToken)
+        telegramLinkCode: telegramToken
       };
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.delete("/api/admin/employees/:id/telegram-link", async (request, reply) => {
+    const params = z.object({ id: z.string().uuid() }).parse(request.params ?? {});
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+
+      const employeeRows = await client<{ user_id: string; role: string }[]>`
+        SELECT user_id, role
+        FROM shop_users
+        WHERE shop_id = ${shop.id}
+          AND id = ${params.id}
+        LIMIT 1
+      `;
+
+      const employee = employeeRows[0];
+
+      if (!employee) {
+        return reply.status(404).send({
+          ok: false,
+          message: "Сотрудник не найден"
+        });
+      }
+
+      if (employee.role === "owner") {
+        return reply.status(400).send({
+          ok: false,
+          message: "Telegram владельца нельзя отключить через эту кнопку"
+        });
+      }
+
+      await client`
+        UPDATE telegram_accounts
+        SET is_active = false,
+            updated_at = NOW()
+        WHERE shop_id = ${shop.id}
+          AND user_id = ${employee.user_id}
+          AND is_active = true
+      `;
+
+      await client`
+        UPDATE employee_link_tokens
+        SET status = 'cancelled',
+            updated_at = NOW()
+        WHERE shop_id = ${shop.id}
+          AND user_id = ${employee.user_id}
+          AND provider = 'telegram'
+          AND purpose = 'connect_staff'
+          AND status = 'pending'
+          AND consumed_at IS NULL
+      `;
+
+      return { ok: true };
     } finally {
       await client.end();
     }
@@ -2111,6 +2773,153 @@ export async function adminRoutes(app: FastifyInstance) {
         ok: true,
         product: rows[0] ?? null
       };
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.post("/api/admin/products/:id/images", async (request, reply) => {
+    const params = z.object({ id: z.string().uuid() }).parse(request.params ?? {});
+    const body = productImageUploadSchema.parse(request.body ?? {});
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+      const productRows = await client<{ id: string; name: string }[]>`
+        SELECT id, name
+        FROM products
+        WHERE shop_id = ${shop.id}
+          AND id = ${params.id}
+        LIMIT 1
+      `;
+      const product = productRows[0];
+
+      if (!product) {
+        return reply.status(404).send({
+          ok: false,
+          message: "Товар не найден"
+        });
+      }
+
+      const match = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/.exec(body.imageData.trim());
+
+      if (!match) {
+        return reply.status(400).send({
+          ok: false,
+          message: "Поддерживаются только изображения JPG, PNG или WebP"
+        });
+      }
+
+      const mimeType = match[1];
+      const encoded = match[2];
+      const extensionByMime: Record<string, string> = {
+        "image/jpeg": "jpg",
+        "image/png": "png",
+        "image/webp": "webp"
+      };
+      const extension = extensionByMime[mimeType || ""];
+
+      if (!extension || !encoded) {
+        return reply.status(400).send({
+          ok: false,
+          message: "Не удалось прочитать изображение"
+        });
+      }
+
+      const buffer = Buffer.from(encoded, "base64");
+
+      if (buffer.length > 5 * 1024 * 1024) {
+        return reply.status(400).send({
+          ok: false,
+          message: "Фото должно быть не больше 5 МБ"
+        });
+      }
+
+      const uploadsRoot = process.env.UPLOADS_DIR || resolve(process.cwd(), "storage/uploads");
+      const productUploadsDir = join(uploadsRoot, "products");
+      await mkdir(productUploadsDir, { recursive: true });
+
+      const safeProductId = product.id.replace(/[^a-z0-9-]/gi, "");
+      const fileName = `product-${safeProductId}-${randomUUID()}.${extension}`;
+      const filePath = join(productUploadsDir, fileName);
+      const publicUrl = `/uploads/products/${fileName}`;
+
+      await writeFile(filePath, buffer);
+
+      if (body.isMain) {
+        await client`
+          UPDATE product_images
+          SET is_main = false,
+              updated_at = NOW()
+          WHERE shop_id = ${shop.id}
+            AND product_id = ${product.id}
+        `;
+      }
+
+      const rows = await client`
+        INSERT INTO product_images (
+          shop_id,
+          product_id,
+          url,
+          alt,
+          is_main,
+          sort_order,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          ${shop.id},
+          ${product.id},
+          ${publicUrl},
+          ${body.alt.trim() || product.name},
+          ${body.isMain},
+          100,
+          NOW(),
+          NOW()
+        )
+        RETURNING *
+      `;
+
+      return {
+        ok: true,
+        image: rows[0] ?? null
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.delete("/api/admin/product-images/:id", async (request, reply) => {
+    const params = z.object({ id: z.string().uuid() }).parse(request.params ?? {});
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+      const rows = await client<{ url: string }[]>`
+        DELETE FROM product_images
+        WHERE shop_id = ${shop.id}
+          AND id = ${params.id}
+        RETURNING url
+      `;
+      const image = rows[0];
+
+      if (!image) {
+        return reply.status(404).send({
+          ok: false,
+          message: "Фото не найдено"
+        });
+      }
+
+      if (image.url.startsWith("/uploads/products/")) {
+        const uploadsRoot = process.env.UPLOADS_DIR || resolve(process.cwd(), "storage/uploads");
+        const fileName = image.url.split("/").pop() || "";
+
+        if (fileName) {
+          await unlink(join(uploadsRoot, "products", fileName)).catch(() => undefined);
+        }
+      }
+
+      return { ok: true };
     } finally {
       await client.end();
     }

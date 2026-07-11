@@ -1,20 +1,36 @@
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+
 export type AdminRow = Record<string, unknown>;
 
 export async function fetchAdmin<T>(path: string): Promise<T | null> {
   const baseUrl = process.env.API_INTERNAL_URL ?? "http://127.0.0.1:4001";
 
   try {
-    const response = await fetch(`${baseUrl}${path}`, {
-      cache: "no-store"
-    });
+    const cookieHeader = (await cookies()).toString();
+    const init: RequestInit = { cache: "no-store" };
+
+    if (cookieHeader) {
+      init.headers = { cookie: cookieHeader };
+    }
+
+    const response = await fetch(`${baseUrl}${path}`, init);
+
+    if (response.status === 401) {
+      redirect("/admin/login");
+    }
+
+    if (response.status === 403) {
+      redirect("/admin");
+    }
 
     if (!response.ok) {
       return null;
     }
 
     return (await response.json()) as T;
-  } catch {
-    return null;
+  } catch (error) {
+    throw error;
   }
 }
 

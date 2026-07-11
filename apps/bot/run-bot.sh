@@ -4,4 +4,5 @@ cd /var/www/viberimenya-v2
 export BOT_DRY_RUN=false
 export BOT_RUN_ONCE=false
 export BOT_POLL_INTERVAL_MS=1000
+export UPLOADS_DIR=/var/www/viberimenya-v2/storage/uploads
 exec pnpm --filter @viberimenya/bot start

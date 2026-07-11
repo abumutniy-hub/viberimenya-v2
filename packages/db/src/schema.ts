@@ -458,6 +458,7 @@ export const telegramAccounts = pgTable(
     username: varchar("username", { length: 120 }),
     firstName: varchar("first_name", { length: 160 }),
     lastName: varchar("last_name", { length: 160 }),
+    notificationsEnabled: boolean("notifications_enabled").notNull().default(true),
     isActive: boolean("is_active").notNull().default(true),
     linkedAt: timestamp("linked_at", { withTimezone: true }).notNull().defaultNow(),
     ...timestamps

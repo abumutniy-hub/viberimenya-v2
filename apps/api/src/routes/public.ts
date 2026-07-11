@@ -118,13 +118,8 @@ function createSessionToken() {
   return crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
 }
 
-function createCustomerLinkToken() {
-  return crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
-}
-
-function telegramBotDeepLink(token: string) {
-  const username = process.env.TELEGRAM_BOT_USERNAME || "viberimenya_bot";
-  return `https://t.me/${username}?start=link_${token}`;
+function createTelegramLinkCode() {
+  return String(Math.floor(100000 + Math.random() * 900000));
 }
 
 function getCookieValue(cookieHeader: string | undefined, name: string) {
@@ -776,6 +771,74 @@ export async function publicRoutes(app: FastifyInstance) {
 
       reply.header("Set-Cookie", buildCustomerSessionCookie(sessionToken));
       return reply.redirect(redirectUrl);
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.post("/api/public/account/telegram-code", async (request, reply) => {
+    const token = getCookieValue(request.headers.cookie, CUSTOMER_SESSION_COOKIE);
+
+    if (!token) {
+      return reply.status(401).send({
+        ok: false,
+        message: "Требуется вход"
+      });
+    }
+
+    const { client } = createDb();
+
+    try {
+      const sessionRows = await client<{ shop_id: string; customer_id: string }[]>`
+        SELECT shop_id, customer_id
+        FROM customer_sessions
+        WHERE token = ${token}
+          AND revoked_at IS NULL
+          AND expires_at > NOW()
+        LIMIT 1
+      `;
+
+      const session = sessionRows[0];
+
+      if (!session) {
+        return reply.status(401).send({
+          ok: false,
+          message: "Сессия истекла"
+        });
+      }
+
+      await client`
+        UPDATE customer_link_tokens
+        SET status = 'cancelled',
+            updated_at = NOW()
+        WHERE shop_id = ${session.shop_id}
+          AND customer_id = ${session.customer_id}
+          AND provider = 'telegram'
+          AND purpose = 'connect_channel'
+          AND status = 'pending'
+          AND consumed_at IS NULL
+      `;
+
+      const telegramLinkCode = createTelegramLinkCode();
+
+      await client`
+        INSERT INTO customer_link_tokens (
+          shop_id, customer_id, order_id, provider, purpose,
+          token, status, expires_at, metadata, created_at, updated_at
+        )
+        VALUES (
+          ${session.shop_id}, ${session.customer_id}, NULL, 'telegram', 'connect_channel',
+          ${telegramLinkCode}, 'pending', NOW() + INTERVAL '30 minutes',
+          ${JSON.stringify({ source: "account_telegram_code", mode: "code" })},
+          NOW(), NOW()
+        )
+      `;
+
+      return {
+        ok: true,
+        telegramLinkCode,
+        expiresInMinutes: 30
+      };
     } finally {
       await client.end();
     }
@@ -1517,7 +1580,66 @@ export async function publicRoutes(app: FastifyInstance) {
           )
         `;
 
-      const telegramLinkToken = createCustomerLinkToken();
+        await client`
+          INSERT INTO notification_events (
+            shop_id,
+            order_id,
+            type,
+            channel,
+            recipient_type,
+            status,
+            payload,
+            created_at,
+            updated_at
+          )
+          SELECT
+            ${shop.id},
+            ${order.id},
+            'order_created',
+            'telegram',
+            'customer',
+            'pending',
+            CAST(${JSON.stringify({
+              orderId: order.id,
+              orderNumber,
+              status: "new",
+              customerName: body.customerName,
+              customerPhone,
+              recipientName: body.recipientName || body.customerName,
+              recipientPhone,
+              totalAmount,
+              discountTotal,
+              bonusSpent,
+              deliveryType: body.deliveryType,
+              deliveryDate: body.deliveryDate || null,
+              trackingToken,
+              trackingUrl: `/order/track/${trackingToken}`
+            })} AS jsonb),
+            NOW(),
+            NOW()
+          WHERE EXISTS (
+            SELECT 1
+            FROM telegram_accounts ta
+            WHERE ta.shop_id = ${shop.id}
+              AND ta.customer_id = ${customer.id}
+              AND ta.is_active = true
+              AND ta.notifications_enabled = true
+          )
+        `;
+
+      await client`
+        UPDATE customer_link_tokens
+        SET status = 'cancelled',
+            updated_at = NOW()
+        WHERE shop_id = ${shop.id}
+          AND customer_id = ${customer.id}
+          AND provider = 'telegram'
+          AND purpose = 'connect_channel'
+          AND status = 'pending'
+          AND consumed_at IS NULL
+      `;
+
+      const telegramLinkCode = createTelegramLinkCode();
 
       await client`
         INSERT INTO customer_link_tokens (
@@ -1526,11 +1648,36 @@ export async function publicRoutes(app: FastifyInstance) {
         )
         VALUES (
           ${shop.id}, ${customer.id}, ${order.id}, 'telegram', 'connect_channel',
-          ${telegramLinkToken}, 'pending', NOW() + INTERVAL '7 days',
-          ${JSON.stringify({ source: "site_order_success", orderNumber })},
+          ${telegramLinkCode}, 'pending', NOW() + INTERVAL '30 minutes',
+          ${JSON.stringify({ source: "site_order_success", orderNumber, mode: "code" })},
           NOW(), NOW()
         )
       `;
+
+      const customerSessionToken = createSessionToken();
+
+      await client`
+        INSERT INTO customer_sessions (
+          shop_id,
+          customer_id,
+          token,
+          user_agent,
+          expires_at,
+          last_seen_at,
+          created_at
+        )
+        VALUES (
+          ${shop.id},
+          ${customer.id},
+          ${customerSessionToken},
+          ${String(request.headers["user-agent"] ?? "")},
+          NOW() + INTERVAL '30 days',
+          NOW(),
+          NOW()
+        )
+      `;
+
+      reply.header("Set-Cookie", buildCustomerSessionCookie(customerSessionToken));
 
       return reply.status(201).send({
         ok: true,
@@ -1543,7 +1690,7 @@ export async function publicRoutes(app: FastifyInstance) {
           bonusSpent,
           promoCode,
           trackingToken,
-          telegramLinkUrl: telegramBotDeepLink(telegramLinkToken)
+          telegramLinkCode
         }
       });
     } catch (error) {

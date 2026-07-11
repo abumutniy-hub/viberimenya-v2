@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 
 type CartItem = {
+  cartLineId: string;
   productId: string;
   slug: string;
   name: string;
@@ -10,10 +11,46 @@ type CartItem = {
   quantity: number;
 };
 
+type StoredCartItem = Record<string, unknown>;
+
+function createCartLineId(productId: string) {
+  return `${productId}-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
+}
+
+function normalizeCartItem(value: unknown): CartItem | null {
+  if (!value || typeof value !== "object") return null;
+
+  const item = value as StoredCartItem;
+  const productId = String(item.productId ?? item.id ?? "").trim();
+  const name = String(item.name ?? "").trim();
+  const slug = String(item.slug ?? "").trim();
+  const price = Number(item.price ?? 0);
+  const quantity = Math.max(1, Number(item.quantity ?? 1) || 1);
+
+  if (!productId || !name || !slug || !Number.isFinite(price) || price < 0) {
+    return null;
+  }
+
+  return {
+    cartLineId: String(item.cartLineId ?? "").trim() || createCartLineId(productId),
+    productId,
+    slug,
+    name,
+    price,
+    quantity
+  };
+}
+
 function readCart(): CartItem[] {
   try {
     const raw = window.localStorage.getItem("viberimenya_cart");
-    return raw ? (JSON.parse(raw) as CartItem[]) : [];
+    const parsed = raw ? JSON.parse(raw) : [];
+
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed
+      .map((item) => normalizeCartItem(item))
+      .filter((item): item is CartItem => Boolean(item));
   } catch {
     return [];
   }
@@ -66,6 +103,7 @@ export function AddToCartButton({
           existing.quantity += 1;
         } else {
           cart.push({
+            cartLineId: createCartLineId(product.id),
             productId: product.id,
             slug: product.slug,
             name: product.name,

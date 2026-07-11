@@ -109,7 +109,7 @@ export default async function AdminEmployeesPage() {
                           role={role}
                           isActive={isActive}
                           canManage={canManage}
-                          telegramLinkUrl={text(item.telegram_link_url)}
+                          telegramLinkCode={text(item.telegram_link_code)}
                           linkedTelegramText={telegramText(item)}
                         />
                       </td>

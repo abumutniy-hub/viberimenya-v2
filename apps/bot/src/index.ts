@@ -76,7 +76,7 @@ const DRY_RUN = process.env.BOT_DRY_RUN !== "false";
 const RUN_ONCE = process.env.BOT_RUN_ONCE === "true";
 const POLL_INTERVAL_MS = envNumber("BOT_POLL_INTERVAL_MS", 1000, 300, 2000);
 const TELEGRAM_UPDATES_TIMEOUT_SECONDS = envNumber("BOT_GET_UPDATES_TIMEOUT_SECONDS", 5, 1, 25);
-const SITE_URL = process.env.PUBLIC_SITE_URL || process.env.NEXT_PUBLIC_SITE_URL || "http://viberimenya.ru";
+const SITE_URL = process.env.APP_URL || process.env.PUBLIC_SITE_URL || process.env.NEXT_PUBLIC_SITE_URL || "https://viberimenya.ru";
 const DEFAULT_SHOP_SLUG = process.env.DEFAULT_SHOP_SLUG || "viberimenya";
 const UPLOADS_DIR = process.env.UPLOADS_DIR || resolve(process.cwd(), "../../storage/uploads");
 
@@ -168,6 +168,88 @@ async function getDefaultShopId() {
   return rows[0]?.id || "";
 }
 
+async function queueCustomerOrderNotification(params: {
+  shopId: string;
+  orderId: string;
+  type: "order_ready" | "order_delivering" | "order_delivered";
+  status: "ready" | "delivering" | "delivered";
+}) {
+  await sql`
+    INSERT INTO notification_events (
+      shop_id,
+      order_id,
+      type,
+      channel,
+      recipient_type,
+      status,
+      payload,
+      created_at,
+      updated_at
+    )
+    SELECT
+      o.shop_id,
+      o.id,
+      ${params.type},
+      'telegram',
+      'customer',
+      'pending',
+      jsonb_build_object(
+        'orderId', o.id,
+        'orderNumber', o.order_number,
+        'status', ${params.status},
+        'customerName', c.name,
+        'customerPhone', c.phone,
+        'recipientName', o.recipient_name,
+        'recipientPhone', o.recipient_phone,
+        'deliveryAddressText', o.delivery_address_text,
+        'deliveryComment', o.delivery_comment,
+        'bouquetPhotoUrl', o.bouquet_photo_url,
+        'trackingToken', o.tracking_token,
+        'trackingUrl', CASE
+          WHEN o.tracking_token IS NULL OR o.tracking_token = '' THEN NULL
+          ELSE '/order/track/' || o.tracking_token
+        END
+      ),
+      NOW(),
+      NOW()
+    FROM orders o
+    LEFT JOIN customers c ON c.id = o.customer_id
+    WHERE o.id = ${params.orderId}
+      AND o.shop_id = ${params.shopId}
+      AND o.customer_id IS NOT NULL
+  `;
+}
+
+const TELEGRAM_RETRY_ATTEMPTS = envNumber("BOT_TELEGRAM_RETRY_ATTEMPTS", 3, 1, 5);
+
+type TelegramApiResponse<T> = {
+  ok: boolean;
+  result?: T;
+  description?: string;
+  parameters?: {
+    retry_after?: number;
+  };
+};
+
+function sleep(ms: number) {
+  return new Promise((resolveTimer) => setTimeout(resolveTimer, ms));
+}
+
+function isRetryableTelegramFailure(status: number | undefined, description: string) {
+  if (status === 429) return true;
+  if (status && status >= 500) return true;
+
+  return /too many requests|bad gateway|gateway timeout|etimedout|econnreset|network|timeout/i.test(description);
+}
+
+function telegramRetryDelayMs(attempt: number, retryAfterSeconds?: number) {
+  if (retryAfterSeconds && retryAfterSeconds > 0) {
+    return Math.min(30000, retryAfterSeconds * 1000 + 250);
+  }
+
+  return Math.min(8000, 500 * 2 ** attempt + Math.floor(Math.random() * 300));
+}
+
 async function telegramApi<T>(method: string, body?: Record<string, unknown>): Promise<T> {
   const requestInit: RequestInit = body
     ? {
@@ -179,15 +261,40 @@ async function telegramApi<T>(method: string, body?: Record<string, unknown>): P
         method: "GET"
       };
 
-  const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/${method}`, requestInit);
+  for (let attempt = 0; attempt < TELEGRAM_RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/${method}`, requestInit);
+      const data = await response.json().catch(() => ({
+        ok: false,
+        description: response.statusText
+      })) as TelegramApiResponse<T>;
 
-  const data = await response.json() as { ok: boolean; result?: T; description?: string };
+      if (response.ok && data.ok) {
+        return data.result as T;
+      }
 
-  if (!response.ok || !data.ok) {
-    throw new Error(`Telegram ${method} failed: ${data.description || response.statusText}`);
+      const description = data.description || response.statusText || "unknown error";
+      const retryAfter = data.parameters?.retry_after;
+
+      if (attempt < TELEGRAM_RETRY_ATTEMPTS - 1 && isRetryableTelegramFailure(response.status, description)) {
+        await sleep(telegramRetryDelayMs(attempt, retryAfter));
+        continue;
+      }
+
+      throw new Error(`Telegram ${method} failed: ${description}`);
+    } catch (error) {
+      const description = error instanceof Error ? error.message : String(error);
+
+      if (attempt < TELEGRAM_RETRY_ATTEMPTS - 1 && isRetryableTelegramFailure(undefined, description)) {
+        await sleep(telegramRetryDelayMs(attempt));
+        continue;
+      }
+
+      throw error;
+    }
   }
 
-  return data.result as T;
+  throw new Error(`Telegram ${method} failed after retries`);
 }
 
 async function sendTelegramMessage(chatId: string | number, message: string, extra?: Record<string, unknown>) {
@@ -310,6 +417,19 @@ function clientMainKeyboard() {
   };
 }
 
+function unlinkedMainKeyboard() {
+  return {
+    keyboard: [
+      [{ text: "🛍 Каталог" }, { text: "🧺 Корзина" }],
+      [{ text: "📦 Мои заказы" }, { text: "🎁 Бонусы" }],
+      [{ text: "👤 Профиль" }, { text: "☎️ Связь" }],
+      [{ text: "🔗 Привязать аккаунт" }]
+    ],
+    resize_keyboard: true,
+    is_persistent: true
+  };
+}
+
 function staffMainKeyboard(role: string) {
   const rows: { text: string }[][] = [
     [{ text: "👤 Профиль" }, { text: "🔔 Уведомления" }]
@@ -342,7 +462,11 @@ async function mainKeyboardForChat(chatId: number) {
     return staffMainKeyboard(profile.role || "staff");
   }
 
-  return clientMainKeyboard();
+  if (profile?.customer_id) {
+    return clientMainKeyboard();
+  }
+
+  return unlinkedMainKeyboard();
 }
 
 async function getTelegramProfile(telegramId: string) {
@@ -360,13 +484,21 @@ async function getTelegramProfile(telegramId: string) {
       ta.shop_id,
       ta.username,
       ta.first_name,
-      ta.user_id,
+      CASE WHEN su.user_id IS NOT NULL THEN ta.user_id ELSE NULL END AS user_id,
       ta.customer_id,
       su.role
     FROM telegram_accounts ta
-    LEFT JOIN shop_users su ON su.user_id = ta.user_id AND su.is_active = true
+    LEFT JOIN shop_users su
+      ON su.shop_id = ta.shop_id
+     AND su.user_id = ta.user_id
+     AND su.is_active = true
     WHERE ta.telegram_id = ${telegramId}
       AND ta.is_active = true
+      AND (
+        ta.customer_id IS NOT NULL
+        OR su.user_id IS NOT NULL
+      )
+    ORDER BY ta.linked_at DESC NULLS LAST, ta.updated_at DESC
     LIMIT 1
   `;
 
@@ -444,6 +576,10 @@ async function createCustomerMagicLoginUrl(params: {
   `;
 
   return absoluteUrl(`/api/public/auth/magic/${token}`);
+}
+
+function normalizeTelegramLinkCode(value: string) {
+  return value.trim().replace(/[^0-9]/g, "");
 }
 
 async function handleCustomerLinkToken(message: TelegramMessage, payload: string) {
@@ -622,11 +758,15 @@ async function handleEmployeeLinkToken(message: TelegramMessage, payload: string
   }
 
   const existingRows = await sql<{ user_id: string | null }[]>`
-    SELECT user_id
-    FROM telegram_accounts
-    WHERE shop_id = ${shopId}
-      AND telegram_id = ${telegramId}
-      AND is_active = true
+    SELECT ta.user_id
+    FROM telegram_accounts ta
+    JOIN shop_users su
+      ON su.shop_id = ta.shop_id
+     AND su.user_id = ta.user_id
+     AND su.is_active = true
+    WHERE ta.shop_id = ${shopId}
+      AND ta.telegram_id = ${telegramId}
+      AND ta.is_active = true
     LIMIT 1
   `;
 
@@ -692,6 +832,244 @@ async function handleEmployeeLinkToken(message: TelegramMessage, payload: string
     ].filter(Boolean).join("\n"),
     {
       reply_markup: await mainKeyboardForChat(message.chat.id)
+    }
+  );
+
+  return true;
+}
+
+async function handleTelegramLinkCode(message: TelegramMessage, rawCode: string) {
+  const code = normalizeTelegramLinkCode(rawCode);
+  const telegramId = String(message.chat.id);
+  const shopId = await getDefaultShopId();
+
+  if (!shopId || !code || code.length < 4) {
+    return false;
+  }
+
+  const employeeRows = await sql<{
+    id: string;
+    user_id: string;
+    role: string | null;
+    name: string | null;
+  }[]>`
+    SELECT
+      elt.id,
+      elt.user_id,
+      su.role,
+      u.name
+    FROM employee_link_tokens elt
+    JOIN users u ON u.id = elt.user_id
+    JOIN shop_users su
+      ON su.shop_id = elt.shop_id
+     AND su.user_id = elt.user_id
+     AND su.is_active = true
+    WHERE elt.shop_id = ${shopId}
+      AND elt.provider = 'telegram'
+      AND elt.purpose = 'connect_staff'
+      AND elt.token = ${code}
+      AND elt.status = 'pending'
+      AND elt.consumed_at IS NULL
+      AND elt.expires_at > NOW()
+    LIMIT 1
+  `;
+
+  if (employeeRows[0]) {
+    const linkToken = employeeRows[0];
+
+    const existingRows = await sql<{ user_id: string | null }[]>`
+      SELECT user_id
+      FROM telegram_accounts
+      WHERE shop_id = ${shopId}
+        AND telegram_id = ${telegramId}
+        AND is_active = true
+      LIMIT 1
+    `;
+
+    const existing = existingRows[0];
+
+    if (existing?.user_id && existing.user_id !== linkToken.user_id) {
+      await sendTelegramMessage(message.chat.id, "Этот Telegram уже связан с другим сотрудником. Для смены привязки обратитесь к владельцу.");
+      return true;
+    }
+
+    await sql`
+      INSERT INTO telegram_accounts (
+        shop_id,
+        user_id,
+        telegram_id,
+        username,
+        first_name,
+        last_name,
+        is_active,
+        linked_at,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        ${shopId},
+        ${linkToken.user_id},
+        ${telegramId},
+        ${message.from?.username || null},
+        ${message.from?.first_name || null},
+        ${message.from?.last_name || null},
+        true,
+        NOW(),
+        NOW(),
+        NOW()
+      )
+      ON CONFLICT (shop_id, telegram_id)
+      DO UPDATE SET
+        user_id = ${linkToken.user_id},
+        customer_id = NULL,
+        username = EXCLUDED.username,
+        first_name = EXCLUDED.first_name,
+        last_name = EXCLUDED.last_name,
+        is_active = true,
+        updated_at = NOW()
+    `;
+
+    await sql`
+      UPDATE employee_link_tokens
+      SET status = 'consumed',
+          consumed_at = NOW(),
+          updated_at = NOW()
+      WHERE id = ${linkToken.id}
+    `;
+
+    await sendTelegramMessage(
+      message.chat.id,
+      [
+        "✅ Telegram сотрудника подключён",
+        "",
+        linkToken.name ? `Сотрудник: ${linkToken.name}` : "",
+        `Роль: ${linkToken.role || "staff"}`,
+        "",
+        "Теперь бот будет показывать рабочее меню и сможет присылать задачи по заказам."
+      ].filter(Boolean).join("\n"),
+      {
+        reply_markup: await mainKeyboardForChat(message.chat.id)
+      }
+    );
+
+    return true;
+  }
+
+  const customerRows = await sql<{ id: string; customer_id: string; order_id: string | null }[]>`
+    SELECT id, customer_id, order_id
+    FROM customer_link_tokens
+    WHERE shop_id = ${shopId}
+      AND provider = 'telegram'
+      AND purpose = 'connect_channel'
+      AND token = ${code}
+      AND status = 'pending'
+      AND consumed_at IS NULL
+      AND expires_at > NOW()
+    LIMIT 1
+  `;
+
+  const linkToken = customerRows[0];
+
+  if (!linkToken) {
+    await sendTelegramMessage(message.chat.id, "Код не найден или срок действия истёк. Сгенерируйте новый код на сайте или в CRM.");
+    return true;
+  }
+
+  const existingRows = await sql<{ customer_id: string | null }[]>`
+    SELECT customer_id
+    FROM telegram_accounts
+    WHERE shop_id = ${shopId}
+      AND telegram_id = ${telegramId}
+      AND is_active = true
+    LIMIT 1
+  `;
+
+  const existing = existingRows[0];
+
+  if (existing?.customer_id && existing.customer_id !== linkToken.customer_id) {
+    await sendTelegramMessage(message.chat.id, "Этот Telegram уже связан с другим профилем. Для смены привязки обратитесь к менеджеру.");
+    return true;
+  }
+
+  const displayName = [message.from?.first_name, message.from?.last_name].filter(Boolean).join(" ") || null;
+
+  await sql`
+    INSERT INTO telegram_accounts (
+      shop_id, customer_id, telegram_id, username, first_name, last_name,
+      is_active, linked_at, created_at, updated_at
+    )
+    VALUES (
+      ${shopId}, ${linkToken.customer_id}, ${telegramId},
+      ${message.from?.username || null}, ${message.from?.first_name || null}, ${message.from?.last_name || null},
+      true, NOW(), NOW(), NOW()
+    )
+    ON CONFLICT (shop_id, telegram_id)
+    DO UPDATE SET
+      customer_id = ${linkToken.customer_id},
+      username = EXCLUDED.username,
+      first_name = EXCLUDED.first_name,
+      last_name = EXCLUDED.last_name,
+      is_active = true,
+      updated_at = NOW()
+  `;
+
+  await sql`
+    INSERT INTO customer_channel_links (
+      shop_id, customer_id, provider, provider_user_id,
+      provider_username, provider_display_name,
+      is_active, linked_at, created_at, updated_at
+    )
+    VALUES (
+      ${shopId}, ${linkToken.customer_id}, 'telegram', ${telegramId},
+      ${message.from?.username || null}, ${displayName},
+      true, NOW(), NOW(), NOW()
+    )
+    ON CONFLICT (shop_id, provider, provider_user_id)
+    DO UPDATE SET
+      customer_id = ${linkToken.customer_id},
+      provider_username = EXCLUDED.provider_username,
+      provider_display_name = EXCLUDED.provider_display_name,
+      is_active = true,
+      updated_at = NOW()
+  `;
+
+  await sql`
+    UPDATE customer_link_tokens
+    SET status = 'consumed',
+        consumed_at = NOW(),
+        updated_at = NOW()
+    WHERE id = ${linkToken.id}
+  `;
+
+  const magicLoginUrl = await createCustomerMagicLoginUrl({
+    shopId,
+    customerId: linkToken.customer_id,
+    orderId: linkToken.order_id
+  });
+
+  await sendTelegramMessage(
+    message.chat.id,
+    [
+      "✅ Telegram подключён",
+      "",
+      "Теперь здесь будут приходить уведомления по заказам, оплате, сборке и доставке.",
+      "Ваши заказы доступны в разделе «📦 Мои заказы»."
+    ].join("\n"),
+    { reply_markup: await mainKeyboardForChat(message.chat.id) }
+  );
+
+  await sendTelegramMessage(
+    message.chat.id,
+    "Откройте сайт — вход выполнится автоматически.",
+    {
+      reply_markup: inlineKeyboard([
+        [
+          {
+            text: "Открыть личный кабинет",
+            url: magicLoginUrl
+          }
+        ]
+      ])
     }
   );
 
@@ -1313,6 +1691,20 @@ function normalizeInput(value: string) {
 
 function normalizePhone(value: string) {
   return value.trim().replace(/[^\d+]/g, "");
+}
+
+function phoneDigitsOnly(value: string) {
+  const digits = value.replace(/\D/g, "");
+
+  if (digits.length === 11 && digits.startsWith("8")) {
+    return `7${digits.slice(1)}`;
+  }
+
+  if (digits.length === 10) {
+    return `7${digits}`;
+  }
+
+  return digits;
 }
 
 function createTelegramOrderNumber() {
@@ -2080,21 +2472,79 @@ function shortDateText(value: unknown) {
   }
 }
 
+function staffRoleText(role: string | null | undefined) {
+  const map: Record<string, string> = {
+    owner: "Владелец",
+    admin: "Администратор",
+    manager: "Менеджер",
+    florist: "Флорист",
+    courier: "Курьер",
+    staff: "Сотрудник"
+  };
+
+  return map[String(role || "staff")] || String(role || "staff");
+}
+
 async function handleCustomerProfile(chatId: number) {
   const replyMarkup = await mainKeyboardForChat(chatId);
   const profile = await getTelegramProfile(String(chatId));
 
   if (profile?.user_id) {
+    const staffRows = await sql<{
+      name: string | null;
+      phone: string | null;
+      email: string | null;
+      role: string;
+      last_login_at: string | null;
+    }[]>`
+      SELECT
+        u.name,
+        u.phone,
+        u.email,
+        su.role,
+        u.last_login_at
+      FROM shop_users su
+      JOIN users u ON u.id = su.user_id
+      WHERE su.shop_id = ${profile.shop_id}
+        AND su.user_id = ${profile.user_id}
+        AND su.is_active = true
+      LIMIT 1
+    `;
+
+    const staff = staffRows[0];
+
+    if (!staff) {
+      await sendTelegramMessage(
+        chatId,
+        [
+          "👤 Профиль",
+          "",
+          "Эта Telegram-привязка больше не активна.",
+          "Получите новый код в CRM и нажмите «🔗 Привязать аккаунт»."
+        ].join("\n"),
+        {
+          reply_markup: await mainKeyboardForChat(chatId)
+        }
+      );
+      return;
+    }
+
     await sendTelegramMessage(
       chatId,
       [
-        "👤 Профиль",
+        "👤 Профиль сотрудника",
         "",
-        "Вы вошли как сотрудник магазина.",
-        `Роль: ${profile.role || "staff"}`,
+        staff.name ? `Имя: ${staff.name}` : "",
+        `Роль: ${staffRoleText(staff.role)}`,
+        staff.phone ? `Телефон: ${staff.phone}` : "",
+        staff.email ? `Email: ${staff.email}` : "",
+        profile.username ? `Telegram: @${profile.username}` : "",
+        "",
+        "🔔 Уведомления: включены",
+        "Задачи по заказам будут приходить сюда автоматически.",
         "",
         `CRM: ${SITE_URL}/admin`
-      ].join("\n"),
+      ].filter(Boolean).join("\n"),
       {
         reply_markup: replyMarkup
       }
@@ -2108,8 +2558,8 @@ async function handleCustomerProfile(chatId: number) {
       [
         "👤 Профиль",
         "",
-        "Личный кабинет покупателя пока не подключён.",
-        "Оформите заказ на сайте и нажмите «Подключить Telegram» после оформления."
+        "Личный кабинет пока не подключён.",
+        "Получите код привязки на сайте или в CRM, затем нажмите «🔗 Привязать аккаунт» и введите код."
       ].join("\n"),
       {
         reply_markup: replyMarkup
@@ -2164,9 +2614,35 @@ async function handleCustomerProfile(chatId: number) {
       "На сайте доступна полная история заказов и бонусов."
     ].filter(Boolean).join("\n"),
     {
-      reply_markup: inlineKeyboard([
-        [{ text: "Открыть личный кабинет на сайте", url: loginUrl }]
-      ])
+      reply_markup: replyMarkup
+    }
+  );
+
+  await sendTelegramMessage(chatId, "Открыть личный кабинет:", {
+    reply_markup: inlineKeyboard([
+      [
+        {
+          text: "Личный кабинет",
+          url: loginUrl
+        }
+      ]
+    ])
+  });
+}
+
+async function handleContact(chatId: number) {
+  const replyMarkup = await mainKeyboardForChat(chatId);
+
+  await sendTelegramMessage(
+    chatId,
+    [
+      "☎️ Связь",
+      "",
+      "Мы на связи в Telegram и WhatsApp.",
+      `Сайт: ${SITE_URL}`
+    ].join("\n"),
+    {
+      reply_markup: replyMarkup
     }
   );
 }
@@ -2378,23 +2854,6 @@ async function handleBonuses(chatId: number) {
       "Бонусы можно использовать при следующих заказах.",
       "",
       `Личный кабинет: ${SITE_URL}/account`
-    ].join("\n"),
-    {
-      reply_markup: replyMarkup
-    }
-  );
-}
-
-async function handleContact(chatId: number) {
-  const replyMarkup = await mainKeyboardForChat(chatId);
-
-  await sendTelegramMessage(
-    chatId,
-    [
-      "☎️ Связь",
-      "",
-      "Мы на связи в Telegram и WhatsApp.",
-      `Сайт: ${SITE_URL}`
     ].join("\n"),
     {
       reply_markup: replyMarkup
@@ -3151,6 +3610,77 @@ async function handleFloristReadyOrder(callbackQuery: TelegramCallbackQuery, ord
     )
   `;
 
+  await sql`
+    INSERT INTO notification_events (
+      shop_id,
+      order_id,
+      type,
+      channel,
+      recipient_type,
+      recipient_telegram_id,
+      status,
+      payload,
+      created_at,
+      updated_at
+    )
+    SELECT
+      o.shop_id,
+      o.id,
+      'courier_order_assigned',
+      'telegram',
+      'staff',
+      courier_ta.telegram_id,
+      'pending',
+      jsonb_build_object(
+        'orderId', o.id,
+        'orderNumber', o.order_number,
+        'courierId', o.courier_id,
+        'courierName', cu.name,
+        'deliveryDate', o.delivery_date,
+        'deliveryIntervalName', di.name,
+        'deliveryAddressText', o.delivery_address_text,
+        'deliveryComment', o.delivery_comment,
+        'recipientName', o.recipient_name,
+        'recipientPhone', o.recipient_phone,
+        'trackingUrl', CASE
+          WHEN o.tracking_token IS NULL OR o.tracking_token = '' THEN NULL
+          ELSE '/order/track/' || o.tracking_token
+        END,
+        'crmUrl', '/admin/orders/' || o.id::text
+      ),
+      NOW(),
+      NOW()
+    FROM orders o
+    JOIN users cu ON cu.id = o.courier_id
+    JOIN LATERAL (
+      SELECT ta.telegram_id
+      FROM telegram_accounts ta
+      JOIN shop_users su
+        ON su.shop_id = ta.shop_id
+       AND su.user_id = ta.user_id
+       AND su.role = 'courier'
+       AND su.is_active = true
+      WHERE ta.shop_id = o.shop_id
+        AND ta.user_id = o.courier_id
+        AND ta.is_active = true
+      ORDER BY ta.linked_at DESC
+      LIMIT 1
+    ) courier_ta ON true
+    LEFT JOIN delivery_intervals di
+      ON di.id = o.delivery_interval_id
+     AND di.shop_id = o.shop_id
+    WHERE o.id = ${order.id}
+      AND o.shop_id = ${profile.shop_id}
+      AND o.courier_id IS NOT NULL
+  `;
+
+  await queueCustomerOrderNotification({
+    shopId: profile.shop_id,
+    orderId: order.id,
+    type: "order_ready",
+    status: "ready"
+  });
+
   await answerCallbackQuery(callbackQuery.id, "Заказ готов");
 
   await sendTelegramMessage(
@@ -3286,16 +3816,13 @@ async function handleCourierDeliveryOrders(chatId: number) {
     }
 
     const recipientPhone = normalizePhone(String(order.recipient_phone || ""));
+    const recipientPhoneDigits = phoneDigitsOnly(recipientPhone);
 
-    if (recipientPhone) {
+    if (recipientPhoneDigits) {
       rows.push([
         {
-          text: "📞 Позвонить",
-          url: `tel:+${recipientPhone}`
-        },
-        {
           text: "WhatsApp",
-          url: `https://wa.me/${recipientPhone}`
+          url: `https://wa.me/${recipientPhoneDigits}`
         }
       ]);
     }
@@ -3322,22 +3849,37 @@ async function handleCourierDeliveryOrders(chatId: number) {
       }
     ]);
 
-    await sendTelegramMessage(
-      chatId,
-      [
-        `Заказ ${order.order_number}`,
-        `Статус: ${orderStatusText(order.status)}`,
-        order.delivery_date ? `Дата: ${shortDateText(order.delivery_date)}` : "",
-        order.delivery_interval_name ? `Интервал: ${order.delivery_interval_name}` : "",
-        order.delivery_address_text ? `Адрес: ${order.delivery_address_text}` : "",
-        order.recipient_name ? `Получатель: ${order.recipient_name}` : "",
-        order.recipient_phone ? `Телефон: ${order.recipient_phone}` : "",
-        order.delivery_comment ? `Комментарий: ${order.delivery_comment}` : ""
-      ].filter(Boolean).join("\n"),
-      {
+    const orderCardText = [
+      `Заказ ${order.order_number}`,
+      `Статус: ${orderStatusText(order.status)}`,
+      order.delivery_date ? `Дата: ${shortDateText(order.delivery_date)}` : "",
+      order.delivery_interval_name ? `Интервал: ${order.delivery_interval_name}` : "",
+      order.delivery_address_text ? `Адрес: ${order.delivery_address_text}` : "",
+      order.recipient_name ? `Получатель: ${order.recipient_name}` : "",
+      order.recipient_phone ? `Телефон: ${order.recipient_phone}` : "",
+      order.delivery_comment ? `Комментарий: ${order.delivery_comment}` : ""
+    ].filter(Boolean).join("\n");
+
+    try {
+      await sendTelegramMessage(chatId, orderCardText, {
         reply_markup: inlineKeyboard(rows)
+      });
+    } catch (error) {
+      console.error(`[bot-worker] failed to send courier order card order=${order.id}`, error);
+
+      try {
+        await sendTelegramMessage(
+          chatId,
+          [
+            orderCardText,
+            "",
+            "Кнопки временно недоступны. Обновите раздел доставки через меню."
+          ].join("\n")
+        );
+      } catch (fallbackError) {
+        console.error(`[bot-worker] failed to send fallback courier order card order=${order.id}`, fallbackError);
       }
-    );
+    }
   }
 }
 
@@ -3444,6 +3986,13 @@ async function handleCourierStartDelivery(callbackQuery: TelegramCallbackQuery, 
       NOW()
     )
   `;
+
+  await queueCustomerOrderNotification({
+    shopId: profile.shop_id,
+    orderId: order.id,
+    type: "order_delivering",
+    status: "delivering"
+  });
 
   await answerCallbackQuery(callbackQuery.id, "Статус: в доставке");
 
@@ -3552,6 +4101,13 @@ async function handleCourierDeliveredOrder(callbackQuery: TelegramCallbackQuery,
       NOW()
     )
   `;
+
+  await queueCustomerOrderNotification({
+    shopId: profile.shop_id,
+    orderId: order.id,
+    type: "order_delivered",
+    status: "delivered"
+  });
 
   await answerCallbackQuery(callbackQuery.id, "Заказ доставлен");
 
@@ -3757,6 +4313,23 @@ async function handleCallbackQuery(callbackQuery: TelegramCallbackQuery) {
     return;
   }
 
+  if (data === "orders:list") {
+    await answerCallbackQuery(callbackQuery.id);
+    await handleOrders(chatId);
+    return;
+  }
+
+  if (data === "notifications:on" || data === "notifications:off") {
+    const enabled = data === "notifications:on";
+    const updated = await setTelegramNotifications(chatId, enabled);
+    await answerCallbackQuery(
+      callbackQuery.id,
+      updated ? (enabled ? "Уведомления включены" : "Уведомления выключены") : "Telegram не привязан"
+    );
+    await handleNotifications(chatId);
+    return;
+  }
+
   if (data.startsWith("florist:take:")) {
     const orderId = data.slice("florist:take:".length);
     await handleFloristTakeOrder(callbackQuery, orderId);
@@ -3833,6 +4406,198 @@ async function handleCallbackQuery(callbackQuery: TelegramCallbackQuery) {
   await answerCallbackQuery(callbackQuery.id, "Раздел пока недоступен");
 }
 
+async function setTelegramNotifications(chatId: number, enabled: boolean) {
+  const profile = await getTelegramProfile(String(chatId));
+
+  if (!profile?.user_id && !profile?.customer_id) {
+    return false;
+  }
+
+  const rows = await sql<{ id: string }[]>`
+    UPDATE telegram_accounts
+    SET notifications_enabled = ${enabled},
+        updated_at = NOW()
+    WHERE shop_id = ${profile.shop_id}
+      AND telegram_id = ${String(chatId)}
+      AND is_active = true
+      AND (
+        (${profile.customer_id || null}::uuid IS NOT NULL AND customer_id = ${profile.customer_id || null})
+        OR (${profile.user_id || null}::uuid IS NOT NULL AND user_id = ${profile.user_id || null})
+      )
+    RETURNING id
+  `;
+
+  return rows.length > 0;
+}
+
+async function handleNotifications(chatId: number) {
+  const replyMarkup = await mainKeyboardForChat(chatId);
+  const profile = await getTelegramProfile(String(chatId));
+
+  if (!profile?.user_id && !profile?.customer_id) {
+    await sendTelegramMessage(
+      chatId,
+      [
+        "🔔 Уведомления",
+        "",
+        "Telegram пока не привязан.",
+        "Получите код на сайте или в CRM, нажмите «🔗 Привязать аккаунт» и введите код."
+      ].join("\n"),
+      {
+        reply_markup: replyMarkup
+      }
+    );
+    return;
+  }
+
+  if (profile?.user_id) {
+    const rows = await sql<{
+      active_assembly: number;
+      active_deliveries: number;
+      unread_staff_messages: number;
+      pending_events: number;
+      last_event_at: string | null;
+    }[]>`
+      SELECT
+        (
+          SELECT COUNT(*)::int
+          FROM orders
+          WHERE shop_id = ${profile.shop_id}
+            AND florist_id = ${profile.user_id}
+            AND status IN ('new', 'confirmed', 'assembling', 'ready')
+        ) AS active_assembly,
+        (
+          SELECT COUNT(*)::int
+          FROM orders
+          WHERE shop_id = ${profile.shop_id}
+            AND courier_id = ${profile.user_id}
+            AND status IN ('ready', 'assigned_courier', 'delivering')
+        ) AS active_deliveries,
+        (
+          SELECT COUNT(*)::int
+          FROM chat_messages
+          WHERE shop_id = ${profile.shop_id}
+            AND is_read_by_staff = false
+        ) AS unread_staff_messages,
+        (
+          SELECT COUNT(*)::int
+          FROM notification_events
+          WHERE shop_id = ${profile.shop_id}
+            AND channel = 'telegram'
+            AND status = 'pending'
+        ) AS pending_events,
+        (
+          SELECT MAX(COALESCE(sent_at, updated_at))::text
+          FROM notification_events
+          WHERE shop_id = ${profile.shop_id}
+            AND channel = 'telegram'
+            AND status IN ('sent', 'processing')
+            AND (
+              recipient_telegram_id = ${String(chatId)}
+              OR recipient_type = 'staff'
+            )
+        ) AS last_event_at
+    `;
+
+    const item = rows[0];
+
+    await sendTelegramMessage(
+      chatId,
+      [
+        "🔔 Уведомления сотрудника",
+        "",
+        "Статус: включены",
+        `Роль: ${staffRoleText(profile.role)}`,
+        "",
+        `Активных сборок: ${Number(item?.active_assembly || 0)}`,
+        `Активных доставок: ${Number(item?.active_deliveries || 0)}`,
+        `Непрочитанных сообщений клиентов: ${Number(item?.unread_staff_messages || 0)}`,
+        `Ожидают отправки в Telegram: ${Number(item?.pending_events || 0)}`,
+        item?.last_event_at ? `Последнее уведомление: ${shortDateText(item.last_event_at)}` : "Последнее уведомление: пока нет",
+        "",
+        "Для работы с задачами используйте кнопки «💐 Сборка заказов», «🚚 Доставка» или «📦 Заказы»."
+      ].join("\n"),
+      {
+        reply_markup: replyMarkup
+      }
+    );
+    return;
+  }
+
+  const rows = await sql<{
+    active_orders: number;
+    last_event_at: string | null;
+    notifications_enabled: boolean;
+  }[]>`
+    SELECT
+      (
+        SELECT COUNT(*)::int
+        FROM orders
+        WHERE shop_id = ${profile.shop_id}
+          AND customer_id = ${profile.customer_id}
+          AND status NOT IN ('delivered', 'cancelled')
+      ) AS active_orders,
+      (
+        SELECT MAX(COALESCE(sent_at, updated_at))::text
+        FROM notification_events
+        WHERE shop_id = ${profile.shop_id}
+          AND channel = 'telegram'
+          AND recipient_type = 'customer'
+          AND status IN ('sent', 'processing')
+          AND order_id IN (
+            SELECT id
+            FROM orders
+            WHERE shop_id = ${profile.shop_id}
+              AND customer_id = ${profile.customer_id}
+          )
+      ) AS last_event_at,
+      COALESCE((
+        SELECT notifications_enabled
+        FROM telegram_accounts
+        WHERE shop_id = ${profile.shop_id}
+          AND customer_id = ${profile.customer_id}
+          AND telegram_id = ${String(chatId)}
+          AND is_active = true
+        ORDER BY linked_at DESC
+        LIMIT 1
+      ), true) AS notifications_enabled
+  `;
+
+  const item = rows[0];
+  const isEnabled = item?.notifications_enabled !== false;
+
+  await sendTelegramMessage(
+    chatId,
+    [
+      "🔔 Уведомления покупателя",
+      "",
+      `Статус: ${isEnabled ? "включены" : "выключены"}`,
+      `Активных заказов: ${Number(item?.active_orders || 0)}`,
+      item?.last_event_at ? `Последнее уведомление: ${shortDateText(item.last_event_at)}` : "Последнее уведомление: пока нет",
+      "",
+      isEnabled
+        ? "Уведомления по заказам будут приходить сюда автоматически."
+        : "Автоматические уведомления по заказам сейчас выключены."
+    ].join("\n"),
+    {
+      reply_markup: inlineKeyboard([
+        [
+          {
+            text: isEnabled ? "🔕 Выключить уведомления" : "🔔 Включить уведомления",
+            callback_data: isEnabled ? "notifications:off" : "notifications:on"
+          }
+        ],
+        [
+          {
+            text: "📦 Мои заказы",
+            callback_data: "orders:list"
+          }
+        ]
+      ])
+    }
+  );
+}
+
 async function handleUpdate(update: TelegramUpdate) {
   if (update.callback_query) {
     await handleCallbackQuery(update.callback_query);
@@ -3881,6 +4646,25 @@ async function handleUpdate(update: TelegramUpdate) {
     return;
   }
 
+  if (text === "🔗 Привязать аккаунт") {
+    await sendTelegramMessage(
+      message.chat.id,
+      [
+        "Введите код привязки.",
+        "",
+        "Клиент берёт код в личном кабинете на сайте или после оформления заказа.",
+        "Сотрудник берёт код в CRM у администратора."
+      ].join("\n")
+    );
+    return;
+  }
+
+  if (/^[0-9\s-]{4,12}$/.test(text)) {
+    const linked = await handleTelegramLinkCode(message, text);
+    if (linked) {
+      return;
+    }
+  }
 
   if (text === "🛍 Каталог") {
     await handleCatalog(message.chat.id);
@@ -3934,10 +4718,7 @@ async function handleUpdate(update: TelegramUpdate) {
   }
 
   if (text === "🔔 Уведомления") {
-    const replyMarkup = await mainKeyboardForChat(message.chat.id);
-    await sendTelegramMessage(message.chat.id, "🔔 Уведомления включены. Новые события по заказам будут приходить сюда.", {
-      reply_markup: replyMarkup
-    });
+    await handleNotifications(message.chat.id);
     return;
   }
 
@@ -3955,9 +4736,16 @@ async function handleUpdate(update: TelegramUpdate) {
 async function processTelegramUpdates() {
   if (!TELEGRAM_BOT_TOKEN || DRY_RUN) return;
 
-  const updates = await telegramApi<TelegramUpdate[]>(
-    `getUpdates?timeout=${TELEGRAM_UPDATES_TIMEOUT_SECONDS}&limit=50${telegramOffset ? `&offset=${telegramOffset}` : ""}`
-  );
+  let updates: TelegramUpdate[] = [];
+
+  try {
+    updates = await telegramApi<TelegramUpdate[]>(
+      `getUpdates?timeout=${TELEGRAM_UPDATES_TIMEOUT_SECONDS}&limit=50${telegramOffset ? `&offset=${telegramOffset}` : ""}`
+    );
+  } catch (error) {
+    console.error("[bot-worker] getUpdates failed", error);
+    return;
+  }
 
   for (const update of updates) {
     telegramOffset = update.update_id + 1;
@@ -4076,34 +4864,40 @@ function formatEvent(event: NotificationEvent): string {
       ].filter(Boolean).join("\n");
     }
 
-    if (event.type === "courier_order_assigned") {
-    const deliveryDate = payloadText(payload, "deliveryDate", "delivery_date");
-    const deliveryIntervalName = payloadText(payload, "deliveryIntervalName", "delivery_interval_name");
-    const deliveryAddressText = payloadText(payload, "deliveryAddressText", "delivery_address_text");
-    const deliveryComment = payloadText(payload, "deliveryComment", "delivery_comment");
-    const recipientName = payloadText(payload, "recipientName", "recipient_name");
-    const recipientPhone = payloadText(payload, "recipientPhone", "recipient_phone");
-
-    return [
-      `🚚 Вам назначена доставка по заказу ${orderTitle}`,
-      deliveryDate ? `Дата: ${shortDateText(deliveryDate)}` : "",
-      deliveryIntervalName ? `Интервал: ${deliveryIntervalName}` : "",
-      deliveryAddressText ? `Адрес: ${deliveryAddressText}` : "",
-      recipientName ? `Получатель: ${recipientName}` : "",
-      recipientPhone ? `Телефон: ${recipientPhone}` : "",
-      deliveryComment ? `Комментарий: ${deliveryComment}` : "",
-      "",
-      "Откройте раздел доставки и примите заказ в работу."
-    ].filter(Boolean).join("\n");
-  }
-
-  if (event.type === "order_created") {
+    if (event.type === "order_created") {
       return [
         `🌸 Заказ ${orderTitle} принят`,
         totalText ? `Сумма заказа: ${totalText}` : "",
         "",
         "Менеджер проверит детали и подтвердит заказ.",
         trackingUrl ? `Статус заказа: ${trackingUrl}` : ""
+      ].filter(Boolean).join("\n");
+    }
+
+    if (event.type === "order_ready") {
+      return [
+        `💐 Букет по заказу ${orderTitle} готов`,
+        "",
+        "Флорист собрал букет и прикрепил фото. Скоро передадим заказ курьеру.",
+        trackingUrl ? `Отследить заказ: ${trackingUrl}` : ""
+      ].filter(Boolean).join("\n");
+    }
+
+    if (event.type === "order_delivering") {
+      return [
+        `🚗 Курьер выехал по заказу ${orderTitle}`,
+        "",
+        "Заказ уже в пути к получателю.",
+        trackingUrl ? `Отследить доставку: ${trackingUrl}` : ""
+      ].filter(Boolean).join("\n");
+    }
+
+    if (event.type === "order_delivered") {
+      return [
+        `✅ Заказ ${orderTitle} доставлен`,
+        "",
+        "Спасибо, что выбрали ВЫБЕРИ МЕНЯ. Будем рады собрать следующий букет.",
+        trackingUrl ? `Страница заказа: ${trackingUrl}` : ""
       ].filter(Boolean).join("\n");
     }
   }
@@ -4132,6 +4926,27 @@ function formatEvent(event: NotificationEvent): string {
       "",
       "Откройте заказ в CRM и возьмите его в работу.",
       crmUrl ? `CRM: ${crmUrl}` : ""
+    ].filter(Boolean).join("\n");
+  }
+
+  if (event.type === "courier_order_assigned") {
+    const deliveryDate = payloadText(payload, "deliveryDate", "delivery_date");
+    const deliveryIntervalName = payloadText(payload, "deliveryIntervalName", "delivery_interval_name");
+    const deliveryAddressText = payloadText(payload, "deliveryAddressText", "delivery_address_text");
+    const deliveryComment = payloadText(payload, "deliveryComment", "delivery_comment");
+    const recipientName = payloadText(payload, "recipientName", "recipient_name");
+    const recipientPhone = payloadText(payload, "recipientPhone", "recipient_phone");
+
+    return [
+      `🚚 Вам назначена доставка по заказу ${orderTitle}`,
+      deliveryDate ? `Дата: ${shortDateText(deliveryDate)}` : "",
+      deliveryIntervalName ? `Интервал: ${deliveryIntervalName}` : "",
+      deliveryAddressText ? `Адрес: ${deliveryAddressText}` : "",
+      recipientName ? `Получатель: ${recipientName}` : "",
+      recipientPhone ? `Телефон: ${recipientPhone}` : "",
+      deliveryComment ? `Комментарий: ${deliveryComment}` : "",
+      "",
+      "Откройте раздел доставки и примите заказ в работу."
     ].filter(Boolean).join("\n");
   }
 
@@ -4193,6 +5008,7 @@ async function getRecipients(event: NotificationEvent): Promise<string[]> {
         ON ta.shop_id = o.shop_id
        AND ta.customer_id = o.customer_id
        AND ta.is_active = true
+       AND ta.notifications_enabled = true
       WHERE o.id = ${event.order_id}
         AND o.shop_id = ${event.shop_id}
       ORDER BY ta.linked_at DESC
@@ -4206,6 +5022,10 @@ async function getRecipients(event: NotificationEvent): Promise<string[]> {
     const rows = await sql<{ telegram_id: string }[]>`
       SELECT DISTINCT ta.telegram_id
       FROM telegram_accounts ta
+      JOIN shop_users su
+        ON su.shop_id = ta.shop_id
+       AND su.user_id = ta.user_id
+       AND su.is_active = true
       WHERE ta.shop_id = ${event.shop_id}
         AND ta.user_id IS NOT NULL
         AND ta.is_active = true
@@ -4267,8 +5087,10 @@ async function processNotificationEvents() {
       for (const chatId of recipients) {
         const payload = eventPayload(event);
         const productImageUrl = absoluteUrl(payloadValue(payload, "productImageUrl", "product_image_url"));
+        const bouquetPhotoUrl = absoluteUrl(payloadValue(payload, "bouquetPhotoUrl", "bouquet_photo_url"));
         const orderId = payloadText(payload, "orderId", "order_id");
         const crmUrl = absoluteUrl(payloadValue(payload, "crmUrl", "crm_url"));
+        const trackingUrl = absoluteUrl(payloadValue(payload, "trackingUrl", "tracking_url"));
 
         const deliveryAddressText = payloadText(payload, "deliveryAddressText", "delivery_address_text");
         const actionButtonRows: TelegramInlineKeyboardButton[][] = [];
@@ -4309,6 +5131,15 @@ async function processNotificationEvents() {
           ]);
         }
 
+        if (event.recipient_type === "customer" && trackingUrl) {
+          actionButtonRows.push([
+            {
+              text: "Открыть заказ",
+              url: trackingUrl
+            }
+          ]);
+        }
+
         const actionReplyMarkup = actionButtonRows.length ? inlineKeyboard(actionButtonRows) : null;
 
         if (event.type === "florist_order_assigned" && productImageUrl) {
@@ -4319,6 +5150,10 @@ async function processNotificationEvents() {
               reply_markup: actionReplyMarkup
             });
           }
+        } else if (event.type === "order_ready" && bouquetPhotoUrl) {
+          await sendTelegramPhoto(chatId, bouquetPhotoUrl, message, actionReplyMarkup ? {
+            reply_markup: actionReplyMarkup
+          } : undefined);
         } else if (actionReplyMarkup) {
           await sendTelegramMessage(chatId, message, {
             reply_markup: actionReplyMarkup

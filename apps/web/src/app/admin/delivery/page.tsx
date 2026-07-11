@@ -1,4 +1,5 @@
 import { AdminTable } from "../components/admin-table";
+import { DeliveryIntervalForm, DeliveryZoneForm } from "../components/admin-forms";
 import { fetchAdmin, type AdminRow } from "../lib/admin-api";
 
 export const dynamic = "force-dynamic";
@@ -19,6 +20,20 @@ export default async function AdminDeliveryPage() {
           <h1>Доставка</h1>
         </div>
       </div>
+
+      <section className="admin-panel">
+        <div className="admin-panel-head">
+          <h2>Добавить зону</h2>
+        </div>
+        <DeliveryZoneForm />
+      </section>
+
+      <section className="admin-panel">
+        <div className="admin-panel-head">
+          <h2>Добавить интервал</h2>
+        </div>
+        <DeliveryIntervalForm />
+      </section>
 
       <section className="admin-panel">
         <div className="admin-panel-head">

@@ -63,6 +63,8 @@ const fallbackCategories: Category[] = [
   { slug: "aktsii", name: "Акции", description: "Выгодные предложения и сезонные подборки" }
 ];
 
+const heroImageUrl = "/uploads/bouquets/bouquet-66d8b881-c6f7-424c-b1f6-e14fca6408e8-1783641459234-e7918769-753e-4ad6-87b1-d4ffdd67c880.jpg";
+
 async function fetchJson<T>(path: string): Promise<T | null> {
   const baseUrl = process.env.API_INTERNAL_URL ?? "http://127.0.0.1:4001";
 
@@ -98,11 +100,13 @@ export default async function HomePage() {
       : fallbackCategories;
   const occasions =
     home?.sections.occasions && home.sections.occasions.length > 0
-      ? home.sections.occasions
+      ? home.sections.occasions.slice(0, 8)
       : ["Любимой", "Маме", "День рождения", "Без повода", "Свадьба", "Учителю"];
 
   const deliveryZones = delivery?.zones ?? [];
   const intervals = delivery?.intervals ?? [];
+  const firstZone = deliveryZones[0];
+  const firstInterval = intervals[0];
 
   return (
     <main className="page-shell">
@@ -127,7 +131,7 @@ export default async function HomePage() {
         </a>
       </header>
 
-      <section className="hero">
+      <section className="hero hero-compact">
         <div className="hero-copy">
           <div className="eyebrow">Цветочная мастерская</div>
           <h1>{title}</h1>
@@ -135,42 +139,54 @@ export default async function HomePage() {
 
           <div className="hero-actions">
             <a className="primary-button" href="/catalog">
-              Перейти в каталог
+              Выбрать букет
             </a>
-            <a className="secondary-button" href="#delivery">
-              Условия доставки
+            <a className="secondary-button" href="/cart">
+              Оформить заказ
             </a>
           </div>
 
           <div className="hero-points" aria-label="Преимущества">
-            <span>Фото букета перед доставкой</span>
-            <span>Свежая сборка</span>
-            <span>Удобные интервалы</span>
+            <span>Фото перед доставкой</span>
+            <span>{firstInterval ? `Ближайший интервал: ${firstInterval.name}` : "Удобные интервалы"}</span>
+            <span>{firstZone ? `Доставка от ${firstZone.price.toLocaleString("ru-RU")} ₽` : "Доставка по городу"}</span>
           </div>
         </div>
 
-        <div className="hero-card" aria-label="Витрина букета">
-          <div className="bouquet-visual">
-            <span className="flower flower-one" />
-            <span className="flower flower-two" />
-            <span className="flower flower-three" />
-            <span className="flower flower-four" />
-            <span className="flower flower-five" />
-          </div>
+        <div className="hero-card hero-photo-card" aria-label="Букет ВЫБЕРИ МЕНЯ">
+          <img src={heroImageUrl} alt="Букет ВЫБЕРИ МЕНЯ" />
           <div className="hero-card-info">
-            <strong>Букет дня</strong>
-            <span>Нежная сезонная композиция</span>
+            <strong>Соберём сегодня</strong>
+            <span>Под повод, адресата и бюджет</span>
           </div>
         </div>
       </section>
 
-      <section className="section">
-        <div className="section-heading">
+      <section className="home-quick-panel" aria-label="Быстрые действия">
+        <a href="/catalog">
+          <span>01</span>
+          <strong>Открыть каталог</strong>
+          <small>Готовые букеты и подарки</small>
+        </a>
+        <a href="/cart">
+          <span>02</span>
+          <strong>Оформить доставку</strong>
+          <small>Телефон сохранится после заказа</small>
+        </a>
+        <a href="/account">
+          <span>03</span>
+          <strong>Личный кабинет</strong>
+          <small>Статусы, бонусы и Telegram</small>
+        </a>
+      </section>
+
+      <section className="section compact-section">
+        <div className="section-heading compact-heading">
           <span>Быстрый выбор</span>
-          <h2>Подберите букет по поводу</h2>
+          <h2>По поводу</h2>
         </div>
 
-        <div className="occasion-grid">
+        <div className="occasion-grid compact-occasion-grid">
           {occasions.map((occasion) => (
             <a key={occasion} href={`/catalog?occasion=${encodeURIComponent(occasion)}`}>
               {occasion}
@@ -179,15 +195,15 @@ export default async function HomePage() {
         </div>
       </section>
 
-      <section id="catalog" className="section">
-        <div className="section-heading">
+      <section id="catalog" className="section compact-section">
+        <div className="section-heading compact-heading">
           <span>Каталог</span>
-          <h2>Основные разделы</h2>
-          <p>Подберите формат букета под повод, настроение и адресата.</p>
+          <h2>Разделы</h2>
+          <p>Букеты, цветы поштучно, подарки и сезонные подборки.</p>
         </div>
 
-        <div className="category-grid">
-          {categories.map((category) => (
+        <div className="category-grid compact-category-grid">
+          {categories.slice(0, 6).map((category) => (
             <a className="category-card" key={category.slug} href={`/catalog?category=${category.slug}`}>
               <span className="category-icon">✦</span>
               <strong>{category.name}</strong>
@@ -197,37 +213,17 @@ export default async function HomePage() {
         </div>
       </section>
 
-      <section className="section product-preview">
-        <div className="section-heading">
-          <span>Витрина</span>
-          <h2>Букеты для особенных моментов</h2>
-          <p>
-            Нежные композиции, подарки и цветы для случаев, когда хочется сказать больше, чем словами.
-          </p>
-        </div>
-
-        <div className="empty-product-card">
-          <div>
-            <strong>Индивидуальная сборка</strong>
-            <p>Соберём букет под настроение, повод и пожелания к цветам.</p>
-          </div>
-          <a href="/catalog">Выбрать букет</a>
-        </div>
-      </section>
-
-      <section id="delivery" className="section split-section">
+      <section id="delivery" className="section split-section compact-section">
         <div>
-          <div className="section-heading">
+          <div className="section-heading compact-heading">
             <span>Доставка</span>
-            <h2>Удобные зоны и интервалы</h2>
-            <p>
-              Доставка уже заложена в базе: зоны, стоимость, бесплатная доставка от суммы и срочный тариф.
-            </p>
+            <h2>Привезём аккуратно</h2>
+            <p>Выберите зону и интервал при оформлении заказа.</p>
           </div>
         </div>
 
-        <div className="delivery-panel">
-          {deliveryZones.map((zone) => (
+        <div className="delivery-panel compact-delivery-panel">
+          {deliveryZones.slice(0, 5).map((zone) => (
             <div className="delivery-row" key={zone.name}>
               <div>
                 <strong>{zone.name}</strong>
@@ -238,7 +234,7 @@ export default async function HomePage() {
           ))}
 
           <div className="intervals">
-            {intervals.map((interval) => (
+            {intervals.slice(0, 6).map((interval) => (
               <span key={interval.name}>{interval.name}</span>
             ))}
           </div>
@@ -247,17 +243,7 @@ export default async function HomePage() {
 
       <ProcessCarousel />
 
-      <section className="section trust-section">
-        <div>
-          <span>Заботливый сервис</span>
-          <h2>Каждый заказ проходит аккуратный путь</h2>
-        </div>
-        <p>
-          От выбора букета до доставки: подтверждение, сборка, фото перед отправкой и понятный статус заказа.
-        </p>
-      </section>
-
-      <footer id="contacts" className="footer">
+      <footer id="contacts" className="footer compact-footer">
         <div>
           <strong>ВЫБЕРИ МЕНЯ</strong>
           <p>Цветы с доставкой и заботой о каждом заказе.</p>
@@ -270,7 +256,6 @@ export default async function HomePage() {
           {settings?.workHours ? <span>{settings.workHours}</span> : null}
         </div>
       </footer>
-
     </main>
   );
 }
