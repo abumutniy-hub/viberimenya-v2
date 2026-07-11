@@ -4328,6 +4328,7 @@ async function handleCourierStartDelivery(callbackQuery: TelegramCallbackQuery, 
       order_id,
       from_status,
       to_status,
+      changed_by_user_id,
       comment,
       created_at
     )
@@ -4336,6 +4337,7 @@ async function handleCourierStartDelivery(callbackQuery: TelegramCallbackQuery, 
       ${order.id},
       ${order.status}::order_status,
       'delivering',
+      ${profile.user_id},
       'Курьер выехал на доставку через Telegram',
       NOW()
     )
@@ -4443,6 +4445,7 @@ async function handleCourierDeliveredOrder(callbackQuery: TelegramCallbackQuery,
       order_id,
       from_status,
       to_status,
+      changed_by_user_id,
       comment,
       created_at
     )
@@ -4451,6 +4454,7 @@ async function handleCourierDeliveredOrder(callbackQuery: TelegramCallbackQuery,
       ${order.id},
       ${order.status}::order_status,
       'delivered',
+      ${profile.user_id},
       'Курьер отметил доставку через Telegram',
       NOW()
     )
@@ -4544,6 +4548,7 @@ async function handleCourierAcceptOrder(callbackQuery: TelegramCallbackQuery, or
       order_id,
       from_status,
       to_status,
+      changed_by_user_id,
       comment,
       created_at
     )
@@ -4552,6 +4557,7 @@ async function handleCourierAcceptOrder(callbackQuery: TelegramCallbackQuery, or
       ${order.id},
       ${order.status}::order_status,
       'assigned_courier',
+      ${profile.user_id},
       'Курьер принял доставку через Telegram',
       NOW()
     )
