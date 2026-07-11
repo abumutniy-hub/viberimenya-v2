@@ -6068,3 +6068,44 @@ body {
   line-height: 1.4;
   opacity: 0.68;
 }
+
+/* CRM order total safe layout */
+.admin-order-detail-hero {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.admin-order-detail-total {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  justify-self: end;
+  padding-right: 18px;
+}
+
+.admin-order-detail-total span,
+.admin-order-detail-total strong {
+  max-width: 100%;
+  white-space: nowrap;
+}
+
+.admin-order-detail-total strong {
+  letter-spacing: -0.035em;
+}
+
+@media (max-width: 1180px) {
+  .admin-order-detail-total {
+    justify-self: start;
+    padding-right: 0;
+  }
+}
+
+@media (max-width: 760px) {
+  .admin-order-detail-total {
+    width: 100%;
+  }
+
+  .admin-order-detail-total strong {
+    font-size: 26px;
+  }
+}
