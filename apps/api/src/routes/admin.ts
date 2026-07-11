@@ -799,15 +799,19 @@ export async function adminRoutes(app: FastifyInstance) {
 
       const history = await client`
         SELECT
-          id,
-          from_status,
-          to_status,
-          comment,
-          created_at
-        FROM order_status_history
-        WHERE shop_id = ${shop.id}
-          AND order_id = ${params.id}
-        ORDER BY created_at DESC
+          h.id,
+          h.from_status,
+          h.to_status,
+          h.changed_by_user_id,
+          u.name AS changed_by_name,
+          h.comment,
+          h.created_at
+        FROM order_status_history h
+        LEFT JOIN users u
+          ON u.id = h.changed_by_user_id
+        WHERE h.shop_id = ${shop.id}
+          AND h.order_id = ${params.id}
+        ORDER BY h.created_at DESC
         LIMIT 50
       `;
 

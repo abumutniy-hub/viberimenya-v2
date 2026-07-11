@@ -6059,3 +6059,12 @@ body {
   margin-top: 18px;
   font-size: 13px;
 }
+
+/* CRM order status history author */
+.admin-order-history-author {
+  display: block;
+  margin-top: 6px;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  opacity: 0.68;
+}

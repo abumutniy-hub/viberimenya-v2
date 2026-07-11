@@ -204,6 +204,7 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
               const fromStatus = String(event.from_status || "");
               const toStatus = String(event.to_status || "");
               const eventKey = String(event.id || `${event.created_at}-${index}`);
+              const changedByName = String(event.changed_by_name || "").trim();
 
               return (
                 <article key={eventKey} className="admin-order-history-item">
@@ -218,6 +219,9 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
                       </span>
                     </div>
                     <p>{text(event.comment)}</p>
+                    <small className="admin-order-history-author">
+                      Автор: {changedByName || "Система"}
+                    </small>
                   </div>
                 </article>
               );
