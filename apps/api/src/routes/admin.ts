@@ -1338,6 +1338,22 @@ export async function adminRoutes(app: FastifyInstance) {
     try {
       const shop = await getShop(client);
 
+      const adminContext = (request as AdminRequest).adminContext;
+
+      if (!adminContext?.userId) {
+        return reply.status(401).send({
+          ok: false,
+          message: "Требуется вход в CRM"
+        });
+      }
+
+      if (adminContext.shopId !== shop.id) {
+        return reply.status(403).send({
+          ok: false,
+          message: "Нет доступа к этому магазину"
+        });
+      }
+
       const orderRows = await client<{ id: string; order_number: string; tracking_token: string }[]>`
         SELECT id, order_number, tracking_token
         FROM orders
@@ -1402,7 +1418,7 @@ export async function adminRoutes(app: FastifyInstance) {
           ${chat.id},
           ${order.id},
           'staff',
-          NULL,
+          ${adminContext.userId},
           NULL,
           'internal',
           ${body.text},
