@@ -166,8 +166,8 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
           paymentStatus={paymentStatus}
           paymentUrl={String(order.payment_url || "")}
           trackingToken={trackingToken}
-          internalChatCount={0}
-          internalChatPreview=""
+          internalChatCount={Number(order.internal_chat_unread_count || 0)}
+          internalChatPreview={String(order.internal_chat_last_message || "")}
           showDetailsLink={false}
           showStatusActions
         />

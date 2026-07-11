@@ -775,6 +775,42 @@ export async function adminRoutes(app: FastifyInstance) {
         });
       }
 
+      const chatSummaryRows = await client<{
+        internal_chat_messages_count: number;
+        internal_chat_unread_count: number;
+        internal_chat_last_message: string | null;
+        internal_chat_last_at: string | null;
+      }[]>`
+        SELECT
+          COUNT(*)::int AS internal_chat_messages_count,
+          COUNT(*) FILTER (
+            WHERE is_read_by_staff = false
+          )::int AS internal_chat_unread_count,
+          (
+            ARRAY_AGG(
+              text
+              ORDER BY created_at DESC
+            )
+          )[1] AS internal_chat_last_message,
+          MAX(created_at) AS internal_chat_last_at
+        FROM chat_messages
+        WHERE shop_id = ${shop.id}
+          AND order_id = ${params.id}
+          AND message_scope = 'internal'
+      `;
+
+      const chatSummary = chatSummaryRows[0] ?? {
+        internal_chat_messages_count: 0,
+        internal_chat_unread_count: 0,
+        internal_chat_last_message: null,
+        internal_chat_last_at: null
+      };
+
+      const orderWithChat = {
+        ...order,
+        ...chatSummary
+      };
+
       const items = await client`
         SELECT
           oi.product_id,
@@ -851,7 +887,7 @@ export async function adminRoutes(app: FastifyInstance) {
 
       return {
         ok: true,
-        order,
+        order: orderWithChat,
         items,
         history,
         staff
