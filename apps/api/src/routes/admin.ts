@@ -1493,13 +1493,34 @@ export async function adminRoutes(app: FastifyInstance) {
         "cancelled",
         "problem"
       ]),
-      comment: z.string().optional().default("")
+      reason: z.string()
+        .trim()
+        .max(500)
+        .optional()
+        .default("")
     }).parse(request.body ?? {});
 
     const { client } = createDb();
 
     try {
       const shop = await getShop(client);
+
+      const adminContext =
+        (request as AdminRequest).adminContext;
+
+      if (!adminContext?.userId) {
+        return reply.status(401).send({
+          ok: false,
+          message: "Требуется вход в CRM"
+        });
+      }
+
+      if (adminContext.shopId !== shop.id) {
+        return reply.status(403).send({
+          ok: false,
+          message: "Нет доступа к этому магазину"
+        });
+      }
 
       const orderRows = await client<{ id: string; status: string }[]>`
         SELECT id, status
@@ -1584,18 +1605,20 @@ export async function adminRoutes(app: FastifyInstance) {
         allowedStatuses.add("cancelled");
       }
 
+      const statusLabels: Record<string, string> = {
+        new: "Новый",
+        confirmed: "Подтверждён",
+        assembling: "Собирается",
+        ready: "Готов",
+        assigned_courier: "Передан курьеру",
+        delivering: "В доставке",
+        delivered: "Доставлен",
+        cancelled: "Отменён",
+        problem: "Проблема"
+      };
+
       if (!allowedStatuses.has(body.status)) {
-        const statusLabels: Record<string, string> = {
-          new: "Новый",
-          confirmed: "Подтверждён",
-          assembling: "Собирается",
-          ready: "Готов",
-          assigned_courier: "Передан курьеру",
-          delivering: "В доставке",
-          delivered: "Доставлен",
-          cancelled: "Отменён",
-          problem: "Проблема"
-        };
+
 
         const allowedText = Array.from(allowedStatuses)
           .map((item) => statusLabels[item] || item)
@@ -1608,6 +1631,32 @@ export async function adminRoutes(app: FastifyInstance) {
             : `Статус «${statusLabels[order.status] || order.status}» является завершённым`
         });
       }
+
+      const reasonRequiredStatuses = new Set([
+        "problem",
+        "cancelled"
+      ]);
+
+      if (
+        reasonRequiredStatuses.has(body.status)
+        && body.reason.length < 3
+      ) {
+        return reply.status(400).send({
+          ok: false,
+          message: body.status === "problem"
+            ? "Укажите причину проблемы не короче 3 символов"
+            : "Укажите причину отмены не короче 3 символов"
+        });
+      }
+
+      const historyComment =
+        body.status === "problem"
+          ? `Проблема в CRM: ${body.reason}`
+          : body.status === "cancelled"
+            ? `Заказ отменён в CRM: ${body.reason}`
+            : `Статус изменён в CRM: ${
+                statusLabels[body.status] || body.status
+              }`;
 
       const updatedRows = await client<{ id: string }[]>`
         UPDATE orders
@@ -1641,6 +1690,7 @@ export async function adminRoutes(app: FastifyInstance) {
           order_id,
           from_status,
           to_status,
+          changed_by_user_id,
           comment,
           created_at
         )
@@ -1649,7 +1699,8 @@ export async function adminRoutes(app: FastifyInstance) {
           ${order.id},
           ${order.status}::order_status,
           ${body.status}::order_status,
-          ${body.comment || "Статус изменён в CRM"},
+          ${adminContext.userId},
+          ${historyComment},
           NOW()
         )
       `;

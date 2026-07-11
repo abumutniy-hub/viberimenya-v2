@@ -337,30 +337,81 @@ export function OrderActions({
     }
   }
 
-  async function changeStatus(nextStatus: string, label: string) {
-    const confirmed = window.confirm(`Изменить статус заказа на «${label}»?`);
-    if (!confirmed) return;
+async function changeStatus(
+  nextStatus: string,
+  label: string
+) {
+  const requiresReason =
+    nextStatus === "problem"
+    || nextStatus === "cancelled";
 
-    try {
-      const response = await fetch(`/api/admin/orders/${orderId}/status`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          status: nextStatus,
-          comment: `Статус изменён в CRM: ${label}`
-        })
-      });
+  let reason = "";
 
-      if (!response.ok) {
-        const data = await response.json().catch(() => null);
-        throw new Error(data?.message || "Не удалось изменить статус");
-      }
+  if (requiresReason) {
+    const promptText =
+      nextStatus === "problem"
+        ? "Укажите причину проблемы:"
+        : "Укажите причину отмены заказа:";
 
-      window.location.reload();
-    } catch (error) {
-      alert(error instanceof Error ? error.message : "Не удалось изменить статус");
+    const enteredReason = window.prompt(promptText);
+
+    if (enteredReason === null) {
+      return;
+    }
+
+    reason = enteredReason.trim();
+
+    if (reason.length < 3) {
+      alert(
+        nextStatus === "problem"
+          ? "Укажите причину проблемы не короче 3 символов"
+          : "Укажите причину отмены не короче 3 символов"
+      );
+
+      return;
+    }
+  } else {
+    const confirmed = window.confirm(
+      `Изменить статус заказа на «${label}»?`
+    );
+
+    if (!confirmed) {
+      return;
     }
   }
+
+  try {
+    const response = await fetch(
+      `/api/admin/orders/${orderId}/status`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          status: nextStatus,
+          reason
+        })
+      }
+    );
+
+    const data = await response.json().catch(() => null);
+
+    if (!response.ok) {
+      throw new Error(
+        data?.message || "Не удалось изменить статус"
+      );
+    }
+
+    window.location.reload();
+  } catch (error) {
+    alert(
+      error instanceof Error
+        ? error.message
+        : "Не удалось изменить статус"
+    );
+  }
+}
 
   return (
     <div className="admin-order-actions">
