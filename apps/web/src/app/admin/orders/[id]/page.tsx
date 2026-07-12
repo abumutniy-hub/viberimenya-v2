@@ -88,6 +88,40 @@ function statusClass(value: unknown) {
   return String(value || "").replace(/[^a-z0-9_-]/gi, "-");
 }
 
+function safePaymentUrl(value: unknown) {
+  const raw = String(value || "").trim();
+
+  if (!raw) return "";
+
+  try {
+    const url = new URL(raw);
+
+    return (
+      url.protocol === "https:"
+      || url.protocol === "http:"
+    )
+      ? raw
+      : "";
+  } catch {
+    return "";
+  }
+}
+
+function safeBouquetPhotoUrl(value: unknown) {
+  const raw = String(value || "").trim();
+
+  if (
+    !raw.startsWith("/uploads/bouquets/")
+    || raw.includes("..")
+  ) {
+    return "";
+  }
+
+  return /^\/uploads\/bouquets\/[a-zA-Z0-9._/-]+$/.test(raw)
+    ? raw
+    : "";
+}
+
 function InfoRow({ label, value }: { label: string; value: unknown }) {
   return (
     <div className="admin-order-info-row">
@@ -122,6 +156,12 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
 
   const status = String(order.status || "");
   const paymentStatus = String(order.payment_status || "");
+  const paymentMethod = String(order.payment_method || "");
+  const paymentUrl = safePaymentUrl(order.payment_url);
+  const paymentPaidAt = order.latest_payment_paid_at;
+  const bouquetPhotoUrl = safeBouquetPhotoUrl(
+    order.bouquet_photo_url
+  );
   const deliveryType = String(order.delivery_type || "");
   const isPickup = deliveryType === "pickup";
   const trackingToken = String(order.tracking_token || "");
@@ -164,7 +204,7 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
           orderId={String(order.id)}
           status={status}
           paymentStatus={paymentStatus}
-          paymentUrl={String(order.payment_url || "")}
+          paymentUrl={paymentUrl}
           trackingToken={trackingToken}
           internalChatCount={Number(order.internal_chat_unread_count || 0)}
           internalChatPreview={String(order.internal_chat_last_message || "")}
@@ -270,14 +310,67 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
           <InfoRow label={isPickup ? "Стоимость" : "Доставка"} value={money(order.delivery_price)} />
         </article>
 
-        <article className="admin-panel admin-order-detail-card">
-          <div className="admin-panel-head">
-            <h2>Оплата</h2>
-          </div>
-          <InfoRow label="Статус" value={paymentStatusLabels[paymentStatus] || paymentStatus} />
-          <InfoRow label="Способ" value={paymentMethodLabels[String(order.payment_method || "")] || order.payment_method} />
-          <InfoRow label="Ссылка оплаты" value={order.payment_url} />
-        </article>
+        <article className="admin-panel admin-order-detail-card admin-order-payment-card">
+            <div className="admin-panel-head">
+              <div>
+                <span>Расчёты</span>
+                <h2>Оплата</h2>
+              </div>
+            </div>
+
+            <InfoRow
+              label="Статус"
+              value={
+                paymentStatusLabels[paymentStatus]
+                || paymentStatus
+                || "—"
+              }
+            />
+
+            <InfoRow
+              label="Способ"
+              value={
+                paymentMethodLabels[paymentMethod]
+                || paymentMethod
+                || "—"
+              }
+            />
+
+            {paymentStatus === "paid" ? (
+              <InfoRow
+                label="Оплачено"
+                value={
+                  paymentPaidAt
+                    ? dateTime(paymentPaidAt)
+                    : "Дата не зафиксирована"
+                }
+              />
+            ) : null}
+
+            {paymentUrl ? (
+              <div className="admin-order-info-row">
+                <span>Ссылка оплаты</span>
+
+                <a
+                  className="admin-payment-open-link"
+                  href={paymentUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Открыть ссылку
+                </a>
+              </div>
+            ) : (
+              <InfoRow
+                label="Ссылка оплаты"
+                value={
+                  status === "new"
+                    ? "Будет доступна после подтверждения"
+                    : "Не добавлена"
+                }
+              />
+            )}
+          </article>
       </section>
 
       <section className="admin-panel admin-order-detail-card">
@@ -327,30 +420,47 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
           <InfoRow label="Итого" value={money(order.total)} />
         </article>
 
-        <article className="admin-panel admin-order-detail-card">
-          <div className="admin-panel-head">
-            <div>
-              <span>Контроль качества</span>
-              <h2>Фото готового букета</h2>
+        <article className="admin-panel admin-order-detail-card admin-order-bouquet-card">
+            <div className="admin-panel-head">
+              <div>
+                <span>Контроль качества</span>
+                <h2>Фото готового букета</h2>
+              </div>
             </div>
-          </div>
 
-          {order.bouquet_photo_url ? (
-            <div className="admin-bouquet-photo-card">
-              <img
-                src={String(order.bouquet_photo_url)}
-                alt={`Фото готового букета по заказу ${String(order.order_number || "")}`}
-              />
-              <a href={String(order.bouquet_photo_url)} target="_blank" rel="noreferrer">
-                Открыть фото
-              </a>
-            </div>
-          ) : (
-            <p className="admin-order-comment">
-              Фото пока не загружено. Позже флорист сможет прикреплять фото готового букета через Telegram.
-            </p>
-          )}
-        </article>
+            {bouquetPhotoUrl ? (
+              <div className="admin-bouquet-photo-card">
+                <img
+                  src={bouquetPhotoUrl}
+                  alt={`Фото готового букета по заказу ${String(order.order_number || "")}`}
+                  loading="lazy"
+                  decoding="async"
+                />
+
+                <div className="admin-bouquet-photo-meta">
+                  <span>Загружено флористом</span>
+
+                  <a
+                    className="admin-bouquet-photo-link"
+                    href={bouquetPhotoUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Открыть оригинал
+                  </a>
+                </div>
+              </div>
+            ) : (
+              <div className="admin-bouquet-photo-empty">
+                <strong>Фото ещё не загружено</strong>
+
+                <p>
+                  Оно появится здесь после того, как
+                  флорист отправит снимок через Telegram.
+                </p>
+              </div>
+            )}
+          </article>
 
         <article className="admin-panel admin-order-detail-card">
           <div className="admin-panel-head">

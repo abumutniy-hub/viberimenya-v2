@@ -751,11 +751,12 @@ export async function adminRoutes(app: FastifyInstance) {
           p.status AS latest_payment_status,
           p.method AS latest_payment_method,
           p.provider AS latest_payment_provider,
-          p.created_at AS latest_payment_created_at
+          p.created_at AS latest_payment_created_at,
+        p.paid_at AS latest_payment_paid_at
         FROM orders o
         LEFT JOIN customers c ON c.id = o.customer_id
         LEFT JOIN LATERAL (
-          SELECT provider, method, status, payment_url, created_at
+          SELECT provider, method, status, payment_url, created_at, paid_at
           FROM payments
           WHERE order_id = o.id
           ORDER BY created_at DESC
@@ -1873,7 +1874,23 @@ export async function adminRoutes(app: FastifyInstance) {
     }).parse(request.params ?? {});
 
     const body = z.object({
-      paymentUrl: z.string().url()
+      paymentUrl: z.string()
+      .trim()
+      .url()
+      .refine((value) => {
+        try {
+          const url = new URL(value);
+
+          return (
+            url.protocol === "https:"
+            || url.protocol === "http:"
+          );
+        } catch {
+          return false;
+        }
+      }, {
+        message: "Ссылка оплаты должна начинаться с http:// или https://"
+      })
     }).parse(request.body ?? {});
 
     const { client } = createDb();
@@ -2029,10 +2046,11 @@ export async function adminRoutes(app: FastifyInstance) {
         order_number: string;
         status: string;
         payment_status: string;
+        payment_method: string;
         total: number;
         bonus_earned: number;
       }[]>`
-        SELECT id, customer_id, order_number, status, payment_status, total, bonus_earned
+        SELECT id, customer_id, order_number, status, payment_status, payment_method, total, bonus_earned
         FROM orders
         WHERE shop_id = ${shop.id}
           AND id = ${params.id}
@@ -2086,14 +2104,61 @@ export async function adminRoutes(app: FastifyInstance) {
         WHERE id = ${order.id}
       `;
 
-      await client`
-        UPDATE payments
-        SET status = 'paid',
-            paid_at = COALESCE(paid_at, NOW()),
-            updated_at = NOW()
-        WHERE order_id = ${order.id}
-          AND status <> 'paid'
-      `;
+      const latestPaymentRows =
+        await client<{ id: string }[]>`
+          SELECT id
+          FROM payments
+          WHERE shop_id = ${shop.id}
+            AND order_id = ${order.id}
+          ORDER BY created_at DESC
+          LIMIT 1
+        `;
+
+      const latestPayment = latestPaymentRows[0];
+
+      if (latestPayment?.id) {
+        await client`
+          UPDATE payments
+          SET status = 'paid',
+              paid_at = COALESCE(paid_at, NOW()),
+              updated_at = NOW()
+          WHERE shop_id = ${shop.id}
+            AND id = ${latestPayment.id}
+        `;
+      } else {
+        await client`
+          INSERT INTO payments (
+            shop_id,
+            order_id,
+            provider,
+            method,
+            status,
+            amount,
+            currency,
+            payment_url,
+            raw_payload,
+            paid_at,
+            created_at,
+            updated_at
+          )
+          VALUES (
+            ${shop.id},
+            ${order.id},
+            'manual',
+            ${order.payment_method}::payment_method,
+            'paid',
+            ${Number(order.total || 0)},
+            'RUB',
+            NULL,
+            CAST(${JSON.stringify({
+              source: "admin_manual_paid"
+            })} AS jsonb),
+            NOW(),
+            NOW(),
+            NOW()
+          )
+        `;
+      }
 
       let balanceAfter: number | null = null;
 

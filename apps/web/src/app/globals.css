@@ -6109,3 +6109,277 @@ body {
     font-size: 26px;
   }
 }
+
+
+/* CRM order payment and bouquet final */
+.admin-order-payment-card {
+  align-content: start;
+}
+
+.admin-payment-open-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  max-width: 100%;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: #20201f;
+  color: #ffffff;
+  font-size: 0.88rem;
+  font-weight: 700;
+  line-height: 1.2;
+  text-align: center;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.admin-bouquet-photo-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.admin-bouquet-photo-meta > span {
+  color: rgba(25, 25, 24, 0.62);
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+
+.admin-bouquet-photo-meta
+.admin-bouquet-photo-link {
+  width: auto;
+  margin: 0;
+}
+
+.admin-bouquet-photo-empty {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  min-height: 190px;
+  gap: 8px;
+  padding: 26px;
+  border: 1px dashed rgba(25, 25, 24, 0.2);
+  border-radius: 18px;
+  background: rgba(25, 25, 24, 0.025);
+  text-align: center;
+}
+
+.admin-bouquet-photo-empty p {
+  max-width: 360px;
+  margin: 0;
+  color: rgba(25, 25, 24, 0.62);
+  line-height: 1.5;
+}
+
+@media (max-width: 720px) {
+  .admin-payment-open-link {
+    width: 100%;
+  }
+
+  .admin-bouquet-photo-meta {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .admin-bouquet-photo-meta
+  .admin-bouquet-photo-link {
+    width: 100%;
+  }
+
+  .admin-bouquet-photo-empty {
+    min-height: 160px;
+    padding: 22px 18px;
+  }
+}
+
+
+/* CRM bouquet preview clean design */
+.admin-order-bouquet-card {
+  align-content: start;
+}
+
+.admin-order-bouquet-card
+.admin-bouquet-photo-card {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  align-items: stretch !important;
+  justify-items: stretch !important;
+  width: min(100%, 520px) !important;
+  max-width: 520px !important;
+  margin: 8px auto 0 !important;
+  gap: 14px !important;
+}
+
+.admin-order-bouquet-card
+.admin-bouquet-photo-preview-link {
+  position: relative !important;
+  display: block !important;
+  width: 100% !important;
+  height: 290px !important;
+  min-height: 290px !important;
+  max-height: 290px !important;
+  overflow: hidden !important;
+  border: 1px solid rgba(25, 25, 24, 0.1) !important;
+  border-radius: 18px !important;
+  background: #eee9e2 !important;
+  box-shadow:
+    0 10px 26px rgba(31, 27, 23, 0.08) !important;
+  clip-path: none !important;
+  cursor: zoom-in !important;
+}
+
+.admin-order-bouquet-card
+.admin-bouquet-photo-preview-link img {
+  display: block !important;
+  width: 100% !important;
+  min-width: 100% !important;
+  max-width: none !important;
+  height: 100% !important;
+  min-height: 100% !important;
+  max-height: none !important;
+  margin: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  object-fit: cover !important;
+  object-position: center 48% !important;
+  clip-path: none !important;
+  transform: none !important;
+  transition:
+    transform 180ms ease,
+    filter 180ms ease !important;
+}
+
+.admin-order-bouquet-card
+.admin-bouquet-photo-preview-link:hover img {
+  transform: scale(1.025) !important;
+  filter: brightness(0.96) !important;
+}
+
+.admin-order-bouquet-card
+.admin-bouquet-photo-zoom-label {
+  display: none !important;
+}
+
+.admin-order-bouquet-card
+.admin-bouquet-photo-meta {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  width: 100% !important;
+  margin: 0 !important;
+  padding: 0 2px !important;
+  gap: 14px !important;
+}
+
+.admin-order-bouquet-card
+.admin-bouquet-photo-meta > span {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  margin: 0 !important;
+  color: rgba(25, 25, 24, 0.64) !important;
+  font-size: 0.88rem !important;
+  font-weight: 650 !important;
+  line-height: 1.3 !important;
+}
+
+.admin-order-bouquet-card
+.admin-bouquet-photo-meta > span::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #2d9362;
+  box-shadow:
+    0 0 0 4px rgba(45, 147, 98, 0.12);
+}
+
+.admin-order-bouquet-card
+.admin-bouquet-photo-meta
+.admin-bouquet-photo-link {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: auto !important;
+  min-width: 150px !important;
+  min-height: 40px !important;
+  margin: 0 !important;
+  padding: 9px 16px !important;
+  border: 0 !important;
+  border-radius: 999px !important;
+  background: #20201f !important;
+  color: #ffffff !important;
+  font-size: 0.86rem !important;
+  font-weight: 750 !important;
+  line-height: 1.2 !important;
+  text-decoration: none !important;
+  box-shadow: none !important;
+  transition:
+    transform 160ms ease,
+    opacity 160ms ease !important;
+}
+
+.admin-order-bouquet-card
+.admin-bouquet-photo-meta
+.admin-bouquet-photo-link:hover {
+  transform: translateY(-1px) !important;
+  opacity: 0.9 !important;
+}
+
+.admin-order-bouquet-card
+.admin-bouquet-photo-empty {
+  display: grid !important;
+  align-content: center !important;
+  justify-items: center !important;
+  width: min(100%, 520px) !important;
+  min-height: 290px !important;
+  margin: 8px auto 0 !important;
+  padding: 30px !important;
+  border: 1px dashed rgba(25, 25, 24, 0.18) !important;
+  border-radius: 18px !important;
+  background: rgba(25, 25, 24, 0.025) !important;
+  text-align: center !important;
+}
+
+@media (max-width: 720px) {
+  .admin-order-bouquet-card
+  .admin-bouquet-photo-card {
+    width: 100% !important;
+  }
+
+  .admin-order-bouquet-card
+  .admin-bouquet-photo-preview-link {
+    height: 230px !important;
+    min-height: 230px !important;
+    max-height: 230px !important;
+  }
+
+  .admin-order-bouquet-card
+  .admin-bouquet-photo-meta {
+    flex-direction: column !important;
+    align-items: stretch !important;
+  }
+
+  .admin-order-bouquet-card
+  .admin-bouquet-photo-meta > span {
+    justify-content: center !important;
+  }
+
+  .admin-order-bouquet-card
+  .admin-bouquet-photo-meta
+  .admin-bouquet-photo-link {
+    width: 100% !important;
+  }
+
+  .admin-order-bouquet-card
+  .admin-bouquet-photo-empty {
+    width: 100% !important;
+    min-height: 230px !important;
+    padding: 24px 18px !important;
+  }
+}

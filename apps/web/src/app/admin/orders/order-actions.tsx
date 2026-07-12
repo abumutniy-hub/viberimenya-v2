@@ -291,6 +291,24 @@ export function OrderActions({
       return;
     }
 
+    try {
+      const parsedPaymentUrl =
+        new URL(paymentUrlToSave);
+
+      if (
+        parsedPaymentUrl.protocol !== "https:"
+        && parsedPaymentUrl.protocol !== "http:"
+      ) {
+        throw new Error("Unsupported protocol");
+      }
+    } catch {
+      alert(
+        "Введите корректную ссылку, начинающуюся с http:// или https://"
+      );
+
+      return;
+    }
+
     setIsSavingLink(true);
 
     try {
@@ -474,10 +492,14 @@ async function changeStatus(
           disabled={isPaying}
           onClick={markPaid}
         >
-          {isPaying ? "..." : "Оплачен"}
+          {isPaying ? "..." : "Отметить оплаченным"}
         </button>
       ) : (
-        <span className="admin-muted-badge">Оплата после подтверждения</span>
+        <span className="admin-muted-badge">
+          {status === "cancelled"
+            ? "Оплата недоступна"
+            : "Оплата после подтверждения"}
+        </span>
       )}
 
       {showStatusActions ? (
