@@ -2946,6 +2946,66 @@ export async function adminRoutes(app: FastifyInstance) {
       await client.end();
     }
   });
+  app.get("/api/admin/products/:id", async (request, reply) => {
+    const params = z.object({
+      id: z.string().uuid()
+    }).parse(request.params ?? {});
+
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+
+      const productRows = await client`
+        SELECT
+          p.*,
+          c.name AS category_name
+        FROM products p
+        LEFT JOIN categories c
+          ON c.shop_id = p.shop_id
+         AND c.id = p.category_id
+        WHERE p.shop_id = ${shop.id}
+          AND p.id = ${params.id}
+        LIMIT 1
+      `;
+
+      const product = productRows[0];
+
+      if (!product) {
+        return reply.status(404).send({
+          ok: false,
+          message: "Товар не найден"
+        });
+      }
+
+      const images = await client`
+        SELECT
+          id,
+          url,
+          alt,
+          is_main,
+          sort_order,
+          created_at,
+          updated_at
+        FROM product_images
+        WHERE shop_id = ${shop.id}
+          AND product_id = ${params.id}
+        ORDER BY
+          is_main DESC,
+          sort_order ASC,
+          created_at ASC
+      `;
+
+      return {
+        ok: true,
+        product,
+        images
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
 
   app.post("/api/admin/categories", async (request) => {
     const body = categorySchema.parse(request.body ?? {});
