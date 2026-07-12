@@ -151,6 +151,99 @@ const settingsSchema = z.object({
   heroSubtitle: z.string().optional().default("Собираем стильные букеты, отправляем фото перед доставкой и бережно доставляем получателю.")
 });
 
+const categoryIconKeys = [
+  "bouquet",
+  "flower",
+  "basket",
+  "gift",
+  "card",
+  "sale",
+  "subscription",
+  "perfume",
+  "other"
+] as const;
+
+const categoryIconKeySchema =
+  z.enum(categoryIconKeys);
+
+type CategoryIconKey =
+  z.infer<typeof categoryIconKeySchema>;
+
+function defaultCategoryIconKeyForSlug(
+  value: string
+): CategoryIconKey {
+  const slug = value
+    .trim()
+    .toLowerCase();
+
+  if (
+    slug.includes("buket")
+    || slug.includes("bouquet")
+  ) {
+    return "bouquet";
+  }
+
+  if (
+    slug.includes("tsvet")
+    || slug.includes("flower")
+    || slug.includes("rose")
+  ) {
+    return "flower";
+  }
+
+  if (
+    slug.includes("korzin")
+    || slug.includes("basket")
+  ) {
+    return "basket";
+  }
+
+  if (
+    slug.includes("podar")
+    || slug.includes("gift")
+  ) {
+    return "gift";
+  }
+
+  if (
+    slug.includes("otkryt")
+    || slug.includes("card")
+  ) {
+    return "card";
+  }
+
+  if (
+    slug.includes("akts")
+    || slug.includes("sale")
+    || slug.includes("skid")
+  ) {
+    return "sale";
+  }
+
+  if (
+    slug.includes("podpisk")
+    || slug.includes("subscription")
+  ) {
+    return "subscription";
+  }
+
+  if (
+    slug.includes("parfy")
+    || slug.includes("perfume")
+    || slug.includes("aromat")
+  ) {
+    return "perfume";
+  }
+
+  return "other";
+}
+
+function categoryImageUrl(
+  iconKey: CategoryIconKey
+) {
+  return `icon:${iconKey}`;
+}
+
 const categorySchema = z.object({
   name: z.string().trim().min(2).max(160),
   slug: z.string().trim().max(120)
@@ -166,7 +259,9 @@ const categorySchema = z.object({
     .default(100),
   isActive: z.boolean()
     .optional()
-    .default(true)
+    .default(true),
+  iconKey: categoryIconKeySchema
+    .optional()
 });
 
 const categoryUpdateSchema = z.object({
@@ -180,7 +275,9 @@ const categoryUpdateSchema = z.object({
   sortOrder: z.coerce.number().int()
     .min(0)
     .max(100000),
-  isActive: z.boolean()
+  isActive: z.boolean(),
+  iconKey: categoryIconKeySchema
+    .optional()
 });
 
 const productImageUploadSchema = z.object({
@@ -3276,7 +3373,6 @@ export async function adminRoutes(app: FastifyInstance) {
 
     try {
       const shop = await getShop(client);
-
       const name = body.name.trim();
 
       const slug = (
@@ -3301,6 +3397,14 @@ export async function adminRoutes(app: FastifyInstance) {
             "Slug может содержать только латинские буквы, цифры и дефисы"
         });
       }
+
+      const iconKey = (
+        body.iconKey
+        ?? defaultCategoryIconKeyForSlug(slug)
+      );
+
+      const imageUrl =
+        categoryImageUrl(iconKey);
 
       const duplicateRows = await client<{
         id: string;
@@ -3330,6 +3434,7 @@ export async function adminRoutes(app: FastifyInstance) {
           slug,
           name,
           description,
+          image_url,
           is_active,
           sort_order,
           created_at,
@@ -3340,6 +3445,7 @@ export async function adminRoutes(app: FastifyInstance) {
           ${slug},
           ${name},
           ${body.description},
+          ${imageUrl},
           ${body.isActive},
           ${body.sortOrder},
           NOW(),
@@ -3387,15 +3493,18 @@ export async function adminRoutes(app: FastifyInstance) {
 
         const existingRows = await client<{
           id: string;
+          image_url: string | null;
         }[]>`
-          SELECT id
+          SELECT id, image_url
           FROM categories
           WHERE shop_id = ${shop.id}
             AND id = ${params.id}
           LIMIT 1
         `;
 
-        if (!existingRows[0]) {
+        const existing = existingRows[0];
+
+        if (!existing) {
           return reply.status(404).send({
             ok: false,
             message: "Категория не найдена"
@@ -3427,6 +3536,15 @@ export async function adminRoutes(app: FastifyInstance) {
           });
         }
 
+        const imageUrl = body.iconKey
+          ? categoryImageUrl(body.iconKey)
+          : (
+              String(existing.image_url ?? "").trim()
+              || categoryImageUrl(
+                defaultCategoryIconKeyForSlug(slug)
+              )
+            );
+
         const duplicateRows = await client<{
           id: string;
         }[]>`
@@ -3456,6 +3574,7 @@ export async function adminRoutes(app: FastifyInstance) {
             name = ${name},
             slug = ${slug},
             description = ${body.description},
+            image_url = ${imageUrl},
             sort_order = ${body.sortOrder},
             is_active = ${body.isActive},
             updated_at = NOW()

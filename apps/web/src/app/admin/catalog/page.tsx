@@ -91,6 +91,9 @@ export default async function AdminCatalogPage() {
         description: String(
           category.description ?? ""
         ),
+        imageUrl: String(
+          category.image_url ?? ""
+        ),
         sortOrder: Number(
           category.sort_order ?? 100
         ),

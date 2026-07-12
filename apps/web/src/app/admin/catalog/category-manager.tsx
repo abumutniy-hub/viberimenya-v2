@@ -5,11 +5,19 @@ import {
   useState
 } from "react";
 
+import {
+  CATEGORY_ICON_OPTIONS,
+  CategoryIcon,
+  categoryIconKeyFromImageUrl,
+  type CategoryIconKey
+} from "../../../components/category-icon";
+
 export type CategoryManagerItem = {
   id: string;
   name: string;
   slug: string;
   description: string;
+  imageUrl: string;
   sortOrder: number;
   isActive: boolean;
   productsTotal: number;
@@ -55,6 +63,19 @@ export function CategoryManager({
   const [messages, setMessages] =
     useState<Record<string, string>>({});
 
+  const [iconValues, setIconValues] =
+    useState<Record<string, CategoryIconKey>>(
+      () => Object.fromEntries(
+        categories.map((category) => [
+          category.id,
+          categoryIconKeyFromImageUrl(
+            category.imageUrl,
+            category.slug
+          )
+        ])
+      ) as Record<string, CategoryIconKey>
+    );
+
   function setMessage(
     id: string,
     message: string
@@ -93,7 +114,9 @@ export function CategoryManager({
             sortOrder:
               form.get("sortOrder"),
             isActive:
-              form.get("isActive") === "on"
+              form.get("isActive") === "on",
+            iconKey:
+              form.get("iconKey")
           })
         }
       );
@@ -197,6 +220,14 @@ export function CategoryManager({
         const isDeleting =
           actionId === `delete:${category.id}`;
 
+        const iconKey = (
+          iconValues[category.id]
+          ?? categoryIconKeyFromImageUrl(
+            category.imageUrl,
+            category.slug
+          )
+        );
+
         return (
           <form
             className={
@@ -213,14 +244,22 @@ export function CategoryManager({
             }}
           >
             <div className="admin-category-manager-head">
-              <div>
-                <span>
-                  {category.isActive
-                    ? "Активная категория"
-                    : "Категория отключена"}
+              <div className="admin-category-manager-identity">
+                <span className="admin-category-icon-preview">
+                  <CategoryIcon
+                    iconKey={iconKey}
+                  />
                 </span>
 
-                <h3>{category.name}</h3>
+                <div>
+                  <span>
+                    {category.isActive
+                      ? "Активная категория"
+                      : "Категория отключена"}
+                  </span>
+
+                  <h3>{category.name}</h3>
+                </div>
               </div>
 
               <strong>
@@ -276,6 +315,43 @@ export function CategoryManager({
               </label>
 
               <label>
+                <span>Иконка</span>
+
+                <div className="admin-category-icon-select">
+                  <span>
+                    <CategoryIcon
+                      iconKey={iconKey}
+                    />
+                  </span>
+
+                  <select
+                    name="iconKey"
+                    value={iconKey}
+                    onChange={(event) => {
+                      const nextValue =
+                        event.target.value as CategoryIconKey;
+
+                      setIconValues((current) => ({
+                        ...current,
+                        [category.id]: nextValue
+                      }));
+                    }}
+                  >
+                    {CATEGORY_ICON_OPTIONS.map(
+                      (option) => (
+                        <option
+                          key={option.key}
+                          value={option.key}
+                        >
+                          {option.label}
+                        </option>
+                      )
+                    )}
+                  </select>
+                </div>
+              </label>
+
+              <label>
                 <span>Порядок</span>
                 <input
                   name="sortOrder"
@@ -290,7 +366,7 @@ export function CategoryManager({
                 />
               </label>
 
-              <label className="admin-category-manager-toggle">
+              <label className="admin-category-manager-toggle wide">
                 <input
                   name="isActive"
                   type="checkbox"

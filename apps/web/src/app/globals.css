@@ -8782,3 +8782,132 @@ input[type="file"]::file-selector-button {
     min-width: 0;
   }
 }
+
+/* CRM category icons */
+.admin-category-manager-identity {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+}
+
+.admin-category-manager-identity > div {
+  min-width: 0;
+}
+
+.admin-category-icon-preview {
+  display: inline-flex;
+  width: 48px;
+  height: 48px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border-radius: 16px;
+  background:
+    linear-gradient(
+      145deg,
+      rgba(219, 179, 171, 0.38),
+      rgba(235, 214, 190, 0.42)
+    );
+  color: #4b342e;
+}
+
+.admin-category-icon-preview svg {
+  width: 27px;
+  height: 27px;
+}
+
+.admin-category-manager-fields select {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.admin-category-icon-select {
+  display: grid;
+  grid-template-columns:
+    46px minmax(0, 1fr);
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid rgba(25, 23, 22, 0.11);
+  border-radius: 14px;
+  background: #fffdf9;
+}
+
+.admin-category-icon-select > span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-right: 1px solid rgba(25, 23, 22, 0.09);
+  background: rgba(220, 183, 174, 0.18);
+  color: #4b342e;
+}
+
+.admin-category-icon-select svg {
+  width: 23px;
+  height: 23px;
+}
+
+.admin-category-icon-select select {
+  min-height: 44px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.admin-category-create-icon {
+  display: grid;
+  grid-template-columns:
+    52px minmax(0, 1fr);
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid rgba(25, 23, 22, 0.11);
+  border-radius: 14px;
+  background: #fffdf9;
+}
+
+.admin-category-create-icon > span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-right: 1px solid rgba(25, 23, 22, 0.09);
+  background:
+    linear-gradient(
+      145deg,
+      rgba(219, 179, 171, 0.3),
+      rgba(235, 214, 190, 0.32)
+    );
+  color: #4b342e;
+}
+
+.admin-category-create-icon svg {
+  width: 26px;
+  height: 26px;
+}
+
+.admin-category-create-icon select {
+  width: 100%;
+  min-width: 0;
+  min-height: 46px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+@media (max-width: 520px) {
+  .admin-category-manager-identity {
+    align-items: flex-start;
+  }
+
+  .admin-category-icon-preview {
+    width: 42px;
+    height: 42px;
+    border-radius: 14px;
+  }
+
+  .admin-category-icon-preview svg {
+    width: 24px;
+    height: 24px;
+  }
+}

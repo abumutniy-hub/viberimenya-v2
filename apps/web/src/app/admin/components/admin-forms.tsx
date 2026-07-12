@@ -1,5 +1,11 @@
 "use client";
 
+import {
+  CATEGORY_ICON_OPTIONS,
+  CategoryIcon,
+  type CategoryIconKey
+} from "../../../components/category-icon";
+
 import { useEffect, useState } from "react";
 
 type CategoryOption = {
@@ -391,29 +397,49 @@ export function SettingsForm({ settings }: { settings: SettingsData | null }) {
 }
 
 export function CategoryForm() {
-  const [isSaving, setIsSaving] = useState(false);
+  const [isSaving, setIsSaving] =
+    useState(false);
+
+  const [iconKey, setIconKey] =
+    useState<CategoryIconKey>("other");
 
   return (
     <form
       className="admin-form"
       onSubmit={async (event) => {
         event.preventDefault();
+
+        const formElement =
+          event.currentTarget;
+
+        const form =
+          new FormData(formElement);
+
         setIsSaving(true);
 
-        const form = new FormData(event.currentTarget);
-
         try {
-          await submitJson("/api/admin/categories", {
-            name: form.get("name"),
-            slug: form.get("slug"),
-            description: form.get("description"),
-            sortOrder: form.get("sortOrder"),
-            isActive: true
-          });
+          await submitJson(
+            "/api/admin/categories",
+            {
+              name: form.get("name"),
+              slug: form.get("slug"),
+              description:
+                form.get("description"),
+              sortOrder:
+                form.get("sortOrder"),
+              isActive: true,
+              iconKey:
+                form.get("iconKey")
+            }
+          );
 
           window.location.reload();
         } catch (error) {
-          alert(error instanceof Error ? error.message : "Ошибка сохранения");
+          alert(
+            error instanceof Error
+              ? error.message
+              : "Ошибка сохранения"
+          );
         } finally {
           setIsSaving(false);
         }
@@ -422,27 +448,77 @@ export function CategoryForm() {
       <div className="admin-form-grid">
         <label>
           <span>Название</span>
-          <input name="name" required />
+          <input
+            name="name"
+            required
+          />
         </label>
 
         <label>
           <span>Slug</span>
-          <input name="slug" placeholder="naprimer-bukety" />
+          <input
+            name="slug"
+            placeholder="naprimer-bukety"
+          />
         </label>
 
         <label>
           <span>Сортировка</span>
-          <input name="sortOrder" type="number" defaultValue="100" />
+          <input
+            name="sortOrder"
+            type="number"
+            defaultValue="100"
+          />
+        </label>
+
+        <label>
+          <span>Иконка категории</span>
+
+          <div className="admin-category-create-icon">
+            <span>
+              <CategoryIcon
+                iconKey={iconKey}
+              />
+            </span>
+
+            <select
+              name="iconKey"
+              value={iconKey}
+              onChange={(event) => {
+                setIconKey(
+                  event.target.value as CategoryIconKey
+                );
+              }}
+            >
+              {CATEGORY_ICON_OPTIONS.map(
+                (option) => (
+                  <option
+                    key={option.key}
+                    value={option.key}
+                  >
+                    {option.label}
+                  </option>
+                )
+              )}
+            </select>
+          </div>
         </label>
 
         <label className="wide">
           <span>Описание</span>
-          <textarea name="description" />
+          <textarea
+            name="description"
+          />
         </label>
       </div>
 
-      <button type="submit" disabled={isSaving}>
-        {isSaving ? "Сохраняем..." : "Добавить категорию"}
+      <button
+        type="submit"
+        disabled={isSaving}
+      >
+        {isSaving
+          ? "Сохраняем..."
+          : "Добавить категорию"}
       </button>
     </form>
   );
