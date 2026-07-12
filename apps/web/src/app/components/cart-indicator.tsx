@@ -1,7 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { usePathname } from "next/navigation";
+import {
+  useEffect,
+  useState
+} from "react";
+
+import {
+  usePathname
+} from "next/navigation";
+
+import {
+  PublicIcon
+} from "./public-icon";
 
 type CartItem = {
   productId: string;
@@ -10,29 +20,59 @@ type CartItem = {
 
 function readCartCount() {
   try {
-    const raw = window.localStorage.getItem("viberimenya_cart");
-    const items = raw ? (JSON.parse(raw) as CartItem[]) : [];
+    const raw =
+      window.localStorage.getItem(
+        "viberimenya_cart"
+      );
 
-    return items.reduce((sum, item) => sum + Math.max(0, Number(item.quantity || 0)), 0);
+    const items = raw
+      ? JSON.parse(raw) as CartItem[]
+      : [];
+
+    return items.reduce(
+      (sum, item) =>
+        sum + Math.max(
+          0,
+          Number(item.quantity || 0)
+        ),
+      0
+    );
   } catch {
     return 0;
   }
 }
 
 function useCartCount() {
-  const [count, setCount] = useState(0);
+  const [count, setCount] =
+    useState(0);
 
   useEffect(() => {
-    const update = () => setCount(readCartCount());
+    const update = () => {
+      setCount(readCartCount());
+    };
 
     update();
 
-    window.addEventListener("viberimenya_cart_changed", update);
-    window.addEventListener("storage", update);
+    window.addEventListener(
+      "viberimenya_cart_changed",
+      update
+    );
+
+    window.addEventListener(
+      "storage",
+      update
+    );
 
     return () => {
-      window.removeEventListener("viberimenya_cart_changed", update);
-      window.removeEventListener("storage", update);
+      window.removeEventListener(
+        "viberimenya_cart_changed",
+        update
+      );
+
+      window.removeEventListener(
+        "storage",
+        update
+      );
     };
   }, []);
 
@@ -48,16 +88,38 @@ export function DesktopCartIndicator() {
   }
 
   return (
-    <div className="desktop-quick-actions" aria-label="Быстрые действия">
-      <a className="desktop-profile-indicator" href="/account" aria-label="Профиль">
-        <span className="desktop-profile-icon">👤</span>
+    <div
+      className="desktop-quick-actions"
+      aria-label="Быстрые действия"
+    >
+      <a
+        className="desktop-profile-indicator"
+        href="/account"
+        aria-label="Профиль"
+      >
+        <span className="desktop-profile-icon">
+          <PublicIcon name="profile" />
+        </span>
+
         <strong>Профиль</strong>
       </a>
 
-      <a className="desktop-cart-indicator" href="/cart" aria-label={`Корзина, товаров: ${count}`}>
-        <span className="desktop-cart-icon">🛒</span>
+      <a
+        className="desktop-cart-indicator"
+        href="/cart"
+        aria-label={
+          `Корзина, товаров: ${count}`
+        }
+      >
+        <span className="desktop-cart-icon">
+          <PublicIcon name="cart" />
+        </span>
+
         <strong>Корзина</strong>
-        {count > 0 ? <em>{count}</em> : null}
+
+        {count > 0 ? (
+          <em>{count}</em>
+        ) : null}
       </a>
     </div>
   );
@@ -70,5 +132,9 @@ export function CartCountBadge() {
     return null;
   }
 
-  return <em className="cart-count-badge">{count}</em>;
+  return (
+    <em className="cart-count-badge">
+      {count}
+    </em>
+  );
 }
