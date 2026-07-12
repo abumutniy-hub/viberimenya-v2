@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { ProductEditForm } from "./product-edit-form";
 import {
   fetchAdmin,
   type AdminRow
@@ -23,6 +24,10 @@ type ProductImage = AdminRow & {
 type Response = {
   product: AdminRow | null;
   images: ProductImage[];
+};
+
+type CatalogResponse = {
+  categories: AdminRow[];
 };
 
 const statusLabels: Record<string, string> = {
@@ -107,12 +112,33 @@ export default async function AdminProductDetailPage({
 }: PageProps) {
   const { id } = await params;
 
-  const data = await fetchAdmin<Response>(
-    `/api/admin/products/${id}`
-  );
+  const [
+    data,
+    catalogData
+  ] = await Promise.all([
+    fetchAdmin<Response>(
+      `/api/admin/products/${id}`
+    ),
+    fetchAdmin<CatalogResponse>(
+      "/api/admin/catalog"
+    )
+  ]);
 
   const product = data?.product;
   const rawImages = data?.images ?? [];
+
+  const categoryOptions = (
+    catalogData?.categories ?? []
+  )
+    .filter(
+      (category) =>
+        typeof category.id === "string"
+        && typeof category.name === "string"
+    )
+    .map((category) => ({
+      id: String(category.id),
+      name: String(category.name)
+    }));
 
   if (!product) {
     return (
@@ -202,6 +228,13 @@ export default async function AdminProductDetailPage({
         </div>
 
         <div className="admin-product-head-actions">
+          <a
+            className="admin-product-edit-link"
+            href="#product-edit-form"
+          >
+            Редактировать
+          </a>
+
           {status === "active" && slug ? (
             <a
               className="admin-product-public-link"
@@ -477,6 +510,68 @@ export default async function AdminProductDetailPage({
             )}
           </p>
         </article>
+      </section>
+
+      <section
+        id="product-edit-form"
+        className="admin-panel admin-product-edit-card"
+      >
+        <div className="admin-panel-head">
+          <div>
+            <span>Управление товаром</span>
+            <h2>Редактирование</h2>
+          </div>
+        </div>
+
+        <ProductEditForm
+          categories={categoryOptions}
+          product={{
+            id: String(product.id),
+            categoryId: String(
+              product.category_id ?? ""
+            ),
+            name,
+            slug,
+            shortDescription: String(
+              product.short_description ?? ""
+            ),
+            description: String(
+              product.description ?? ""
+            ),
+            composition: String(
+              product.composition ?? ""
+            ),
+            careText: String(
+              product.care_text ?? ""
+            ),
+            price: Number(product.price ?? 0),
+            oldPrice:
+              product.old_price === null
+              || product.old_price === undefined
+                ? null
+                : Number(product.old_price),
+            costPrice:
+              product.cost_price === null
+              || product.cost_price === undefined
+                ? null
+                : Number(product.cost_price),
+            stockQuantity: Number(
+              product.stock_quantity ?? 0
+            ),
+            status:
+              status === "active"
+              || status === "hidden"
+              || status === "archived"
+                ? status
+                : "draft",
+            isFeatured: Boolean(
+              product.is_featured
+            ),
+            sortOrder: Number(
+              product.sort_order ?? 100
+            )
+          }}
+        />
       </section>
     </div>
   );

@@ -179,6 +179,53 @@ const productSchema = z.object({
   sortOrder: z.coerce.number().int().optional().default(100)
 });
 
+const productUpdateSchema = z.object({
+  categoryId: z.string().uuid()
+    .optional()
+    .or(z.literal(""))
+    .default(""),
+  name: z.string().trim().min(2).max(255),
+  slug: z.string().trim().max(160)
+    .optional()
+    .default(""),
+  shortDescription: z.string().max(2000)
+    .optional()
+    .default(""),
+  description: z.string().max(20000)
+    .optional()
+    .default(""),
+  composition: z.string().max(10000)
+    .optional()
+    .default(""),
+  careText: z.string().max(10000)
+    .optional()
+    .default(""),
+  price: z.coerce.number().int().min(0),
+  oldPrice: z.union([
+    z.coerce.number().int().min(0),
+    z.null()
+  ]).optional().default(null),
+  costPrice: z.union([
+    z.coerce.number().int().min(0),
+    z.null()
+  ]).optional().default(null),
+  stockQuantity: z.coerce.number().int().min(0)
+    .optional()
+    .default(0),
+  status: z.enum([
+    "draft",
+    "active",
+    "hidden",
+    "archived"
+  ]).optional().default("draft"),
+  isFeatured: z.coerce.boolean()
+    .optional()
+    .default(false),
+  sortOrder: z.coerce.number().int()
+    .optional()
+    .default(100)
+});
+
 const deliveryZoneSchema = z.object({
   name: z.string().min(2),
   description: z.string().optional().default(""),
@@ -3005,6 +3052,145 @@ export async function adminRoutes(app: FastifyInstance) {
       await client.end();
     }
   });
+  app.patch("/api/admin/products/:id", async (request, reply) => {
+    const params = z.object({
+      id: z.string().uuid()
+    }).parse(request.params ?? {});
+
+    const body = productUpdateSchema.parse(
+      request.body ?? {}
+    );
+
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+
+      const existingRows = await client`
+        SELECT
+          id,
+          slug,
+          status
+        FROM products
+        WHERE shop_id = ${shop.id}
+          AND id = ${params.id}
+        LIMIT 1
+      `;
+
+      const existing = existingRows[0];
+
+      if (!existing) {
+        return reply.status(404).send({
+          ok: false,
+          message: "Товар не найден"
+        });
+      }
+
+      const categoryId = body.categoryId || null;
+
+      if (categoryId) {
+        const categoryRows = await client`
+          SELECT id
+          FROM categories
+          WHERE shop_id = ${shop.id}
+            AND id = ${categoryId}
+          LIMIT 1
+        `;
+
+        if (!categoryRows[0]) {
+          return reply.status(400).send({
+            ok: false,
+            message: "Выбранная категория не найдена"
+          });
+        }
+      }
+
+      const slug = (
+        body.slug.trim()
+        || slugify(body.name)
+      );
+
+      if (!slug) {
+        return reply.status(400).send({
+          ok: false,
+          message: "Не удалось сформировать slug товара"
+        });
+      }
+
+      if (
+        !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)
+      ) {
+        return reply.status(400).send({
+          ok: false,
+          message:
+            "Slug может содержать только латинские буквы, цифры и дефисы"
+        });
+      }
+
+      const duplicateRows = await client`
+        SELECT id
+        FROM products
+        WHERE shop_id = ${shop.id}
+          AND slug = ${slug}
+          AND id <> ${params.id}
+        LIMIT 1
+      `;
+
+      if (duplicateRows[0]) {
+        return reply.status(409).send({
+          ok: false,
+          message: "Товар с таким slug уже существует"
+        });
+      }
+
+      if (
+        body.oldPrice !== null
+        && body.oldPrice <= body.price
+      ) {
+        return reply.status(400).send({
+          ok: false,
+          message:
+            "Старая цена должна быть выше текущей цены"
+        });
+      }
+
+      const rows = await client`
+        UPDATE products
+        SET
+          category_id = ${categoryId},
+          slug = ${slug},
+          name = ${body.name},
+          short_description = ${body.shortDescription},
+          description = ${body.description},
+          composition = ${body.composition},
+          care_text = ${body.careText},
+          price = ${body.price},
+          old_price = ${body.oldPrice},
+          cost_price = ${body.costPrice},
+          stock_quantity = ${body.stockQuantity},
+          is_stock_visible = false,
+          status = ${body.status},
+          is_featured = ${body.isFeatured},
+          sort_order = ${body.sortOrder},
+          updated_at = NOW()
+        WHERE shop_id = ${shop.id}
+          AND id = ${params.id}
+        RETURNING *
+      `;
+
+      return {
+        ok: true,
+        product: rows[0] ?? null,
+        customerAvailability:
+          body.stockQuantity > 0
+            ? "В наличии"
+            : "Нет в наличии"
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
 
 
   app.post("/api/admin/categories", async (request) => {
