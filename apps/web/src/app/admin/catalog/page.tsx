@@ -7,6 +7,11 @@ import {
   type CategoryManagerItem
 } from "./category-manager";
 import {
+  ProductCatalogManager,
+  type ProductCatalogCategory,
+  type ProductCatalogItem
+} from "./product-catalog-manager";
+import {
   fetchAdmin,
   type AdminRow
 } from "../lib/admin-api";
@@ -127,6 +132,77 @@ export default async function AdminCatalogPage() {
     ])
   );
 
+
+  const productCatalogCategories:
+    ProductCatalogCategory[] =
+      productCategories.map((category) => ({
+        id: category.id,
+        name: category.name
+      }));
+
+  const productCatalogItems:
+    ProductCatalogItem[] =
+      products
+        .filter(
+          (product) =>
+            typeof product.id === "string"
+        )
+        .map((product) => {
+          const status = String(
+            product.status ?? "draft"
+          );
+
+          const categoryId = String(
+            product.category_id ?? ""
+          );
+
+          const numericPrice = Number(
+            product.price ?? 0
+          );
+
+          return {
+            id: String(product.id),
+            name: text(product.name),
+            slug: text(product.slug, ""),
+            categoryId,
+            categoryName:
+              categoryNames.get(categoryId)
+              || "Без категории",
+            status,
+            statusLabel:
+              statusLabels[status] || status,
+            shortDescription: text(
+              product.short_description,
+              "Короткое описание не заполнено."
+            ),
+            imageUrl: safeProductImageUrl(
+              product.primary_image_url
+            ),
+            imagesCount: Number(
+              product.images_count ?? 0
+            ),
+            stock: Number(
+              product.stock_quantity ?? 0
+            ),
+            price: Number.isFinite(numericPrice)
+              ? numericPrice
+              : 0,
+            priceLabel: money(product.price),
+            isFeatured: booleanValue(
+              product.is_featured
+            ),
+            sortOrder: Number(
+              product.sort_order ?? 100
+            ),
+            createdAt: String(
+              product.created_at ?? ""
+            ),
+            updatedAt: String(
+              product.updated_at ?? ""
+            )
+          };
+        });
+
   const activeCount = products.filter(
     (product) => String(product.status) === "active"
   ).length;
@@ -191,151 +267,10 @@ export default async function AdminCatalogPage() {
         </article>
       </section>
 
-      <section className="admin-panel admin-catalog-products-panel">
-        <div className="admin-panel-head">
-          <div>
-            <span>Ассортимент</span>
-            <h2>Товары</h2>
-          </div>
-
-          <span className="admin-catalog-count">
-            {products.length}
-          </span>
-        </div>
-
-        {products.length ? (
-          <div className="admin-catalog-product-grid">
-            {products.map((product) => {
-              const id = String(product.id ?? "");
-              const name = text(product.name);
-              const status = String(
-                product.status ?? "draft"
-              );
-
-              const categoryId = String(
-                product.category_id ?? ""
-              );
-
-              const categoryName = (
-                categoryNames.get(categoryId)
-                || "Без категории"
-              );
-
-              const imageUrl = safeProductImageUrl(
-                product.primary_image_url
-              );
-
-              const imagesCount = Number(
-                product.images_count ?? 0
-              );
-
-              const stock = Number(
-                product.stock_quantity ?? 0
-              );
-
-              return (
-                <article
-                  className="admin-catalog-product-card"
-                  key={id}
-                >
-                  <a
-                    className={
-                      imageUrl
-                        ? "admin-catalog-product-image has-image"
-                        : "admin-catalog-product-image"
-                    }
-                    href={`/admin/catalog/products/${id}`}
-                    aria-label={`Открыть товар ${name}`}
-                  >
-                    {imageUrl ? (
-                      <img
-                        src={imageUrl}
-                        alt={name}
-                        loading="lazy"
-                        decoding="async"
-                      />
-                    ) : (
-                      <div>
-                        <strong>Фото не загружено</strong>
-                        <span>
-                          Добавьте изображение товара
-                        </span>
-                      </div>
-                    )}
-                  </a>
-
-                  <div className="admin-catalog-product-body">
-                    <div className="admin-catalog-product-heading">
-                      <div>
-                        <span>{categoryName}</span>
-                        <h3>{name}</h3>
-                      </div>
-
-                      <span
-                        className={
-                          `admin-catalog-status status-${status}`
-                        }
-                      >
-                        {statusLabels[status] || status}
-                      </span>
-                    </div>
-
-                    <p>
-                      {text(
-                        product.short_description,
-                        "Короткое описание не заполнено."
-                      )}
-                    </p>
-
-                    <dl className="admin-catalog-product-facts">
-                      <div>
-                        <dt>Цена</dt>
-                        <dd>{money(product.price)}</dd>
-                      </div>
-
-                      <div>
-                        <dt>Остаток</dt>
-                        <dd>{stock}</dd>
-                      </div>
-
-                      <div>
-                        <dt>Фотографии</dt>
-                        <dd>{imagesCount}</dd>
-                      </div>
-                    </dl>
-
-                    <div className="admin-catalog-product-tags">
-                      {Boolean(product.is_featured) ? (
-                        <span>Хит продаж</span>
-                      ) : null}
-
-                      {!imageUrl ? (
-                        <span className="warning">
-                          Нужна фотография
-                        </span>
-                      ) : null}
-                    </div>
-
-                    <a
-                      className="admin-catalog-open-link"
-                      href={`/admin/catalog/products/${id}`}
-                    >
-                      Открыть карточку
-                    </a>
-                  </div>
-                </article>
-              );
-            })}
-          </div>
-        ) : (
-          <div className="admin-catalog-empty">
-            <strong>Товаров пока нет</strong>
-            <p>
-              Добавьте первый товар через форму ниже.
-            </p>
-          </div>
-        )}
-      </section>
+      <ProductCatalogManager
+        categories={productCatalogCategories}
+        products={productCatalogItems}
+      />
 
       <section className="admin-panel">
         <div className="admin-panel-head">

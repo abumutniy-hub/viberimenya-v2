@@ -2426,7 +2426,7 @@ export async function adminRoutes(app: FastifyInstance) {
           ) pic ON true
           WHERE p.shop_id = ${shop.id}
           ORDER BY p.created_at DESC
-          LIMIT 100
+          LIMIT 500
         `
       ]);
 
