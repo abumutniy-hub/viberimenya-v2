@@ -161,10 +161,28 @@ const categorySchema = z.object({
 
 const productImageUploadSchema = z.object({
   imageData: z.string().min(40),
-  fileName: z.string().optional().default(""),
-  alt: z.string().optional().default(""),
+  fileName: z.string().max(255).optional().default(""),
+  alt: z.string().max(255).optional().default(""),
   isMain: z.coerce.boolean().optional().default(true)
 });
+
+const productImageUpdateSchema = z.object({
+  alt: z.string().max(255).optional(),
+  sortOrder: z.coerce.number()
+    .int()
+    .min(0)
+    .max(100000)
+    .optional(),
+  isMain: z.boolean().optional()
+}).refine(
+  (value) =>
+    value.alt !== undefined
+    || value.sortOrder !== undefined
+    || value.isMain !== undefined,
+  {
+    message: "Не указаны изменения фотографии"
+  }
+);
 
 const productSchema = z.object({
   categoryId: z.string().uuid().optional().or(z.literal("")).default(""),
@@ -3313,129 +3331,414 @@ export async function adminRoutes(app: FastifyInstance) {
     }
   });
 
-  app.post("/api/admin/products/:id/images", async (request, reply) => {
-    const params = z.object({ id: z.string().uuid() }).parse(request.params ?? {});
-    const body = productImageUploadSchema.parse(request.body ?? {});
-    const { client } = createDb();
+  app.post(
+    "/api/admin/products/:id/images",
+    {
+      bodyLimit: 8 * 1024 * 1024
+    },
+    async (request, reply) => {
+      const params = z.object({
+        id: z.string().uuid()
+      }).parse(request.params ?? {});
 
-    try {
-      const shop = await getShop(client);
-      const productRows = await client<{ id: string; name: string }[]>`
-        SELECT id, name
-        FROM products
-        WHERE shop_id = ${shop.id}
-          AND id = ${params.id}
-        LIMIT 1
-      `;
-      const product = productRows[0];
+      const body = productImageUploadSchema.parse(
+        request.body ?? {}
+      );
 
-      if (!product) {
-        return reply.status(404).send({
-          ok: false,
-          message: "Товар не найден"
-        });
-      }
+      const { client } = createDb();
 
-      const match = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/.exec(body.imageData.trim());
+      try {
+        const shop = await getShop(client);
 
-      if (!match) {
-        return reply.status(400).send({
-          ok: false,
-          message: "Поддерживаются только изображения JPG, PNG или WebP"
-        });
-      }
+        const productRows = await client<{
+          id: string;
+          name: string;
+        }[]>`
+          SELECT id, name
+          FROM products
+          WHERE shop_id = ${shop.id}
+            AND id = ${params.id}
+          LIMIT 1
+        `;
 
-      const mimeType = match[1];
-      const encoded = match[2];
-      const extensionByMime: Record<string, string> = {
-        "image/jpeg": "jpg",
-        "image/png": "png",
-        "image/webp": "webp"
-      };
-      const extension = extensionByMime[mimeType || ""];
+        const product = productRows[0];
 
-      if (!extension || !encoded) {
-        return reply.status(400).send({
-          ok: false,
-          message: "Не удалось прочитать изображение"
-        });
-      }
+        if (!product) {
+          return reply.status(404).send({
+            ok: false,
+            message: "Товар не найден"
+          });
+        }
 
-      const buffer = Buffer.from(encoded, "base64");
-
-      if (buffer.length > 5 * 1024 * 1024) {
-        return reply.status(400).send({
-          ok: false,
-          message: "Фото должно быть не больше 5 МБ"
-        });
-      }
-
-      const uploadsRoot = process.env.UPLOADS_DIR || resolve(process.cwd(), "storage/uploads");
-      const productUploadsDir = join(uploadsRoot, "products");
-      await mkdir(productUploadsDir, { recursive: true });
-
-      const safeProductId = product.id.replace(/[^a-z0-9-]/gi, "");
-      const fileName = `product-${safeProductId}-${randomUUID()}.${extension}`;
-      const filePath = join(productUploadsDir, fileName);
-      const publicUrl = `/uploads/products/${fileName}`;
-
-      await writeFile(filePath, buffer);
-
-      if (body.isMain) {
-        await client`
-          UPDATE product_images
-          SET is_main = false,
-              updated_at = NOW()
+        const countRows = await client<{
+          images_count: number;
+        }[]>`
+          SELECT COUNT(*)::int AS images_count
+          FROM product_images
           WHERE shop_id = ${shop.id}
             AND product_id = ${product.id}
         `;
+
+        const imagesCount = Number(
+          countRows[0]?.images_count ?? 0
+        );
+
+        if (imagesCount >= 12) {
+          return reply.status(400).send({
+            ok: false,
+            message:
+              "Для одного товара можно загрузить не больше 12 фотографий"
+          });
+        }
+
+        const match =
+          /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/
+            .exec(body.imageData.trim());
+
+        if (!match) {
+          return reply.status(400).send({
+            ok: false,
+            message:
+              "Поддерживаются только изображения JPG, PNG или WebP"
+          });
+        }
+
+        const mimeType = match[1] ?? "";
+        const encoded = match[2] ?? "";
+
+        const extensionByMime: Record<string, string> = {
+          "image/jpeg": "jpg",
+          "image/png": "png",
+          "image/webp": "webp"
+        };
+
+        const extension = extensionByMime[mimeType];
+
+        if (!extension || !encoded) {
+          return reply.status(400).send({
+            ok: false,
+            message: "Не удалось прочитать изображение"
+          });
+        }
+
+        const buffer = Buffer.from(encoded, "base64");
+
+        if (buffer.length < 32) {
+          return reply.status(400).send({
+            ok: false,
+            message: "Файл изображения повреждён"
+          });
+        }
+
+        if (buffer.length > 5 * 1024 * 1024) {
+          return reply.status(400).send({
+            ok: false,
+            message:
+              "После обработки фото должно быть не больше 5 МБ"
+          });
+        }
+
+        const isJpeg =
+          buffer.length >= 3
+          && buffer[0] === 0xff
+          && buffer[1] === 0xd8
+          && buffer[2] === 0xff;
+
+        const isPng =
+          buffer.length >= 8
+          && buffer[0] === 0x89
+          && buffer[1] === 0x50
+          && buffer[2] === 0x4e
+          && buffer[3] === 0x47
+          && buffer[4] === 0x0d
+          && buffer[5] === 0x0a
+          && buffer[6] === 0x1a
+          && buffer[7] === 0x0a;
+
+        const isWebp =
+          buffer.length >= 12
+          && buffer.toString("ascii", 0, 4) === "RIFF"
+          && buffer.toString("ascii", 8, 12) === "WEBP";
+
+        const signatureMatches =
+          (mimeType === "image/jpeg" && isJpeg)
+          || (mimeType === "image/png" && isPng)
+          || (mimeType === "image/webp" && isWebp);
+
+        if (!signatureMatches) {
+          return reply.status(400).send({
+            ok: false,
+            message:
+              "Содержимое файла не соответствует формату изображения"
+          });
+        }
+
+        const sortRows = await client<{
+          max_sort_order: number;
+        }[]>`
+          SELECT
+            COALESCE(MAX(sort_order), 0)::int
+              AS max_sort_order
+          FROM product_images
+          WHERE shop_id = ${shop.id}
+            AND product_id = ${product.id}
+        `;
+
+        const sortOrder =
+          Number(sortRows[0]?.max_sort_order ?? 0) + 10;
+
+        const shouldBeMain =
+          body.isMain || imagesCount === 0;
+
+        const uploadsRoot =
+          process.env.UPLOADS_DIR
+          || resolve(
+            process.cwd(),
+            "storage/uploads"
+          );
+
+        const productUploadsDir = join(
+          uploadsRoot,
+          "products"
+        );
+
+        await mkdir(
+          productUploadsDir,
+          {
+            recursive: true
+          }
+        );
+
+        const safeProductId = product.id.replace(
+          /[^a-z0-9-]/gi,
+          ""
+        );
+
+        const fileName =
+          `product-${safeProductId}-${randomUUID()}.${extension}`;
+
+        const filePath = join(
+          productUploadsDir,
+          fileName
+        );
+
+        const publicUrl =
+          `/uploads/products/${fileName}`;
+
+        await writeFile(filePath, buffer);
+
+        let insertedId = "";
+
+        try {
+          const insertedRows = await client<{
+            id: string;
+          }[]>`
+            INSERT INTO product_images (
+              shop_id,
+              product_id,
+              url,
+              alt,
+              is_main,
+              sort_order,
+              created_at,
+              updated_at
+            )
+            VALUES (
+              ${shop.id},
+              ${product.id},
+              ${publicUrl},
+              ${body.alt.trim() || product.name},
+              false,
+              ${sortOrder},
+              NOW(),
+              NOW()
+            )
+            RETURNING id
+          `;
+
+          insertedId = insertedRows[0]?.id ?? "";
+
+          if (!insertedId) {
+            throw new Error(
+              "Не удалось создать запись фотографии"
+            );
+          }
+
+          if (shouldBeMain) {
+            await client`
+              UPDATE product_images
+              SET
+                is_main = false,
+                updated_at = NOW()
+              WHERE shop_id = ${shop.id}
+                AND product_id = ${product.id}
+            `;
+
+            await client`
+              UPDATE product_images
+              SET
+                is_main = true,
+                updated_at = NOW()
+              WHERE shop_id = ${shop.id}
+                AND id = ${insertedId}
+            `;
+          }
+
+          const imageRows = await client`
+            SELECT *
+            FROM product_images
+            WHERE shop_id = ${shop.id}
+              AND id = ${insertedId}
+            LIMIT 1
+          `;
+
+          return {
+            ok: true,
+            image: imageRows[0] ?? null
+          };
+        } catch (error) {
+          if (insertedId) {
+            await client`
+              DELETE FROM product_images
+              WHERE shop_id = ${shop.id}
+                AND id = ${insertedId}
+            `.catch(() => undefined);
+          }
+
+          await unlink(filePath).catch(
+            () => undefined
+          );
+
+          throw error;
+        }
+      } finally {
+        await client.end();
       }
-
-      const rows = await client`
-        INSERT INTO product_images (
-          shop_id,
-          product_id,
-          url,
-          alt,
-          is_main,
-          sort_order,
-          created_at,
-          updated_at
-        )
-        VALUES (
-          ${shop.id},
-          ${product.id},
-          ${publicUrl},
-          ${body.alt.trim() || product.name},
-          ${body.isMain},
-          100,
-          NOW(),
-          NOW()
-        )
-        RETURNING *
-      `;
-
-      return {
-        ok: true,
-        image: rows[0] ?? null
-      };
-    } finally {
-      await client.end();
     }
-  });
+  );
+
+  app.patch(
+    "/api/admin/product-images/:id",
+    async (request, reply) => {
+      const params = z.object({
+        id: z.string().uuid()
+      }).parse(request.params ?? {});
+
+      const body = productImageUpdateSchema.parse(
+        request.body ?? {}
+      );
+
+      const { client } = createDb();
+
+      try {
+        const shop = await getShop(client);
+
+        const imageRows = await client<{
+          id: string;
+          product_id: string;
+        }[]>`
+          SELECT
+            id,
+            product_id
+          FROM product_images
+          WHERE shop_id = ${shop.id}
+            AND id = ${params.id}
+          LIMIT 1
+        `;
+
+        const image = imageRows[0];
+
+        if (!image) {
+          return reply.status(404).send({
+            ok: false,
+            message: "Фото не найдено"
+          });
+        }
+
+        if (body.alt !== undefined) {
+          await client`
+            UPDATE product_images
+            SET
+              alt = ${body.alt.trim()},
+              updated_at = NOW()
+            WHERE shop_id = ${shop.id}
+              AND id = ${params.id}
+          `;
+        }
+
+        if (body.sortOrder !== undefined) {
+          await client`
+            UPDATE product_images
+            SET
+              sort_order = ${body.sortOrder},
+              updated_at = NOW()
+            WHERE shop_id = ${shop.id}
+              AND id = ${params.id}
+          `;
+        }
+
+        if (body.isMain === true) {
+          await client`
+            UPDATE product_images
+            SET
+              is_main = false,
+              updated_at = NOW()
+            WHERE shop_id = ${shop.id}
+              AND product_id = ${image.product_id}
+          `;
+
+          await client`
+            UPDATE product_images
+            SET
+              is_main = true,
+              updated_at = NOW()
+            WHERE shop_id = ${shop.id}
+              AND id = ${params.id}
+          `;
+        }
+
+        const updatedRows = await client`
+          SELECT *
+          FROM product_images
+          WHERE shop_id = ${shop.id}
+            AND id = ${params.id}
+          LIMIT 1
+        `;
+
+        return {
+          ok: true,
+          image: updatedRows[0] ?? null
+        };
+      } finally {
+        await client.end();
+      }
+    }
+  );
 
   app.delete("/api/admin/product-images/:id", async (request, reply) => {
-    const params = z.object({ id: z.string().uuid() }).parse(request.params ?? {});
+    const params = z.object({
+      id: z.string().uuid()
+    }).parse(request.params ?? {});
+
     const { client } = createDb();
 
     try {
       const shop = await getShop(client);
-      const rows = await client<{ url: string }[]>`
+
+      const rows = await client<{
+        url: string;
+        product_id: string;
+        is_main: boolean;
+      }[]>`
         DELETE FROM product_images
         WHERE shop_id = ${shop.id}
           AND id = ${params.id}
-        RETURNING url
+        RETURNING
+          url,
+          product_id,
+          is_main
       `;
+
       const image = rows[0];
 
       if (!image) {
@@ -3445,16 +3748,63 @@ export async function adminRoutes(app: FastifyInstance) {
         });
       }
 
-      if (image.url.startsWith("/uploads/products/")) {
-        const uploadsRoot = process.env.UPLOADS_DIR || resolve(process.cwd(), "storage/uploads");
-        const fileName = image.url.split("/").pop() || "";
+      if (image.is_main) {
+        const nextRows = await client<{
+          id: string;
+        }[]>`
+          SELECT id
+          FROM product_images
+          WHERE shop_id = ${shop.id}
+            AND product_id = ${image.product_id}
+          ORDER BY
+            sort_order ASC,
+            created_at ASC
+          LIMIT 1
+        `;
 
-        if (fileName) {
-          await unlink(join(uploadsRoot, "products", fileName)).catch(() => undefined);
+        const nextImage = nextRows[0];
+
+        if (nextImage) {
+          await client`
+            UPDATE product_images
+            SET
+              is_main = true,
+              updated_at = NOW()
+            WHERE shop_id = ${shop.id}
+              AND id = ${nextImage.id}
+          `;
         }
       }
 
-      return { ok: true };
+      if (
+        image.url.startsWith(
+          "/uploads/products/"
+        )
+      ) {
+        const uploadsRoot =
+          process.env.UPLOADS_DIR
+          || resolve(
+            process.cwd(),
+            "storage/uploads"
+          );
+
+        const fileName =
+          image.url.split("/").pop() || "";
+
+        if (fileName) {
+          await unlink(
+            join(
+              uploadsRoot,
+              "products",
+              fileName
+            )
+          ).catch(() => undefined);
+        }
+      }
+
+      return {
+        ok: true
+      };
     } finally {
       await client.end();
     }

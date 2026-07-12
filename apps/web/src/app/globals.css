@@ -7513,3 +7513,412 @@ textarea {
     width: 100%;
   }
 }
+
+
+/* CRM product gallery manager */
+.admin-product-main-image {
+  position: relative;
+}
+
+.admin-product-main-image > span {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(25, 23, 22, 0.86);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.admin-product-photo-upload {
+  display: grid;
+  min-width: 0;
+  gap: 16px;
+  padding: 20px;
+  border-top: 1px solid rgba(25, 23, 22, 0.08);
+  background: rgba(25, 23, 22, 0.02);
+}
+
+.admin-product-photo-upload-head {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.admin-product-photo-upload-head > div {
+  display: grid;
+  gap: 4px;
+}
+
+.admin-product-photo-upload-head span {
+  color: rgba(25, 23, 22, 0.54);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.admin-product-photo-upload-head strong {
+  font-size: 18px;
+}
+
+.admin-product-photo-upload-head small {
+  max-width: 360px;
+  color: rgba(25, 23, 22, 0.52);
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: right;
+}
+
+.admin-product-photo-upload-grid {
+  display: grid;
+  grid-template-columns:
+    minmax(0, 1.2fr)
+    minmax(0, 1fr)
+    minmax(170px, 0.45fr);
+  min-width: 0;
+  gap: 14px;
+  align-items: end;
+}
+
+.admin-product-photo-upload-grid label {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+}
+
+.admin-product-photo-upload-grid label > span {
+  color: rgba(25, 23, 22, 0.58);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.admin-product-photo-upload-grid input[type="text"],
+.admin-product-photo-upload-grid input:not([type]) {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 46px;
+  padding: 12px 14px;
+  border: 1px solid rgba(25, 23, 22, 0.14);
+  border-radius: 15px;
+  background: #fffdf9;
+  color: #191716;
+  font: inherit;
+  box-sizing: border-box;
+}
+
+.admin-product-file-field input[type="file"] {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 46px;
+  padding: 8px;
+  border: 1px solid rgba(25, 23, 22, 0.14);
+  border-radius: 15px;
+  background: #fffdf9;
+  box-sizing: border-box;
+}
+
+.admin-product-file-field input[type="file"]::file-selector-button {
+  min-height: 30px;
+  margin-right: 10px;
+  padding: 5px 12px;
+  border: 0;
+  border-radius: 999px;
+  background: #191716;
+  color: #fff;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.admin-product-photo-main-check {
+  display: flex !important;
+  min-height: 46px;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px !important;
+  padding: 11px 14px;
+  border: 1px solid rgba(25, 23, 22, 0.1);
+  border-radius: 15px;
+  background: #fffdf9;
+}
+
+.admin-product-photo-main-check input {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+}
+
+.admin-product-photo-main-check span {
+  color: #191716 !important;
+}
+
+.admin-product-upload-preview {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  min-width: 0;
+  gap: 14px;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(25, 23, 22, 0.09);
+  border-radius: 18px;
+  background: #fffdf9;
+}
+
+.admin-product-upload-preview img {
+  display: block;
+  width: 110px;
+  height: 90px;
+  object-fit: cover;
+}
+
+.admin-product-upload-preview > div {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  padding-right: 14px;
+}
+
+.admin-product-upload-preview strong,
+.admin-product-upload-preview span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.admin-product-upload-preview span {
+  color: rgba(25, 23, 22, 0.55);
+  font-size: 12px;
+}
+
+.admin-product-photo-upload-footer {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.admin-product-photo-upload-footer > span {
+  min-width: 0;
+  color: rgba(25, 23, 22, 0.58);
+  font-size: 13px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.admin-product-photo-upload-footer button,
+.admin-product-gallery-actions button {
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  padding: 9px 16px;
+  border: 0;
+  border-radius: 999px;
+  background: #191716;
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.admin-product-photo-upload-footer button:disabled,
+.admin-product-gallery-actions button:disabled {
+  opacity: 0.48;
+  cursor: default;
+}
+
+.admin-product-gallery-list {
+  display: grid;
+  gap: 12px;
+  padding: 0 20px 20px;
+  background: rgba(25, 23, 22, 0.02);
+}
+
+.admin-product-gallery-item {
+  display: grid;
+  grid-template-columns:
+    140px minmax(0, 1fr) auto;
+  min-width: 0;
+  gap: 14px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid rgba(25, 23, 22, 0.09);
+  border-radius: 18px;
+  background: #fffdf9;
+}
+
+.admin-product-gallery-item.main {
+  border-color: rgba(43, 137, 91, 0.28);
+  box-shadow: inset 0 0 0 1px rgba(43, 137, 91, 0.08);
+}
+
+.admin-product-gallery-thumb {
+  position: relative;
+  height: 100px;
+  overflow: hidden;
+  border-radius: 14px;
+  background: #eee8e1;
+}
+
+.admin-product-gallery-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.admin-product-gallery-thumb span {
+  position: absolute;
+  right: 7px;
+  bottom: 7px;
+  padding: 4px 7px;
+  border-radius: 999px;
+  background: rgba(25, 23, 22, 0.86);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.admin-product-gallery-fields {
+  display: grid;
+  grid-template-columns:
+    minmax(0, 1fr) 110px;
+  min-width: 0;
+  gap: 12px;
+}
+
+.admin-product-gallery-fields label {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.admin-product-gallery-fields label > span {
+  color: rgba(25, 23, 22, 0.55);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.admin-product-gallery-fields input {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  padding: 10px 12px;
+  border: 1px solid rgba(25, 23, 22, 0.13);
+  border-radius: 13px;
+  background: #fff;
+  color: #191716;
+  font: inherit;
+  box-sizing: border-box;
+}
+
+.admin-product-gallery-actions {
+  display: grid;
+  min-width: 145px;
+  gap: 7px;
+}
+
+.admin-product-gallery-actions button.secondary {
+  border: 1px solid rgba(25, 23, 22, 0.12);
+  background: #f3eee8;
+  color: #191716;
+}
+
+.admin-product-gallery-actions button.danger {
+  background: rgba(165, 59, 59, 0.1);
+  color: #943a3a;
+}
+
+@media (max-width: 1050px) {
+  .admin-product-photo-upload-grid {
+    grid-template-columns:
+      repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-product-photo-main-check {
+    grid-column: 1 / -1;
+  }
+
+  .admin-product-gallery-item {
+    grid-template-columns:
+      120px minmax(0, 1fr);
+  }
+
+  .admin-product-gallery-actions {
+    grid-column: 1 / -1;
+    grid-template-columns:
+      repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .admin-product-photo-upload {
+    padding: 16px;
+  }
+
+  .admin-product-photo-upload-head {
+    display: grid;
+  }
+
+  .admin-product-photo-upload-head small {
+    max-width: none;
+    text-align: left;
+  }
+
+  .admin-product-photo-upload-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .admin-product-photo-main-check {
+    grid-column: auto;
+  }
+
+  .admin-product-photo-upload-footer {
+    display: grid;
+  }
+
+  .admin-product-photo-upload-footer button {
+    width: 100%;
+  }
+
+  .admin-product-gallery-list {
+    padding: 0 16px 16px;
+  }
+
+  .admin-product-gallery-item {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .admin-product-gallery-thumb {
+    height: 210px;
+  }
+
+  .admin-product-gallery-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .admin-product-gallery-actions {
+    grid-column: auto;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .admin-product-upload-preview {
+    grid-template-columns: 90px minmax(0, 1fr);
+  }
+
+  .admin-product-upload-preview img {
+    width: 90px;
+    height: 84px;
+  }
+}

@@ -1,7 +1,6 @@
 import {
   CategoryForm,
-  ProductForm,
-  ProductImageForm
+  ProductForm
 } from "../components/admin-forms";
 import { AdminTable } from "../components/admin-table";
 import {
@@ -77,21 +76,6 @@ export default async function AdminCatalogPage() {
       category.name
     ])
   );
-
-  const productOptions = products
-    .filter(
-      (product) =>
-        typeof product.id === "string"
-        && typeof product.name === "string"
-    )
-    .map((product) => ({
-      id: String(product.id),
-      name: String(product.name),
-      primaryImageUrl: safeProductImageUrl(
-        product.primary_image_url
-      ),
-      imagesCount: Number(product.images_count ?? 0)
-    }));
 
   const activeCount = products.filter(
     (product) => String(product.status) === "active"
@@ -312,17 +296,6 @@ export default async function AdminCatalogPage() {
         </div>
 
         <ProductForm categories={productCategories} />
-      </section>
-
-      <section className="admin-panel">
-        <div className="admin-panel-head">
-          <div>
-            <span>Галерея</span>
-            <h2>Загрузить фотографию</h2>
-          </div>
-        </div>
-
-        <ProductImageForm products={productOptions} />
       </section>
 
       <section className="admin-panel">

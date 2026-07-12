@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { ProductEditForm } from "./product-edit-form";
+import { ProductGalleryManager } from "./product-gallery-manager";
 import {
   fetchAdmin,
   type AdminRow
@@ -308,72 +309,19 @@ export default async function AdminProductDetailPage({
       )}
 
       <section className="admin-product-detail-grid">
-        <article className="admin-panel admin-product-gallery-card">
-          <div className="admin-panel-head">
-            <div>
-              <span>Витрина</span>
-              <h2>Фотографии</h2>
-            </div>
-
-            <span className="admin-catalog-count">
-              {images.length}
-            </span>
-          </div>
-
-          {mainImage ? (
-            <>
-              <a
-                className="admin-product-main-image"
-                href={mainImage.safeUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                title="Открыть оригинал"
-              >
-                <img
-                  src={mainImage.safeUrl}
-                  alt={text(mainImage.alt, name)}
-                />
-              </a>
-
-              {images.length > 1 ? (
-                <div className="admin-product-thumbnail-grid">
-                  {images.map((image) => (
-                    <a
-                      key={String(image.id)}
-                      href={image.safeUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className={
-                        Boolean(image.is_main)
-                          ? "admin-product-thumbnail main"
-                          : "admin-product-thumbnail"
-                      }
-                    >
-                      <img
-                        src={image.safeUrl}
-                        alt={text(image.alt, name)}
-                        loading="lazy"
-                        decoding="async"
-                      />
-
-                      {Boolean(image.is_main) ? (
-                        <span>Главное</span>
-                      ) : null}
-                    </a>
-                  ))}
-                </div>
-              ) : null}
-            </>
-          ) : (
-            <div className="admin-product-photo-empty">
-              <strong>Фотографии не загружены</strong>
-              <p>
-                Изображение можно добавить на основной
-                странице каталога.
-              </p>
-            </div>
-          )}
-        </article>
+        <ProductGalleryManager
+          productId={String(product.id)}
+          productName={name}
+          images={images.map((image) => ({
+            id: String(image.id ?? ""),
+            url: image.safeUrl,
+            alt: text(image.alt, name),
+            isMain: Boolean(image.is_main),
+            sortOrder: Number(
+              image.sort_order ?? 100
+            )
+          }))}
+        />
 
         <article className="admin-panel admin-product-data-card">
           <div className="admin-panel-head">
