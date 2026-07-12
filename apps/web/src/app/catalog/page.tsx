@@ -317,7 +317,13 @@ function ProductCard({
                 id: product.id,
                 slug: product.slug,
                 name: product.name,
-                price: product.price
+                price: product.price,
+                imageUrl:
+                  product.primaryImage?.url
+                  ?? "",
+                imageAlt:
+                  product.primaryImage?.alt
+                  || product.name
               }}
             />
           </div>

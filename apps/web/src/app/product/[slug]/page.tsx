@@ -127,7 +127,18 @@ export default async function ProductPage({ params }: ProductPageProps) {
             <AddToCartButton
               className="dark-button product-main-cart-button"
               label="Добавить в корзину"
-              product={{ id: product.id, slug: product.slug, name: product.name, price: product.price }}
+              product={{
+                id: product.id,
+                slug: product.slug,
+                name: product.name,
+                price: product.price,
+                imageUrl:
+                  primaryImage?.url
+                  ?? "",
+                imageAlt:
+                  primaryImage?.alt
+                  || product.name
+              }}
             />
             <a href="/catalog" className="light-button product-secondary-button">Продолжить выбор</a>
           </div>

@@ -10394,3 +10394,119 @@ body {
     left: 12px;
   }
 }
+
+/* Public cart product photos */
+.cart-item {
+  border-color: var(--public-border);
+  background: var(--public-surface);
+  box-shadow:
+    0 2px 4px rgba(70, 44, 37, 0.035),
+    0 12px 28px rgba(70, 44, 37, 0.075);
+}
+
+.cart-item-image {
+  position: relative;
+  display: grid;
+  overflow: hidden;
+  place-items: center;
+  border:
+    1px solid rgba(104, 45, 61, 0.11);
+  border-radius: 19px;
+  background:
+    linear-gradient(
+      145deg,
+      #fff,
+      #f7e9ed
+    );
+  color: var(--public-wine);
+  box-shadow:
+    inset 0 1px 0
+      rgba(255, 255, 255, 0.9),
+    0 7px 18px
+      rgba(70, 44, 37, 0.07);
+}
+
+.cart-item-image img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: inherit;
+  object-fit: cover;
+  transition:
+    transform 220ms ease;
+}
+
+.cart-item-image:hover img {
+  transform: scale(1.035);
+}
+
+.cart-item-image-fallback {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--public-wine);
+  font-family:
+    var(--font-public-display),
+    Georgia,
+    serif;
+  font-size: 25px;
+  font-weight: 600;
+}
+
+.cart-item-image.has-image
+.cart-item-image-fallback {
+  display: none;
+}
+
+.cart-item-image.image-failed img {
+  display: none;
+}
+
+.cart-item-image.image-failed
+.cart-item-image-fallback {
+  display: grid;
+}
+
+.cart-item h3 a {
+  color: var(--public-text);
+  font-family:
+    var(--font-public-display),
+    Georgia,
+    serif;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.cart-item h3 a:hover {
+  color: var(--public-wine);
+}
+
+.cart-item-unavailable {
+  display: inline-flex;
+  width: fit-content;
+  margin-top: 7px;
+  padding: 5px 9px;
+  border:
+    1px solid
+      rgba(173, 47, 89, 0.17);
+  border-radius: 999px;
+  background: #fff1f5;
+  color: var(--public-berry-dark);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+@media (max-width: 640px) {
+  .cart-item-image {
+    border-radius: 16px;
+  }
+
+  .cart-item-image-fallback {
+    font-size: 21px;
+  }
+
+  .cart-item h3 a {
+    overflow-wrap: anywhere;
+  }
+}

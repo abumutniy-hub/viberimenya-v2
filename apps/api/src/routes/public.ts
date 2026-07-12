@@ -755,6 +755,134 @@ export async function publicRoutes(app: FastifyInstance) {
     }
   });
 
+  app.post("/api/public/cart-products", async (request) => {
+    const body = z.object({
+      productIds: z.array(
+        z.string()
+          .trim()
+          .min(1)
+          .max(100)
+      )
+        .max(100)
+        .optional()
+        .default([]),
+
+      slugs: z.array(
+        z.string()
+          .trim()
+          .min(1)
+          .max(160)
+      )
+        .max(100)
+        .optional()
+        .default([])
+    }).parse(request.body ?? {});
+
+    const productIds = [
+      ...new Set(
+        body.productIds
+          .map((value) => value.trim())
+          .filter(Boolean)
+      )
+    ];
+
+    const slugs = [
+      ...new Set(
+        body.slugs
+          .map((value) => value.trim())
+          .filter(Boolean)
+      )
+    ];
+
+    if (
+      productIds.length === 0
+      && slugs.length === 0
+    ) {
+      return {
+        items: []
+      };
+    }
+
+    const { client, shop } =
+      await getShopContext();
+
+    try {
+      type CartProductRow = {
+        id: string;
+        slug: string;
+        name: string;
+        price: number;
+        imageUrl: string | null;
+        imageAlt: string | null;
+      };
+
+      const rows =
+        await client<CartProductRow[]>`
+          SELECT
+            p.id::text AS id,
+            p.slug,
+            p.name,
+            p.price,
+            image.url AS "imageUrl",
+            image.alt AS "imageAlt"
+          FROM products p
+          LEFT JOIN categories c
+            ON c.id = p.category_id
+            AND c.shop_id = p.shop_id
+            AND c.is_active = true
+          LEFT JOIN LATERAL (
+            SELECT
+              pi.url,
+              pi.alt
+            FROM product_images pi
+            WHERE pi.shop_id = p.shop_id
+              AND pi.product_id = p.id
+            ORDER BY
+              pi.is_main DESC,
+              pi.sort_order ASC,
+              pi.created_at ASC
+            LIMIT 1
+          ) image ON true
+          WHERE p.shop_id = ${shop.id}
+            AND p.status = 'active'
+            AND (
+              p.category_id IS NULL
+              OR c.id IS NOT NULL
+            )
+            AND (
+              p.id::text = ANY(
+                ${productIds}::text[]
+              )
+              OR p.slug = ANY(
+                ${slugs}::text[]
+              )
+            )
+          ORDER BY
+            p.sort_order ASC,
+            p.created_at DESC
+        `;
+
+      return {
+        items: rows.map((row) => ({
+          id: row.id,
+          slug: row.slug,
+          name: row.name,
+          price: Number(row.price),
+          primaryImage: row.imageUrl
+            ? {
+                url: row.imageUrl,
+                alt:
+                  row.imageAlt
+                  || row.name
+              }
+            : null
+        }))
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
   app.get("/api/public/products/:slug", async (request) => {
     const params = request.params as { slug: string };
     const { db, client, shop } = await getShopContext();

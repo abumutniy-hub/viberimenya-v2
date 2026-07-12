@@ -9,6 +9,9 @@ type CartItem = {
   name: string;
   price: number;
   quantity: number;
+  imageUrl: string;
+  imageAlt: string;
+  isAvailable: boolean;
 };
 
 type StoredCartItem = Record<string, unknown>;
@@ -43,6 +46,18 @@ function normalizeCartItem(value: unknown): CartItem | null {
   const price = Number(item.price ?? 0);
   const quantity = Math.max(1, Number(item.quantity ?? 1) || 1);
 
+  const imageUrl = String(
+    item.imageUrl
+    ?? item.image_url
+    ?? ""
+  ).trim();
+
+  const imageAlt = String(
+    item.imageAlt
+    ?? item.image_alt
+    ?? name
+  ).trim();
+
   if (!productId || !name || !slug || !Number.isFinite(price) || price < 0) {
     return null;
   }
@@ -53,7 +68,11 @@ function normalizeCartItem(value: unknown): CartItem | null {
     slug,
     name,
     price,
-    quantity
+    quantity,
+    imageUrl,
+    imageAlt: imageAlt || name,
+    isAvailable:
+      item.isAvailable !== false
   };
 }
 
@@ -81,6 +100,163 @@ function readCart(): CartItem[] {
 function writeCart(items: CartItem[]) {
   window.localStorage.setItem("viberimenya_cart", JSON.stringify(items));
   window.dispatchEvent(new Event("viberimenya_cart_changed"));
+}
+
+type CartSyncProduct = {
+  id: string;
+  slug: string;
+  name: string;
+  price: number;
+
+  primaryImage?: {
+    url?: string;
+    alt?: string | null;
+  } | null;
+};
+
+type CartSyncResponse = {
+  items?: CartSyncProduct[];
+};
+
+async function refreshCartProducts(
+  items: CartItem[]
+): Promise<CartItem[]> {
+  if (!items.length) {
+    return [];
+  }
+
+  try {
+    const response = await fetch(
+      "/api/public/cart-products",
+      {
+        method: "POST",
+
+        headers: {
+          "Content-Type":
+            "application/json"
+        },
+
+        body: JSON.stringify({
+          productIds:
+            items.map(
+              (item) =>
+                item.productId
+            ),
+
+          slugs:
+            items.map(
+              (item) =>
+                item.slug
+            )
+        })
+      }
+    );
+
+    if (!response.ok) {
+      return items;
+    }
+
+    const data = (
+      await response.json()
+    ) as CartSyncResponse;
+
+    const products =
+      Array.isArray(data.items)
+        ? data.items
+        : [];
+
+    const productsById =
+      new Map(
+        products.map(
+          (product) => [
+            String(product.id),
+            product
+          ]
+        )
+      );
+
+    const productsBySlug =
+      new Map(
+        products.map(
+          (product) => [
+            String(product.slug),
+            product
+          ]
+        )
+      );
+
+    return items.map((item) => {
+      const product = (
+        productsById.get(
+          item.productId
+        )
+        ?? productsBySlug.get(
+          item.slug
+        )
+      );
+
+      if (!product) {
+        return {
+          ...item,
+          isAvailable: false
+        };
+      }
+
+      const price =
+        Number(product.price);
+
+      const imageUrl =
+        String(
+          product.primaryImage?.url
+          ?? item.imageUrl
+          ?? ""
+        ).trim();
+
+      const imageAlt =
+        String(
+          product.primaryImage?.alt
+          ?? product.name
+          ?? item.imageAlt
+          ?? item.name
+        ).trim();
+
+      return {
+        ...item,
+
+        productId:
+          String(product.id),
+
+        slug:
+          String(
+            product.slug
+            ?? item.slug
+          ),
+
+        name:
+          String(
+            product.name
+            ?? item.name
+          ),
+
+        price:
+          Number.isFinite(price)
+          && price >= 0
+            ? price
+            : item.price,
+
+        imageUrl,
+
+        imageAlt:
+          imageAlt
+          || product.name
+          || item.name,
+
+        isAvailable: true
+      };
+    });
+  } catch {
+    return items;
+  }
 }
 
 function phoneDigits(value: string) {
@@ -122,7 +298,23 @@ export function CartClient() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    setItems(readCart());
+    const storedItems =
+      readCart();
+
+    setItems(storedItems);
+
+    void refreshCartProducts(
+      storedItems
+    ).then((freshItems) => {
+      setItems(freshItems);
+
+      if (
+        JSON.stringify(freshItems)
+        !== JSON.stringify(storedItems)
+      ) {
+        writeCart(freshItems);
+      }
+    });
 
     fetch("/api/public/delivery")
       .then((res) => res.json())
@@ -385,11 +577,56 @@ export function CartClient() {
         ) : (
           items.map((item) => (
             <article className="cart-item" key={item.cartLineId}>
-              <a href={`/product/${item.slug}`} className="cart-item-image">ВМ</a>
+              <a
+                href={`/product/${item.slug}`}
+                className={[
+                  "cart-item-image",
+                  item.imageUrl
+                    ? "has-image"
+                    : "is-placeholder"
+                ].join(" ")}
+                aria-label={`Открыть ${item.name}`}
+              >
+                {item.imageUrl ? (
+                  <img
+                    src={item.imageUrl}
+                    alt={
+                      item.imageAlt
+                      || item.name
+                    }
+                    loading="lazy"
+                    decoding="async"
+                    onError={(event) => {
+                      event.currentTarget
+                        .parentElement
+                        ?.classList.add(
+                          "image-failed"
+                        );
+                    }}
+                  />
+                ) : null}
+
+                <span className="cart-item-image-fallback">
+                  ВМ
+                </span>
+              </a>
 
               <div>
-                <h3>{item.name}</h3>
+                <h3>
+                  <a
+                    href={`/product/${item.slug}`}
+                  >
+                    {item.name}
+                  </a>
+                </h3>
+
                 <p>{money(item.price)}</p>
+
+                {item.isAvailable === false ? (
+                  <span className="cart-item-unavailable">
+                    Товар больше недоступен
+                  </span>
+                ) : null}
               </div>
 
               <div className="cart-item-controls">
