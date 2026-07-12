@@ -2262,20 +2262,60 @@ export async function publicRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/public/delivery", async () => {
-    const { db, client, shop } = await getShopContext();
+    const {
+      db,
+      client,
+      shop
+    } = await getShopContext();
 
     try {
-      const zones = await db
+      const allZones = await db
         .select()
         .from(deliveryZones)
-        .where(and(eq(deliveryZones.shopId, shop.id), eq(deliveryZones.isActive, true)))
-        .orderBy(asc(deliveryZones.sortOrder));
+        .where(
+          and(
+            eq(
+              deliveryZones.shopId,
+              shop.id
+            ),
+            eq(
+              deliveryZones.isActive,
+              true
+            )
+          )
+        )
+        .orderBy(
+          asc(deliveryZones.sortOrder)
+        );
+
+      const zones = allZones.filter(
+        (zone) =>
+          zone.name
+            .trim()
+            .toLowerCase()
+          !== "самовывоз"
+      );
 
       const intervals = await db
         .select()
         .from(deliveryIntervals)
-        .where(and(eq(deliveryIntervals.shopId, shop.id), eq(deliveryIntervals.isActive, true)))
-        .orderBy(asc(deliveryIntervals.sortOrder));
+        .where(
+          and(
+            eq(
+              deliveryIntervals.shopId,
+              shop.id
+            ),
+            eq(
+              deliveryIntervals.isActive,
+              true
+            )
+          )
+        )
+        .orderBy(
+          asc(
+            deliveryIntervals.sortOrder
+          )
+        );
 
       return {
         zones,
@@ -2285,4 +2325,5 @@ export async function publicRoutes(app: FastifyInstance) {
       await client.end();
     }
   });
+
 }

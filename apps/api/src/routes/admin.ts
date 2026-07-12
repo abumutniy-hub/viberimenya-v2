@@ -2560,6 +2560,452 @@ export async function adminRoutes(app: FastifyInstance) {
     }
   });
 
+  app.post(
+    "/api/admin/delivery/zones/manage",
+    async (request, reply) => {
+      const body =
+        deliveryZoneSchema.parse(
+          request.body ?? {}
+        );
+
+      const { client } = createDb();
+
+      try {
+        const shop =
+          await getShop(client);
+
+        const name =
+          body.name.trim();
+
+        const normalizedName =
+          name.toLowerCase();
+
+        if (
+          name.length < 2
+          || name.length > 160
+        ) {
+          return reply.status(400).send({
+            ok: false,
+            message:
+              "Название зоны должно содержать от 2 до 160 символов"
+          });
+        }
+
+        if (
+          normalizedName === "самовывоз"
+        ) {
+          return reply.status(409).send({
+            ok: false,
+            message:
+              "Самовывоз является отдельным способом получения заказа"
+          });
+        }
+
+        if (body.sortOrder < 0) {
+          return reply.status(400).send({
+            ok: false,
+            message:
+              "Порядок сортировки не может быть отрицательным"
+          });
+        }
+
+        if (
+          body.isExpressAvailable
+          && body.expressPrice <= 0
+        ) {
+          return reply.status(400).send({
+            ok: false,
+            message:
+              "Укажите стоимость срочной доставки"
+          });
+        }
+
+        const duplicateRows =
+          await client<{ id: string }[]>`
+            SELECT id
+            FROM delivery_zones
+            WHERE shop_id = ${shop.id}
+              AND LOWER(BTRIM(name))
+                = LOWER(BTRIM(${name}::text))
+            LIMIT 1
+          `;
+
+        if (duplicateRows[0]) {
+          return reply.status(409).send({
+            ok: false,
+            message:
+              "Зона с таким названием уже существует"
+          });
+        }
+
+        const freeFromAmount =
+          body.freeFromAmount > 0
+            ? body.freeFromAmount
+            : null;
+
+        const expressPrice =
+          body.isExpressAvailable
+            ? body.expressPrice
+            : null;
+
+        const rows = await client`
+          INSERT INTO delivery_zones (
+            shop_id,
+            name,
+            description,
+            price,
+            free_from_amount,
+            is_express_available,
+            express_price,
+            is_active,
+            sort_order,
+            created_at,
+            updated_at
+          )
+          VALUES (
+            ${shop.id},
+            ${name},
+            ${body.description.trim()},
+            ${body.price},
+            ${freeFromAmount},
+            ${body.isExpressAvailable},
+            ${expressPrice},
+            ${body.isActive},
+            ${body.sortOrder},
+            NOW(),
+            NOW()
+          )
+          RETURNING *
+        `;
+
+        return reply.status(201).send({
+          ok: true,
+          zone: rows[0] ?? null
+        });
+      } finally {
+        await client.end();
+      }
+    }
+  );
+
+  app.patch(
+    "/api/admin/delivery/zones/manage/:id",
+    async (request, reply) => {
+      const params = z.object({
+        id: z.string().uuid()
+      }).parse(request.params ?? {});
+
+      const body =
+        deliveryZoneSchema.parse(
+          request.body ?? {}
+        );
+
+      const { client } = createDb();
+
+      try {
+        const shop =
+          await getShop(client);
+
+        const existingRows =
+          await client<{
+            id: string;
+            name: string;
+            is_active: boolean;
+          }[]>`
+            SELECT
+              id,
+              name,
+              is_active
+            FROM delivery_zones
+            WHERE shop_id = ${shop.id}
+              AND id = ${params.id}
+            LIMIT 1
+          `;
+
+        const existing =
+          existingRows[0];
+
+        if (!existing) {
+          return reply.status(404).send({
+            ok: false,
+            message:
+              "Зона доставки не найдена"
+          });
+        }
+
+        if (
+          existing.name
+            .trim()
+            .toLowerCase()
+          === "самовывоз"
+        ) {
+          return reply.status(409).send({
+            ok: false,
+            message:
+              "Служебная зона самовывоза настраивается отдельно"
+          });
+        }
+
+        const name =
+          body.name.trim();
+
+        if (
+          name.length < 2
+          || name.length > 160
+        ) {
+          return reply.status(400).send({
+            ok: false,
+            message:
+              "Название зоны должно содержать от 2 до 160 символов"
+          });
+        }
+
+        if (
+          name.toLowerCase()
+          === "самовывоз"
+        ) {
+          return reply.status(409).send({
+            ok: false,
+            message:
+              "Название «Самовывоз» зарезервировано"
+          });
+        }
+
+        if (body.sortOrder < 0) {
+          return reply.status(400).send({
+            ok: false,
+            message:
+              "Порядок сортировки не может быть отрицательным"
+          });
+        }
+
+        if (
+          body.isExpressAvailable
+          && body.expressPrice <= 0
+        ) {
+          return reply.status(400).send({
+            ok: false,
+            message:
+              "Укажите стоимость срочной доставки"
+          });
+        }
+
+        const duplicateRows =
+          await client<{ id: string }[]>`
+            SELECT id
+            FROM delivery_zones
+            WHERE shop_id = ${shop.id}
+              AND id <> ${existing.id}
+              AND LOWER(BTRIM(name))
+                = LOWER(BTRIM(${name}::text))
+            LIMIT 1
+          `;
+
+        if (duplicateRows[0]) {
+          return reply.status(409).send({
+            ok: false,
+            message:
+              "Зона с таким названием уже существует"
+          });
+        }
+
+        if (
+          existing.is_active
+          && !body.isActive
+        ) {
+          const otherActiveRows =
+            await client<{
+              count: number;
+            }[]>`
+              SELECT COUNT(*)::int AS count
+              FROM delivery_zones
+              WHERE shop_id = ${shop.id}
+                AND id <> ${existing.id}
+                AND is_active = true
+                AND LOWER(BTRIM(name))
+                  <> 'самовывоз'
+            `;
+
+          const otherActive =
+            Number(
+              otherActiveRows[0]?.count
+              ?? 0
+            );
+
+          if (otherActive === 0) {
+            return reply.status(409).send({
+              ok: false,
+              message:
+                "Нельзя отключить последнюю активную зону доставки"
+            });
+          }
+        }
+
+        const freeFromAmount =
+          body.freeFromAmount > 0
+            ? body.freeFromAmount
+            : null;
+
+        const expressPrice =
+          body.isExpressAvailable
+            ? body.expressPrice
+            : null;
+
+        const rows = await client`
+          UPDATE delivery_zones
+          SET
+            name = ${name},
+            description =
+              ${body.description.trim()},
+            price = ${body.price},
+            free_from_amount =
+              ${freeFromAmount},
+            is_express_available =
+              ${body.isExpressAvailable},
+            express_price =
+              ${expressPrice},
+            is_active =
+              ${body.isActive},
+            sort_order =
+              ${body.sortOrder},
+            updated_at = NOW()
+          WHERE shop_id = ${shop.id}
+            AND id = ${existing.id}
+          RETURNING *
+        `;
+
+        return {
+          ok: true,
+          zone: rows[0] ?? null
+        };
+      } finally {
+        await client.end();
+      }
+    }
+  );
+
+  app.delete(
+    "/api/admin/delivery/zones/manage/:id",
+    async (request, reply) => {
+      const params = z.object({
+        id: z.string().uuid()
+      }).parse(request.params ?? {});
+
+      const { client } = createDb();
+
+      try {
+        const shop =
+          await getShop(client);
+
+        const existingRows =
+          await client<{
+            id: string;
+            name: string;
+            is_active: boolean;
+          }[]>`
+            SELECT
+              id,
+              name,
+              is_active
+            FROM delivery_zones
+            WHERE shop_id = ${shop.id}
+              AND id = ${params.id}
+            LIMIT 1
+          `;
+
+        const existing =
+          existingRows[0];
+
+        if (!existing) {
+          return reply.status(404).send({
+            ok: false,
+            message:
+              "Зона доставки не найдена"
+          });
+        }
+
+        if (
+          existing.name
+            .trim()
+            .toLowerCase()
+          === "самовывоз"
+        ) {
+          return reply.status(409).send({
+            ok: false,
+            message:
+              "Служебную зону самовывоза удалить нельзя"
+          });
+        }
+
+        const orderRows =
+          await client<{
+            count: number;
+          }[]>`
+            SELECT COUNT(*)::int AS count
+            FROM orders
+            WHERE shop_id = ${shop.id}
+              AND delivery_zone_id =
+                ${existing.id}
+          `;
+
+        const ordersCount =
+          Number(
+            orderRows[0]?.count
+            ?? 0
+          );
+
+        if (ordersCount > 0) {
+          return reply.status(409).send({
+            ok: false,
+            message:
+              `Зона используется в ${ordersCount} заказах. Отключите её вместо удаления.`
+          });
+        }
+
+        if (existing.is_active) {
+          const otherActiveRows =
+            await client<{
+              count: number;
+            }[]>`
+              SELECT COUNT(*)::int AS count
+              FROM delivery_zones
+              WHERE shop_id = ${shop.id}
+                AND id <> ${existing.id}
+                AND is_active = true
+                AND LOWER(BTRIM(name))
+                  <> 'самовывоз'
+            `;
+
+          const otherActive =
+            Number(
+              otherActiveRows[0]?.count
+              ?? 0
+            );
+
+          if (otherActive === 0) {
+            return reply.status(409).send({
+              ok: false,
+              message:
+                "Нельзя удалить последнюю активную зону доставки"
+            });
+          }
+        }
+
+        await client`
+          DELETE FROM delivery_zones
+          WHERE shop_id = ${shop.id}
+            AND id = ${existing.id}
+        `;
+
+        return {
+          ok: true
+        };
+      } finally {
+        await client.end();
+      }
+    }
+  );
+
   app.get("/api/admin/customers", async () => {
     const { client } = createDb();
 
