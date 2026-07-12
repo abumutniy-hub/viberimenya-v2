@@ -5754,52 +5754,6 @@ body {
   .admin-internal-comment-actions button {
     width: 100%;
   }
-}\n\n/* CRM order bouquet photo */
-.admin-bouquet-photo-card {
-  display: grid;
-  gap: 12px;
-  padding: 16px 18px 18px;
-  border-top: 1px solid rgba(25, 23, 22, 0.07);
-}
-
-.admin-bouquet-photo-card img {
-  display: block;
-  width: 100%;
-  max-height: 420px;
-  object-fit: cover;
-  border-radius: 20px;
-  border: 1px solid rgba(25, 23, 22, 0.08);
-  background: rgba(25, 23, 22, 0.04);
-}
-
-.admin-bouquet-photo-card a {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: fit-content;
-  min-height: 36px;
-  padding: 0 14px;
-  border-radius: 999px;
-  background: rgba(25, 23, 22, 0.06);
-  color: #171414;
-  font-size: 13px;
-  font-weight: 900;
-  text-decoration: none;
-}
-
-.admin-bouquet-photo-card a:hover {
-  background: rgba(25, 23, 22, 0.11);
-}
-
-@media (max-width: 760px) {
-  .admin-bouquet-photo-card {
-    padding-left: 16px;
-    padding-right: 16px;
-  }
-
-  .admin-bouquet-photo-card a {
-    width: 100%;
-  }
 }
 
 /* CRM order delivery address actions */
@@ -6110,8 +6064,110 @@ body {
   }
 }
 
+/* CRM order detail final polish */
+.admin-order-detail-page {
+  min-width: 0;
+}
 
-/* CRM order payment and bouquet final */
+.admin-order-detail-page
+.admin-order-main-grid,
+.admin-order-detail-page
+.admin-order-summary-grid {
+  align-items: start;
+}
+
+.admin-order-detail-page
+.admin-order-main-grid
+> .admin-order-detail-card,
+.admin-order-detail-page
+.admin-order-summary-grid
+> .admin-order-detail-card {
+  align-self: start;
+  width: 100%;
+  min-width: 0;
+}
+
+.admin-order-detail-page
+.admin-order-detail-hero
+> .admin-order-actions {
+  align-items: center;
+  gap: 10px;
+}
+
+.admin-order-detail-page
+.admin-order-link-actions {
+  flex: 1 1 100%;
+}
+
+.admin-order-detail-page
+.admin-payment-link-box {
+  flex: 1 1 430px;
+  max-width: 680px;
+}
+
+.admin-order-detail-page
+.admin-payment-link-box input {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+
+.admin-order-detail-page
+.admin-status-actions {
+  flex: 1 1 100%;
+}
+
+.admin-order-detail-page
+.admin-action-button.chat {
+  margin-left: auto;
+}
+
+.admin-order-detail-page
+.admin-chat-preview,
+.admin-order-detail-page
+.admin-internal-chat {
+  flex: 1 1 100%;
+  width: 100%;
+  min-width: 0;
+}
+
+.admin-order-detail-page
+.admin-order-info-row {
+  min-width: 0;
+}
+
+.admin-order-detail-page
+.admin-order-info-row strong,
+.admin-order-detail-page
+.admin-order-info-row a {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.admin-order-items-card
+.admin-order-item-row
+> strong {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.admin-order-customer-comment-card
+.admin-order-comment {
+  min-height: 0;
+  padding: 18px 20px 22px;
+}
+
+.admin-order-internal-comment-card
+.admin-internal-comment-form {
+  padding: 16px 20px 20px;
+}
+
+.admin-order-internal-comment-card
+textarea {
+  min-height: 140px;
+  max-height: 340px;
+  resize: vertical;
+}
+
 .admin-order-payment-card {
   align-content: start;
 }
@@ -6134,157 +6190,75 @@ body {
   overflow-wrap: anywhere;
 }
 
-.admin-bouquet-photo-meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.admin-bouquet-photo-meta > span {
-  color: rgba(25, 25, 24, 0.62);
-  font-size: 0.86rem;
-  font-weight: 600;
-}
-
-.admin-bouquet-photo-meta
-.admin-bouquet-photo-link {
-  width: auto;
-  margin: 0;
-}
-
-.admin-bouquet-photo-empty {
-  display: grid;
-  align-content: center;
-  justify-items: center;
-  min-height: 190px;
-  gap: 8px;
-  padding: 26px;
-  border: 1px dashed rgba(25, 25, 24, 0.2);
-  border-radius: 18px;
-  background: rgba(25, 25, 24, 0.025);
-  text-align: center;
-}
-
-.admin-bouquet-photo-empty p {
-  max-width: 360px;
-  margin: 0;
-  color: rgba(25, 25, 24, 0.62);
-  line-height: 1.5;
-}
-
-@media (max-width: 720px) {
-  .admin-payment-open-link {
-    width: 100%;
-  }
-
-  .admin-bouquet-photo-meta {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .admin-bouquet-photo-meta
-  .admin-bouquet-photo-link {
-    width: 100%;
-  }
-
-  .admin-bouquet-photo-empty {
-    min-height: 160px;
-    padding: 22px 18px;
-  }
-}
-
-
-/* CRM bouquet preview clean design */
 .admin-order-bouquet-card {
   align-content: start;
 }
 
 .admin-order-bouquet-card
 .admin-bouquet-photo-card {
-  display: grid !important;
-  grid-template-columns: minmax(0, 1fr) !important;
-  align-items: stretch !important;
-  justify-items: stretch !important;
-  width: min(100%, 520px) !important;
-  max-width: 520px !important;
-  margin: 8px auto 0 !important;
-  gap: 14px !important;
+  display: grid;
+  width: min(100%, 520px);
+  gap: 14px;
+  margin: 8px auto 0;
+  padding: 0 20px 20px;
+  border-top: 0;
 }
 
 .admin-order-bouquet-card
 .admin-bouquet-photo-preview-link {
-  position: relative !important;
-  display: block !important;
-  width: 100% !important;
-  height: 290px !important;
-  min-height: 290px !important;
-  max-height: 290px !important;
-  overflow: hidden !important;
-  border: 1px solid rgba(25, 25, 24, 0.1) !important;
-  border-radius: 18px !important;
-  background: #eee9e2 !important;
-  box-shadow:
-    0 10px 26px rgba(31, 27, 23, 0.08) !important;
-  clip-path: none !important;
-  cursor: zoom-in !important;
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 290px;
+  overflow: hidden;
+  border: 1px solid rgba(25, 25, 24, 0.1);
+  border-radius: 18px;
+  background: #eee9e2;
+  box-shadow: 0 10px 26px rgba(31, 27, 23, 0.08);
+  cursor: zoom-in;
+  text-decoration: none;
 }
 
 .admin-order-bouquet-card
 .admin-bouquet-photo-preview-link img {
-  display: block !important;
-  width: 100% !important;
-  min-width: 100% !important;
-  max-width: none !important;
-  height: 100% !important;
-  min-height: 100% !important;
-  max-height: none !important;
-  margin: 0 !important;
-  border: 0 !important;
-  border-radius: 0 !important;
-  object-fit: cover !important;
-  object-position: center 48% !important;
-  clip-path: none !important;
-  transform: none !important;
+  display: block;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  object-fit: cover;
+  object-position: center 48%;
   transition:
     transform 180ms ease,
-    filter 180ms ease !important;
+    filter 180ms ease;
 }
 
 .admin-order-bouquet-card
 .admin-bouquet-photo-preview-link:hover img {
-  transform: scale(1.025) !important;
-  filter: brightness(0.96) !important;
-}
-
-.admin-order-bouquet-card
-.admin-bouquet-photo-zoom-label {
-  display: none !important;
+  transform: scale(1.025);
+  filter: brightness(0.96);
 }
 
 .admin-order-bouquet-card
 .admin-bouquet-photo-meta {
-  display: flex !important;
-  flex-direction: row !important;
-  align-items: center !important;
-  justify-content: space-between !important;
-  width: 100% !important;
-  margin: 0 !important;
-  padding: 0 2px !important;
-  gap: 14px !important;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  width: 100%;
+  padding: 0 2px;
 }
 
 .admin-order-bouquet-card
 .admin-bouquet-photo-meta > span {
-  display: inline-flex !important;
-  align-items: center !important;
-  gap: 8px !important;
-  margin: 0 !important;
-  color: rgba(25, 25, 24, 0.64) !important;
-  font-size: 0.88rem !important;
-  font-weight: 650 !important;
-  line-height: 1.3 !important;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: rgba(25, 25, 24, 0.64);
+  font-size: 0.88rem;
+  font-weight: 650;
+  line-height: 1.3;
 }
 
 .admin-order-bouquet-card
@@ -6295,91 +6269,401 @@ body {
   height: 8px;
   border-radius: 999px;
   background: #2d9362;
-  box-shadow:
-    0 0 0 4px rgba(45, 147, 98, 0.12);
+  box-shadow: 0 0 0 4px rgba(45, 147, 98, 0.12);
 }
 
 .admin-order-bouquet-card
-.admin-bouquet-photo-meta
 .admin-bouquet-photo-link {
-  display: inline-flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  width: auto !important;
-  min-width: 150px !important;
-  min-height: 40px !important;
-  margin: 0 !important;
-  padding: 9px 16px !important;
-  border: 0 !important;
-  border-radius: 999px !important;
-  background: #20201f !important;
-  color: #ffffff !important;
-  font-size: 0.86rem !important;
-  font-weight: 750 !important;
-  line-height: 1.2 !important;
-  text-decoration: none !important;
-  box-shadow: none !important;
-  transition:
-    transform 160ms ease,
-    opacity 160ms ease !important;
-}
-
-.admin-order-bouquet-card
-.admin-bouquet-photo-meta
-.admin-bouquet-photo-link:hover {
-  transform: translateY(-1px) !important;
-  opacity: 0.9 !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 150px;
+  min-height: 40px;
+  padding: 9px 16px;
+  border-radius: 999px;
+  background: #20201f;
+  color: #ffffff;
+  font-size: 0.86rem;
+  font-weight: 750;
+  line-height: 1.2;
+  text-decoration: none;
 }
 
 .admin-order-bouquet-card
 .admin-bouquet-photo-empty {
-  display: grid !important;
-  align-content: center !important;
-  justify-items: center !important;
-  width: min(100%, 520px) !important;
-  min-height: 290px !important;
-  margin: 8px auto 0 !important;
-  padding: 30px !important;
-  border: 1px dashed rgba(25, 25, 24, 0.18) !important;
-  border-radius: 18px !important;
-  background: rgba(25, 25, 24, 0.025) !important;
-  text-align: center !important;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  width: min(100%, 520px);
+  min-height: 290px;
+  gap: 8px;
+  margin: 8px auto 0;
+  padding: 30px;
+  border: 1px dashed rgba(25, 25, 24, 0.18);
+  border-radius: 18px;
+  background: rgba(25, 25, 24, 0.025);
+  text-align: center;
 }
 
-@media (max-width: 720px) {
+.admin-order-bouquet-card
+.admin-bouquet-photo-empty p {
+  max-width: 360px;
+  margin: 0;
+  color: rgba(25, 25, 24, 0.62);
+  line-height: 1.5;
+}
+
+@media (max-width: 980px) {
+  .admin-order-detail-page
+  .admin-order-main-grid,
+  .admin-order-detail-page
+  .admin-order-summary-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .admin-order-detail-page
+  .admin-order-detail-hero
+  > .admin-order-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .admin-order-detail-page
+  .admin-order-link-actions,
+  .admin-order-detail-page
+  .admin-payment-link-box,
+  .admin-order-detail-page
+  .admin-status-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+    width: 100%;
+    max-width: none;
+  }
+
+  .admin-order-detail-page
+  .admin-order-actions
+  > *,
+  .admin-order-detail-page
+  .admin-order-link-actions
+  > *,
+  .admin-order-detail-page
+  .admin-payment-link-box
+  > *,
+  .admin-order-detail-page
+  .admin-status-actions
+  > * {
+    width: 100%;
+  }
+
+  .admin-order-detail-page
+  .admin-action-button.chat {
+    margin-left: 0;
+  }
+
+  .admin-order-customer-comment-card
+  .admin-order-comment {
+    padding: 16px;
+  }
+
+  .admin-order-internal-comment-card
+  .admin-internal-comment-form {
+    padding: 14px 16px 16px;
+  }
+
+  .admin-order-internal-comment-card
+  textarea {
+    min-height: 120px;
+  }
+
   .admin-order-bouquet-card
   .admin-bouquet-photo-card {
-    width: 100% !important;
+    width: 100%;
+    padding: 0 16px 16px;
   }
 
   .admin-order-bouquet-card
   .admin-bouquet-photo-preview-link {
-    height: 230px !important;
-    min-height: 230px !important;
-    max-height: 230px !important;
+    height: 220px;
   }
 
   .admin-order-bouquet-card
   .admin-bouquet-photo-meta {
-    flex-direction: column !important;
-    align-items: stretch !important;
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .admin-order-bouquet-card
   .admin-bouquet-photo-meta > span {
-    justify-content: center !important;
+    justify-content: center;
   }
 
   .admin-order-bouquet-card
-  .admin-bouquet-photo-meta
   .admin-bouquet-photo-link {
-    width: 100% !important;
+    width: 100%;
   }
 
   .admin-order-bouquet-card
   .admin-bouquet-photo-empty {
-    width: 100% !important;
-    min-height: 230px !important;
-    padding: 24px 18px !important;
+    width: calc(100% - 32px);
+    min-height: 220px;
+    padding: 24px 18px;
+  }
+}
+
+
+/* CRM order full mobile width containment */
+@media (max-width: 760px) {
+  html,
+  body {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: hidden;
+    overflow-x: clip;
+  }
+
+  body {
+    margin: 0;
+  }
+
+  .admin-shell {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: hidden;
+    overflow-x: clip;
+  }
+
+  .admin-sidebar {
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .admin-content {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    padding: 12px;
+    overflow-x: hidden;
+    overflow-x: clip;
+  }
+
+  .admin-page,
+  .admin-order-detail-page {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    overflow-x: hidden;
+    overflow-x: clip;
+  }
+
+  .admin-order-detail-page,
+  .admin-order-detail-page * {
+    box-sizing: border-box;
+  }
+
+  .admin-order-detail-page > *,
+  .admin-order-detail-page .admin-page-head,
+  .admin-order-detail-page .admin-panel,
+  .admin-order-detail-page .admin-order-detail-card,
+  .admin-order-detail-page .admin-order-detail-hero,
+  .admin-order-detail-page .admin-order-detail-grid,
+  .admin-order-detail-page .admin-order-main-grid,
+  .admin-order-detail-page .admin-order-summary-grid,
+  .admin-order-detail-page .admin-order-actions,
+  .admin-order-detail-page .admin-order-link-actions,
+  .admin-order-detail-page .admin-payment-link-box,
+  .admin-order-detail-page .admin-status-actions,
+  .admin-order-detail-page .admin-contact-actions,
+  .admin-order-detail-page .admin-delivery-actions,
+  .admin-order-detail-page .admin-order-assignees-grid,
+  .admin-order-detail-page .admin-order-assignees-form,
+  .admin-order-detail-page .admin-order-history-list,
+  .admin-order-detail-page .admin-order-history-item,
+  .admin-order-detail-page .admin-order-history-body,
+  .admin-order-detail-page .admin-order-items-list,
+  .admin-order-detail-page .admin-order-item-row,
+  .admin-order-detail-page .admin-order-item-main,
+  .admin-order-detail-page .admin-order-info-row,
+  .admin-order-detail-page .admin-internal-comment-form,
+  .admin-order-detail-page .admin-internal-chat,
+  .admin-order-detail-page .admin-chat-messages {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .admin-order-detail-page .admin-page-head {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .admin-order-detail-page .admin-page-head > * {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .admin-order-detail-page .admin-page-head h1 {
+    max-width: 100%;
+    font-size: 30px;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .admin-order-detail-page .admin-order-detail-hero,
+  .admin-order-detail-page .admin-order-detail-grid,
+  .admin-order-detail-page .admin-order-main-grid,
+  .admin-order-detail-page .admin-order-summary-grid,
+  .admin-order-detail-page .admin-order-assignees-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .admin-order-detail-page .admin-order-detail-total {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    text-align: left;
+  }
+
+  .admin-order-detail-page .admin-order-actions,
+  .admin-order-detail-page .admin-order-link-actions,
+  .admin-order-detail-page .admin-payment-link-box,
+  .admin-order-detail-page .admin-status-actions,
+  .admin-order-detail-page .admin-contact-actions,
+  .admin-order-detail-page .admin-delivery-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    gap: 8px;
+  }
+
+  .admin-order-detail-page .admin-order-actions {
+    min-width: 0;
+  }
+
+  .admin-order-detail-page .admin-contact-actions,
+  .admin-order-detail-page .admin-delivery-actions {
+    padding: 12px 16px 16px;
+  }
+
+  .admin-order-detail-page .admin-order-actions > *,
+  .admin-order-detail-page .admin-order-link-actions > *,
+  .admin-order-detail-page .admin-payment-link-box > *,
+  .admin-order-detail-page .admin-status-actions > *,
+  .admin-order-detail-page .admin-contact-actions > *,
+  .admin-order-detail-page .admin-delivery-actions > * {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    margin-right: 0;
+    margin-left: 0;
+  }
+
+  .admin-order-detail-page input,
+  .admin-order-detail-page select,
+  .admin-order-detail-page textarea,
+  .admin-order-detail-page button,
+  .admin-order-detail-page a {
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .admin-order-detail-page button,
+  .admin-order-detail-page a {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .admin-order-detail-page input,
+  .admin-order-detail-page select,
+  .admin-order-detail-page textarea {
+    width: 100%;
+  }
+
+  .admin-order-detail-page .admin-order-info-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 5px;
+  }
+
+  .admin-order-detail-page .admin-order-info-row strong,
+  .admin-order-detail-page .admin-order-info-row span,
+  .admin-order-detail-page .admin-order-info-row a,
+  .admin-order-detail-page .admin-order-history-body,
+  .admin-order-detail-page .admin-order-history-body p,
+  .admin-order-detail-page .admin-order-history-top,
+  .admin-order-detail-page .admin-order-history-top span,
+  .admin-order-detail-page .admin-chat-message,
+  .admin-order-detail-page .admin-chat-message p {
+    max-width: 100%;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .admin-order-detail-page .admin-order-history-item {
+    grid-template-columns: 18px minmax(0, 1fr);
+  }
+
+  .admin-order-detail-page .admin-order-history-top {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .admin-order-detail-page .admin-order-item-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .admin-order-detail-page .admin-order-item-main {
+    overflow: hidden;
+  }
+
+  .admin-order-detail-page img,
+  .admin-order-detail-page video,
+  .admin-order-detail-page iframe {
+    max-width: 100%;
+  }
+
+  .admin-order-detail-page
+  .admin-bouquet-photo-card,
+  .admin-order-detail-page
+  .admin-bouquet-photo-empty,
+  .admin-order-detail-page
+  .admin-bouquet-photo-preview-link {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .admin-order-detail-page
+  .admin-bouquet-photo-preview-link {
+    height: 220px;
+  }
+
+  .admin-order-detail-page
+  .admin-bouquet-photo-meta {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    gap: 10px;
+  }
+
+  .admin-order-detail-page
+  .admin-bouquet-photo-link {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
   }
 }

@@ -273,7 +273,7 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
         )}
       </section>
 
-      <section className="admin-order-detail-grid">
+      <section className="admin-order-detail-grid admin-order-main-grid">
         <article className="admin-panel admin-order-detail-card">
           <div className="admin-panel-head">
             <h2>Клиент</h2>
@@ -373,7 +373,7 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
           </article>
       </section>
 
-      <section className="admin-panel admin-order-detail-card">
+      <section className="admin-panel admin-order-detail-card admin-order-items-card">
         <div className="admin-panel-head">
           <h2>Состав заказа</h2>
         </div>
@@ -401,7 +401,7 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
         </div>
       </section>
 
-      <section className="admin-order-detail-grid">
+      <section className="admin-order-detail-grid admin-order-summary-grid">
         <article className="admin-panel admin-order-detail-card">
           <div className="admin-panel-head">
             <h2>Финансы</h2>
@@ -430,12 +430,21 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
 
             {bouquetPhotoUrl ? (
               <div className="admin-bouquet-photo-card">
-                <img
-                  src={bouquetPhotoUrl}
-                  alt={`Фото готового букета по заказу ${String(order.order_number || "")}`}
-                  loading="lazy"
-                  decoding="async"
-                />
+                <a
+                  className="admin-bouquet-photo-preview-link"
+                  href={bouquetPhotoUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label="Открыть фото готового букета в полном размере"
+                  title="Открыть фотографию"
+                >
+                  <img
+                    src={bouquetPhotoUrl}
+                    alt={`Фото готового букета по заказу ${String(order.order_number || "")}`}
+                    loading="lazy"
+                    decoding="async"
+                  />
+                </a>
 
                 <div className="admin-bouquet-photo-meta">
                   <span>Загружено флористом</span>
@@ -462,7 +471,7 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
             )}
           </article>
 
-        <article className="admin-panel admin-order-detail-card">
+        <article className="admin-panel admin-order-detail-card admin-order-customer-comment-card">
           <div className="admin-panel-head">
             <div>
               <span>От клиента</span>
@@ -472,7 +481,7 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
           <p className="admin-order-comment">{text(order.customer_comment)}</p>
         </article>
 
-        <article className="admin-panel admin-order-detail-card">
+        <article className="admin-panel admin-order-detail-card admin-order-internal-comment-card">
           <div className="admin-panel-head">
             <div>
               <span>Только для CRM</span>
