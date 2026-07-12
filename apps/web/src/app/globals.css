@@ -7922,3 +7922,210 @@ textarea {
     height: 84px;
   }
 }
+
+
+/* CRM product create with photo */
+.admin-product-create-form {
+  min-width: 0;
+}
+
+.admin-product-create-form small {
+  color: rgba(25, 23, 22, 0.48);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.admin-product-create-photo {
+  display: grid;
+  grid-column: 1 / -1;
+  min-width: 0;
+  gap: 16px;
+  padding: 18px;
+  border: 1px solid rgba(25, 23, 22, 0.1);
+  border-radius: 20px;
+  background: rgba(25, 23, 22, 0.025);
+}
+
+.admin-product-create-photo-head {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.admin-product-create-photo-head > div {
+  display: grid;
+  gap: 4px;
+}
+
+.admin-product-create-photo-head span {
+  color: rgba(25, 23, 22, 0.52);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.admin-product-create-photo-head strong {
+  font-size: 17px;
+}
+
+.admin-product-create-photo-head small {
+  max-width: 390px;
+  text-align: right;
+}
+
+.admin-product-create-photo-fields {
+  display: grid;
+  grid-template-columns:
+    repeat(2, minmax(0, 1fr));
+  min-width: 0;
+  gap: 14px;
+}
+
+.admin-product-create-photo-fields label {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+}
+
+.admin-product-create-photo-fields input {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 46px;
+  box-sizing: border-box;
+}
+
+.admin-product-create-photo-fields
+input[type="file"] {
+  padding: 8px;
+}
+
+.admin-product-create-photo-fields
+input[type="file"]::file-selector-button {
+  min-height: 30px;
+  margin-right: 10px;
+  padding: 5px 12px;
+  border: 0;
+  border-radius: 999px;
+  background: #191716;
+  color: #fff;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.admin-product-create-preview {
+  display: grid;
+  grid-template-columns:
+    130px minmax(0, 1fr);
+  min-width: 0;
+  gap: 14px;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(25, 23, 22, 0.09);
+  border-radius: 18px;
+  background: #fffdf9;
+}
+
+.admin-product-create-preview img {
+  display: block;
+  width: 130px;
+  height: 105px;
+  object-fit: cover;
+}
+
+.admin-product-create-preview > div {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  padding-right: 14px;
+}
+
+.admin-product-create-preview strong,
+.admin-product-create-preview span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.admin-product-create-preview span {
+  color: rgba(25, 23, 22, 0.54);
+  font-size: 12px;
+}
+
+.admin-product-create-photo-empty {
+  padding: 15px;
+  border: 1px dashed rgba(25, 23, 22, 0.16);
+  border-radius: 16px;
+  color: rgba(25, 23, 22, 0.52);
+  font-size: 13px;
+  line-height: 1.45;
+  text-align: center;
+}
+
+.admin-product-create-footer {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 20px 20px;
+}
+
+.admin-product-create-footer > div {
+  min-width: 0;
+}
+
+.admin-product-create-footer span {
+  color: rgba(25, 23, 22, 0.54);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.admin-product-create-footer strong {
+  color: #267a52;
+  font-size: 13px;
+}
+
+.admin-product-create-footer button {
+  margin-top: 0;
+}
+
+@media (max-width: 760px) {
+  .admin-product-create-photo {
+    padding: 15px;
+  }
+
+  .admin-product-create-photo-head {
+    display: grid;
+  }
+
+  .admin-product-create-photo-head small {
+    max-width: none;
+    text-align: left;
+  }
+
+  .admin-product-create-photo-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .admin-product-create-preview {
+    grid-template-columns:
+      90px minmax(0, 1fr);
+  }
+
+  .admin-product-create-preview img {
+    width: 90px;
+    height: 84px;
+  }
+
+  .admin-product-create-footer {
+    display: grid;
+    padding: 0 16px 16px;
+  }
+
+  .admin-product-create-footer button {
+    width: 100%;
+  }
+}

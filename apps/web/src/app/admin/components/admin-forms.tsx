@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 type CategoryOption = {
   id: string;
@@ -29,7 +29,7 @@ function stringValue(value: unknown) {
   return typeof value === "string" ? value : "";
 }
 
-function readFileAsDataUrl(file: File) {
+function readFileAsDataUrl(file: Blob) {
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
 
@@ -45,6 +45,252 @@ function readFileAsDataUrl(file: File) {
     reader.readAsDataURL(file);
   });
 }
+
+function loadCreateProductImage(
+  dataUrl: string
+) {
+  return new Promise<HTMLImageElement>(
+    (resolve, reject) => {
+      const image = new Image();
+
+      image.onload = () => resolve(image);
+
+      image.onerror = () => {
+        reject(
+          new Error(
+            "Браузер не смог открыть выбранную фотографию"
+          )
+        );
+      };
+
+      image.src = dataUrl;
+    }
+  );
+}
+
+function createProductCanvasBlob(
+  canvas: HTMLCanvasElement,
+  type: string,
+  quality: number
+) {
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => {
+        if (blob) {
+          resolve(blob);
+        } else {
+          reject(
+            new Error(
+              "Не удалось подготовить фотографию"
+            )
+          );
+        }
+      },
+      type,
+      quality
+    );
+  });
+}
+
+async function prepareCreateProductImage(
+  file: File
+) {
+  const allowedTypes = [
+    "image/jpeg",
+    "image/png",
+    "image/webp"
+  ];
+
+  if (!allowedTypes.includes(file.type)) {
+    throw new Error(
+      "Выберите фотографию JPG, PNG или WebP"
+    );
+  }
+
+  if (file.size > 20 * 1024 * 1024) {
+    throw new Error(
+      "Исходная фотография должна быть не больше 20 МБ"
+    );
+  }
+
+  const sourceDataUrl =
+    await readFileAsDataUrl(file);
+
+  const image =
+    await loadCreateProductImage(sourceDataUrl);
+
+  if (!image.naturalWidth || !image.naturalHeight) {
+    throw new Error(
+      "Не удалось определить размер фотографии"
+    );
+  }
+
+  const maximumDimension = 2400;
+
+  const initialScale = Math.min(
+    1,
+    maximumDimension / Math.max(
+      image.naturalWidth,
+      image.naturalHeight
+    )
+  );
+
+  let width = Math.max(
+    1,
+    Math.round(
+      image.naturalWidth * initialScale
+    )
+  );
+
+  let height = Math.max(
+    1,
+    Math.round(
+      image.naturalHeight * initialScale
+    )
+  );
+
+  let quality = 0.88;
+  let result: Blob | null = null;
+
+  for (
+    let attempt = 0;
+    attempt < 8;
+    attempt += 1
+  ) {
+    const canvas =
+      document.createElement("canvas");
+
+    canvas.width = width;
+    canvas.height = height;
+
+    const context = canvas.getContext("2d");
+
+    if (!context) {
+      throw new Error(
+        "Браузер не поддерживает обработку фотографий"
+      );
+    }
+
+    context.fillStyle = "#ffffff";
+    context.fillRect(
+      0,
+      0,
+      width,
+      height
+    );
+
+    context.drawImage(
+      image,
+      0,
+      0,
+      width,
+      height
+    );
+
+    try {
+      result = await createProductCanvasBlob(
+        canvas,
+        "image/webp",
+        quality
+      );
+    } catch {
+      result = await createProductCanvasBlob(
+        canvas,
+        "image/jpeg",
+        quality
+      );
+    }
+
+    if (result.size <= 3.5 * 1024 * 1024) {
+      return {
+        imageData:
+          await readFileAsDataUrl(result),
+        processedSize: result.size,
+        width,
+        height
+      };
+    }
+
+    if (quality > 0.68) {
+      quality -= 0.07;
+    } else {
+      width = Math.max(
+        800,
+        Math.round(width * 0.82)
+      );
+
+      height = Math.max(
+        800,
+        Math.round(height * 0.82)
+      );
+
+      quality = 0.82;
+    }
+  }
+
+  if (
+    !result
+    || result.size > 5 * 1024 * 1024
+  ) {
+    throw new Error(
+      "Фотографию не удалось уменьшить до допустимого размера"
+    );
+  }
+
+  return {
+    imageData:
+      await readFileAsDataUrl(result),
+    processedSize: result.size,
+    width,
+    height
+  };
+}
+
+async function readCreateProductError(
+  response: Response
+) {
+  try {
+    const data = await response.json() as {
+      message?: unknown;
+      error?: unknown;
+      code?: unknown;
+    };
+
+    const message = String(
+      data.message
+      ?? data.error
+      ?? data.code
+      ?? ""
+    ).trim();
+
+    if (message) {
+      return message;
+    }
+  } catch {
+    // Ответ мог быть не JSON.
+  }
+
+  return `Ошибка: HTTP ${response.status}`;
+}
+
+function formatCreateProductFileSize(
+  bytes: number
+) {
+  if (bytes < 1024 * 1024) {
+    return `${Math.round(bytes / 1024)} КБ`;
+  }
+
+  return `${(
+    bytes / 1024 / 1024
+  ).toFixed(1)} МБ`;
+}
+
+type ProductCreateResponse = {
+  product?: {
+    id?: unknown;
+    name?: unknown;
+  } | null;
+};
 
 async function submitJson(path: string, data: Record<string, unknown>) {
   const response = await fetch(path, {
@@ -202,35 +448,179 @@ export function CategoryForm() {
   );
 }
 
-export function ProductForm({ categories }: { categories: CategoryOption[] }) {
-  const [isSaving, setIsSaving] = useState(false);
+export function ProductForm({
+  categories
+}: {
+  categories: CategoryOption[];
+}) {
+  const [isSaving, setIsSaving] =
+    useState(false);
+
+  const [selectedPhoto, setSelectedPhoto] =
+    useState<File | null>(null);
+
+  const [previewUrl, setPreviewUrl] =
+    useState("");
+
+  const [message, setMessage] =
+    useState("");
+
+  useEffect(() => {
+    if (!selectedPhoto) {
+      setPreviewUrl("");
+      return;
+    }
+
+    const nextPreviewUrl =
+      URL.createObjectURL(selectedPhoto);
+
+    setPreviewUrl(nextPreviewUrl);
+
+    return () => {
+      URL.revokeObjectURL(nextPreviewUrl);
+    };
+  }, [selectedPhoto]);
 
   return (
     <form
-      className="admin-form"
+      className="admin-form admin-product-create-form"
       onSubmit={async (event) => {
         event.preventDefault();
+
+        const formElement = event.currentTarget;
+        const form = new FormData(formElement);
+
         setIsSaving(true);
 
-        const form = new FormData(event.currentTarget);
+        setMessage(
+          selectedPhoto
+            ? "Создаём товар и подготавливаем фото..."
+            : "Создаём товар..."
+        );
 
         try {
-          await submitJson("/api/admin/products", {
-            categoryId: form.get("categoryId"),
-            name: form.get("name"),
-            slug: form.get("slug"),
-            shortDescription: form.get("shortDescription"),
-            description: form.get("description"),
-            price: form.get("price"),
-            stockQuantity: form.get("stockQuantity"),
-            status: form.get("status"),
-            isFeatured: form.get("isFeatured") === "on",
-            sortOrder: form.get("sortOrder")
-          });
+          const result = await submitJson(
+            "/api/admin/products",
+            {
+              categoryId:
+                form.get("categoryId"),
+              name:
+                form.get("name"),
+              slug:
+                form.get("slug"),
+              shortDescription:
+                form.get("shortDescription"),
+              description:
+                form.get("description"),
+              price:
+                form.get("price"),
+              stockQuantity:
+                form.get("stockQuantity"),
+              status:
+                form.get("status"),
+              isFeatured:
+                form.get("isFeatured") === "on",
+              sortOrder:
+                form.get("sortOrder")
+            }
+          ) as ProductCreateResponse;
 
-          window.location.reload();
+          const productId = String(
+            result.product?.id ?? ""
+          ).trim();
+
+          if (!productId) {
+            throw new Error(
+              "Сервер не вернул идентификатор созданного товара"
+            );
+          }
+
+          const productName = String(
+            result.product?.name
+            ?? form.get("name")
+            ?? "Товар"
+          ).trim();
+
+          const productUrl =
+            `/admin/catalog/products/${productId}`;
+
+          if (selectedPhoto) {
+            setMessage(
+              "Уменьшаем и загружаем главное фото..."
+            );
+
+            try {
+              const prepared =
+                await prepareCreateProductImage(
+                  selectedPhoto
+                );
+
+              const alt = String(
+                form.get("photoAlt") ?? ""
+              ).trim() || productName;
+
+              const photoResponse = await fetch(
+                `/api/admin/products/${productId}/images`,
+                {
+                  method: "POST",
+                  headers: {
+                    "Content-Type":
+                      "application/json"
+                  },
+                  body: JSON.stringify({
+                    imageData:
+                      prepared.imageData,
+                    fileName:
+                      selectedPhoto.name,
+                    alt,
+                    isMain:
+                      true
+                  })
+                }
+              );
+
+              if (!photoResponse.ok) {
+                throw new Error(
+                  await readCreateProductError(
+                    photoResponse
+                  )
+                );
+              }
+            } catch (photoError) {
+              const photoMessage =
+                photoError instanceof Error
+                  ? photoError.message
+                  : "Не удалось загрузить фотографию";
+
+              window.alert(
+                "Товар создан, но главное фото "
+                + "не загрузилось:\n\n"
+                + photoMessage
+                + "\n\nТовар не потерян. "
+                + "Добавьте фотографию в его карточке."
+              );
+
+              window.location.assign(
+                productUrl
+              );
+
+              return;
+            }
+          }
+
+          setMessage(
+            selectedPhoto
+              ? "Товар и главное фото созданы"
+              : "Товар создан"
+          );
+
+          window.location.assign(productUrl);
         } catch (error) {
-          alert(error instanceof Error ? error.message : "Ошибка сохранения");
+          setMessage(
+            error instanceof Error
+              ? error.message
+              : "Не удалось создать товар"
+          );
         } finally {
           setIsSaving(false);
         }
@@ -239,20 +629,38 @@ export function ProductForm({ categories }: { categories: CategoryOption[] }) {
       <div className="admin-form-grid">
         <label>
           <span>Название</span>
-          <input name="name" required />
+          <input
+            name="name"
+            minLength={2}
+            required
+          />
         </label>
 
         <label>
           <span>Slug</span>
-          <input name="slug" placeholder="korolevskiy-buket" />
+          <input
+            name="slug"
+            placeholder="korolevskiy-buket"
+            pattern="[a-z0-9]+(?:-[a-z0-9]+)*"
+            title="Латинские буквы, цифры и дефисы"
+          />
+          <small>
+            Оставьте пустым для автоматического формирования.
+          </small>
         </label>
 
         <label>
           <span>Категория</span>
           <select name="categoryId">
-            <option value="">Без категории</option>
+            <option value="">
+              Без категории
+            </option>
+
             {categories.map((category) => (
-              <option key={category.id} value={category.id}>
+              <option
+                key={category.id}
+                value={category.id}
+              >
                 {category.name}
               </option>
             ))}
@@ -261,48 +669,186 @@ export function ProductForm({ categories }: { categories: CategoryOption[] }) {
 
         <label>
           <span>Цена, ₽</span>
-          <input name="price" type="number" min="0" required />
+          <input
+            name="price"
+            type="number"
+            min="0"
+            step="1"
+            required
+          />
         </label>
 
         <label>
-          <span>Остаток</span>
-          <input name="stockQuantity" type="number" min="0" defaultValue="0" />
+          <span>Внутренний остаток</span>
+          <input
+            name="stockQuantity"
+            type="number"
+            min="0"
+            step="1"
+            defaultValue="0"
+          />
+          <small>
+            Клиент увидит только «В наличии»
+            или «Нет в наличии».
+          </small>
         </label>
 
         <label>
           <span>Статус</span>
-          <select name="status" defaultValue="active">
-            <option value="active">Активен</option>
-            <option value="draft">Черновик</option>
-            <option value="hidden">Скрыт</option>
-            <option value="archived">Архив</option>
+          <select
+            name="status"
+            defaultValue="active"
+          >
+            <option value="active">
+              Опубликован
+            </option>
+            <option value="draft">
+              Черновик
+            </option>
+            <option value="hidden">
+              Скрыт
+            </option>
+            <option value="archived">
+              Архив
+            </option>
           </select>
         </label>
 
         <label>
           <span>Сортировка</span>
-          <input name="sortOrder" type="number" defaultValue="100" />
+          <input
+            name="sortOrder"
+            type="number"
+            step="1"
+            defaultValue="100"
+          />
         </label>
 
         <label className="checkbox-label">
           <span>Показывать в хитах</span>
-          <input name="isFeatured" type="checkbox" />
+          <input
+            name="isFeatured"
+            type="checkbox"
+          />
         </label>
 
         <label className="wide">
           <span>Короткое описание</span>
-          <input name="shortDescription" />
+          <input
+            name="shortDescription"
+            maxLength={2000}
+          />
         </label>
 
         <label className="wide">
           <span>Полное описание</span>
-          <textarea name="description" />
+          <textarea
+            name="description"
+            maxLength={20000}
+          />
         </label>
+
+        <section className="wide admin-product-create-photo">
+          <div className="admin-product-create-photo-head">
+            <div>
+              <span>Главное фото</span>
+              <strong>
+                Добавьте фотографию сразу
+              </strong>
+            </div>
+
+            <small>
+              Фото необязательно. JPG, PNG или WebP.
+              Большие изображения будут уменьшены.
+            </small>
+          </div>
+
+          <div className="admin-product-create-photo-fields">
+            <label>
+              <span>Файл</span>
+              <input
+                name="initialPhoto"
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                disabled={isSaving}
+                onChange={(event) => {
+                  const file =
+                    event.target.files?.[0]
+                    ?? null;
+
+                  setSelectedPhoto(file);
+                  setMessage("");
+                }}
+              />
+            </label>
+
+            <label>
+              <span>Описание изображения</span>
+              <input
+                name="photoAlt"
+                maxLength={255}
+                placeholder="Например: букет красных роз"
+              />
+            </label>
+          </div>
+
+          {previewUrl ? (
+            <div className="admin-product-create-preview">
+              <img
+                src={previewUrl}
+                alt="Предварительный просмотр"
+              />
+
+              <div>
+                <strong>
+                  {selectedPhoto?.name}
+                </strong>
+
+                <span>
+                  Исходный размер:{" "}
+                  {selectedPhoto
+                    ? formatCreateProductFileSize(
+                        selectedPhoto.size
+                      )
+                    : "—"}
+                </span>
+
+                <span>
+                  Фото готово к загрузке
+                </span>
+              </div>
+            </div>
+          ) : (
+            <div className="admin-product-create-photo-empty">
+              Фотографию также можно добавить позже
+              внутри карточки товара.
+            </div>
+          )}
+        </section>
       </div>
 
-      <button type="submit" disabled={isSaving}>
-        {isSaving ? "Сохраняем..." : "Добавить товар"}
-      </button>
+      <div className="admin-product-create-footer">
+        <div>
+          {message ? (
+            <strong>{message}</strong>
+          ) : (
+            <span>
+              После создания откроется карточка товара.
+            </span>
+          )}
+        </div>
+
+        <button
+          type="submit"
+          disabled={isSaving}
+        >
+          {isSaving
+            ? "Создаём..."
+            : selectedPhoto
+              ? "Создать товар с фото"
+              : "Создать товар"}
+        </button>
+      </div>
     </form>
   );
 }

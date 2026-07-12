@@ -3263,17 +3263,84 @@ export async function adminRoutes(app: FastifyInstance) {
     }
   });
 
-  app.post("/api/admin/products", async (request) => {
-    const body = productSchema.parse(request.body ?? {});
+  app.post("/api/admin/products", async (request, reply) => {
+    const body = productSchema.parse(
+      request.body ?? {}
+    );
+
     const { client } = createDb();
 
     try {
       const shop = await getShop(client);
-      const slug = body.slug.trim() || slugify(body.name);
+
+      const name = body.name.trim();
+
+      const slug = (
+        body.slug.trim()
+        || slugify(name)
+      );
+
       const categoryId = body.categoryId || null;
 
+      if (!name) {
+        return reply.status(400).send({
+          ok: false,
+          message: "Укажите название товара"
+        });
+      }
+
       if (!slug) {
-        throw new HttpError(400, "Product slug is required");
+        return reply.status(400).send({
+          ok: false,
+          message: "Не удалось сформировать slug товара"
+        });
+      }
+
+      if (
+        !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)
+      ) {
+        return reply.status(400).send({
+          ok: false,
+          message:
+            "Slug может содержать только латинские буквы, цифры и дефисы"
+        });
+      }
+
+      if (categoryId) {
+        const categoryRows = await client<{
+          id: string;
+        }[]>`
+          SELECT id
+          FROM categories
+          WHERE shop_id = ${shop.id}
+            AND id = ${categoryId}
+          LIMIT 1
+        `;
+
+        if (!categoryRows[0]) {
+          return reply.status(400).send({
+            ok: false,
+            message: "Выбранная категория не найдена"
+          });
+        }
+      }
+
+      const duplicateRows = await client<{
+        id: string;
+      }[]>`
+        SELECT id
+        FROM products
+        WHERE shop_id = ${shop.id}
+          AND slug = ${slug}
+        LIMIT 1
+      `;
+
+      if (duplicateRows[0]) {
+        return reply.status(409).send({
+          ok: false,
+          message:
+            "Товар с таким slug уже существует. Измените slug или откройте существующую карточку."
+        });
       }
 
       const rows = await client`
@@ -3287,6 +3354,7 @@ export async function adminRoutes(app: FastifyInstance) {
           price,
           status,
           stock_quantity,
+          is_stock_visible,
           is_featured,
           sort_order,
           created_at,
@@ -3296,35 +3364,36 @@ export async function adminRoutes(app: FastifyInstance) {
           ${shop.id},
           ${categoryId},
           ${slug},
-          ${body.name},
+          ${name},
           ${body.shortDescription},
           ${body.description},
           ${body.price},
           ${body.status},
           ${body.stockQuantity},
+          false,
           ${body.isFeatured},
           ${body.sortOrder},
           NOW(),
           NOW()
         )
         ON CONFLICT (shop_id, slug)
-        DO UPDATE SET
-          category_id = EXCLUDED.category_id,
-          name = EXCLUDED.name,
-          short_description = EXCLUDED.short_description,
-          description = EXCLUDED.description,
-          price = EXCLUDED.price,
-          status = EXCLUDED.status,
-          stock_quantity = EXCLUDED.stock_quantity,
-          is_featured = EXCLUDED.is_featured,
-          sort_order = EXCLUDED.sort_order,
-          updated_at = NOW()
+        DO NOTHING
         RETURNING *
       `;
 
+      const product = rows[0];
+
+      if (!product) {
+        return reply.status(409).send({
+          ok: false,
+          message:
+            "Товар с таким slug уже существует"
+        });
+      }
+
       return {
         ok: true,
-        product: rows[0] ?? null
+        product
       };
     } finally {
       await client.end();
