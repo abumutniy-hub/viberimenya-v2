@@ -8129,3 +8129,233 @@ input[type="file"]::file-selector-button {
     width: 100%;
   }
 }
+
+/* CRM category manager */
+.admin-category-manager-panel {
+  overflow: hidden;
+}
+
+.admin-category-manager-grid {
+  display: grid;
+  grid-template-columns:
+    repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  padding: 20px;
+}
+
+.admin-category-manager-card {
+  display: grid;
+  min-width: 0;
+  gap: 16px;
+  padding: 18px;
+  border: 1px solid rgba(25, 23, 22, 0.1);
+  border-radius: 22px;
+  background: #fffdf9;
+}
+
+.admin-category-manager-card.is-inactive {
+  background: rgba(25, 23, 22, 0.035);
+  opacity: 0.76;
+}
+
+.admin-category-manager-head {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-category-manager-head > div {
+  min-width: 0;
+}
+
+.admin-category-manager-head span {
+  color: rgba(25, 23, 22, 0.5);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.admin-category-manager-head h3 {
+  margin: 5px 0 0;
+  font-size: 21px;
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+
+.admin-category-manager-head > strong {
+  display: inline-flex;
+  min-width: 40px;
+  height: 40px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(25, 23, 22, 0.07);
+}
+
+.admin-category-manager-stats {
+  display: grid;
+  grid-template-columns:
+    repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.admin-category-manager-stats > div {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  padding: 10px;
+  border-radius: 14px;
+  background: rgba(25, 23, 22, 0.035);
+}
+
+.admin-category-manager-stats span {
+  color: rgba(25, 23, 22, 0.48);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.admin-category-manager-fields {
+  display: grid;
+  grid-template-columns:
+    repeat(2, minmax(0, 1fr));
+  min-width: 0;
+  gap: 13px;
+}
+
+.admin-category-manager-fields label {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+}
+
+.admin-category-manager-fields label > span {
+  color: rgba(25, 23, 22, 0.58);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.admin-category-manager-fields .wide {
+  grid-column: 1 / -1;
+}
+
+.admin-category-manager-fields input,
+.admin-category-manager-fields textarea {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.admin-category-manager-fields textarea {
+  min-height: 88px;
+  resize: vertical;
+}
+
+.admin-category-manager-toggle {
+  display: flex !important;
+  min-height: 46px;
+  align-items: center;
+  align-self: end;
+  gap: 10px !important;
+  padding: 10px 12px;
+  border: 1px solid rgba(25, 23, 22, 0.11);
+  border-radius: 14px;
+}
+
+.admin-category-manager-toggle input {
+  width: 20px;
+  height: 20px;
+}
+
+.admin-category-manager-footer {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-category-manager-footer span,
+.admin-category-manager-footer strong {
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.admin-category-manager-footer strong {
+  color: #267a52;
+}
+
+.admin-category-manager-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.admin-category-manager-actions button {
+  min-height: 42px;
+  margin: 0;
+}
+
+.admin-category-manager-actions .secondary {
+  border: 1px solid rgba(25, 23, 22, 0.12);
+  background: #fffdf9;
+  color: #191716;
+}
+
+.admin-category-manager-empty {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 48px 20px;
+  text-align: center;
+}
+
+@media (max-width: 1120px) {
+  .admin-category-manager-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 680px) {
+  .admin-category-manager-grid {
+    padding: 14px;
+  }
+
+  .admin-category-manager-card {
+    padding: 15px;
+  }
+
+  .admin-category-manager-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .admin-category-manager-fields .wide {
+    grid-column: auto;
+  }
+
+  .admin-category-manager-footer {
+    display: grid;
+  }
+
+  .admin-category-manager-actions {
+    display: grid;
+    grid-template-columns:
+      repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .admin-category-manager-actions button {
+    width: 100%;
+  }
+}
+
+@media (max-width: 400px) {
+  .admin-category-manager-stats,
+  .admin-category-manager-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

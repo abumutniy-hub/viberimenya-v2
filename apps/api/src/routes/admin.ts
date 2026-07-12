@@ -152,11 +152,35 @@ const settingsSchema = z.object({
 });
 
 const categorySchema = z.object({
-  name: z.string().min(2),
-  slug: z.string().optional().default(""),
-  description: z.string().optional().default(""),
-  sortOrder: z.coerce.number().int().optional().default(100),
-  isActive: z.coerce.boolean().optional().default(true)
+  name: z.string().trim().min(2).max(160),
+  slug: z.string().trim().max(120)
+    .optional()
+    .default(""),
+  description: z.string().trim().max(5000)
+    .optional()
+    .default(""),
+  sortOrder: z.coerce.number().int()
+    .min(0)
+    .max(100000)
+    .optional()
+    .default(100),
+  isActive: z.boolean()
+    .optional()
+    .default(true)
+});
+
+const categoryUpdateSchema = z.object({
+  name: z.string().trim().min(2).max(160),
+  slug: z.string().trim().max(120)
+    .optional()
+    .default(""),
+  description: z.string().trim().max(5000)
+    .optional()
+    .default(""),
+  sortOrder: z.coerce.number().int()
+    .min(0)
+    .max(100000),
+  isActive: z.boolean()
 });
 
 const productImageUploadSchema = z.object({
@@ -2343,11 +2367,43 @@ export async function adminRoutes(app: FastifyInstance) {
 
       const [categories, products] = await Promise.all([
         client`
-          SELECT *
-          FROM categories
-          WHERE shop_id = ${shop.id}
-          ORDER BY sort_order ASC, name ASC
-        `,
+            SELECT
+              c.*,
+              COALESCE(pc.products_total, 0)
+                AS products_total,
+              COALESCE(pc.active_products, 0)
+                AS active_products,
+              COALESCE(pc.draft_products, 0)
+                AS draft_products,
+              COALESCE(pc.hidden_products, 0)
+                AS hidden_products,
+              COALESCE(pc.archived_products, 0)
+                AS archived_products
+            FROM categories c
+            LEFT JOIN LATERAL (
+              SELECT
+                COUNT(*)::int AS products_total,
+                COUNT(*) FILTER (
+                  WHERE p.status = 'active'
+                )::int AS active_products,
+                COUNT(*) FILTER (
+                  WHERE p.status = 'draft'
+                )::int AS draft_products,
+                COUNT(*) FILTER (
+                  WHERE p.status = 'hidden'
+                )::int AS hidden_products,
+                COUNT(*) FILTER (
+                  WHERE p.status = 'archived'
+                )::int AS archived_products
+              FROM products p
+              WHERE p.shop_id = c.shop_id
+                AND p.category_id = c.id
+            ) pc ON true
+            WHERE c.shop_id = ${shop.id}
+            ORDER BY
+              c.sort_order ASC,
+              c.name ASC
+          `,
         client`
           SELECT
             p.*,
@@ -3211,16 +3267,61 @@ export async function adminRoutes(app: FastifyInstance) {
 
 
 
-  app.post("/api/admin/categories", async (request) => {
-    const body = categorySchema.parse(request.body ?? {});
+  app.post("/api/admin/categories", async (request, reply) => {
+    const body = categorySchema.parse(
+      request.body ?? {}
+    );
+
     const { client } = createDb();
 
     try {
       const shop = await getShop(client);
-      const slug = body.slug.trim() || slugify(body.name);
+
+      const name = body.name.trim();
+
+      const slug = (
+        body.slug.trim()
+        || slugify(name)
+      );
 
       if (!slug) {
-        throw new HttpError(400, "Category slug is required");
+        return reply.status(400).send({
+          ok: false,
+          message:
+            "Не удалось сформировать slug категории"
+        });
+      }
+
+      if (
+        !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)
+      ) {
+        return reply.status(400).send({
+          ok: false,
+          message:
+            "Slug может содержать только латинские буквы, цифры и дефисы"
+        });
+      }
+
+      const duplicateRows = await client<{
+        id: string;
+      }[]>`
+        SELECT id
+        FROM categories
+        WHERE shop_id = ${shop.id}
+          AND (
+            slug = ${slug}
+            OR LOWER(BTRIM(name))
+              = LOWER(BTRIM(${name}::text))
+          )
+        LIMIT 1
+      `;
+
+      if (duplicateRows[0]) {
+        return reply.status(409).send({
+          ok: false,
+          message:
+            "Категория с таким названием или slug уже существует"
+        });
       }
 
       const rows = await client`
@@ -3237,7 +3338,7 @@ export async function adminRoutes(app: FastifyInstance) {
         VALUES (
           ${shop.id},
           ${slug},
-          ${body.name},
+          ${name},
           ${body.description},
           ${body.isActive},
           ${body.sortOrder},
@@ -3245,23 +3346,203 @@ export async function adminRoutes(app: FastifyInstance) {
           NOW()
         )
         ON CONFLICT (shop_id, slug)
-        DO UPDATE SET
-          name = EXCLUDED.name,
-          description = EXCLUDED.description,
-          is_active = EXCLUDED.is_active,
-          sort_order = EXCLUDED.sort_order,
-          updated_at = NOW()
+        DO NOTHING
         RETURNING *
       `;
 
+      const category = rows[0];
+
+      if (!category) {
+        return reply.status(409).send({
+          ok: false,
+          message:
+            "Категория с таким slug уже существует"
+        });
+      }
+
       return {
         ok: true,
-        category: rows[0] ?? null
+        category
       };
     } finally {
       await client.end();
     }
   });
+
+  app.patch(
+    "/api/admin/categories/:id",
+    async (request, reply) => {
+      const params = z.object({
+        id: z.string().uuid()
+      }).parse(request.params ?? {});
+
+      const body = categoryUpdateSchema.parse(
+        request.body ?? {}
+      );
+
+      const { client } = createDb();
+
+      try {
+        const shop = await getShop(client);
+
+        const existingRows = await client<{
+          id: string;
+        }[]>`
+          SELECT id
+          FROM categories
+          WHERE shop_id = ${shop.id}
+            AND id = ${params.id}
+          LIMIT 1
+        `;
+
+        if (!existingRows[0]) {
+          return reply.status(404).send({
+            ok: false,
+            message: "Категория не найдена"
+          });
+        }
+
+        const name = body.name.trim();
+
+        const slug = (
+          body.slug.trim()
+          || slugify(name)
+        );
+
+        if (!slug) {
+          return reply.status(400).send({
+            ok: false,
+            message:
+              "Не удалось сформировать slug категории"
+          });
+        }
+
+        if (
+          !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)
+        ) {
+          return reply.status(400).send({
+            ok: false,
+            message:
+              "Slug может содержать только латинские буквы, цифры и дефисы"
+          });
+        }
+
+        const duplicateRows = await client<{
+          id: string;
+        }[]>`
+          SELECT id
+          FROM categories
+          WHERE shop_id = ${shop.id}
+            AND id <> ${params.id}
+            AND (
+              slug = ${slug}
+              OR LOWER(BTRIM(name))
+                = LOWER(BTRIM(${name}::text))
+            )
+          LIMIT 1
+        `;
+
+        if (duplicateRows[0]) {
+          return reply.status(409).send({
+            ok: false,
+            message:
+              "Категория с таким названием или slug уже существует"
+          });
+        }
+
+        const rows = await client`
+          UPDATE categories
+          SET
+            name = ${name},
+            slug = ${slug},
+            description = ${body.description},
+            sort_order = ${body.sortOrder},
+            is_active = ${body.isActive},
+            updated_at = NOW()
+          WHERE shop_id = ${shop.id}
+            AND id = ${params.id}
+          RETURNING *
+        `;
+
+        return {
+          ok: true,
+          category: rows[0] ?? null
+        };
+      } finally {
+        await client.end();
+      }
+    }
+  );
+
+  app.delete(
+    "/api/admin/categories/:id",
+    async (request, reply) => {
+      const params = z.object({
+        id: z.string().uuid()
+      }).parse(request.params ?? {});
+
+      const { client } = createDb();
+
+      try {
+        const shop = await getShop(client);
+
+        const categoryRows = await client<{
+          id: string;
+          name: string;
+        }[]>`
+          SELECT id, name
+          FROM categories
+          WHERE shop_id = ${shop.id}
+            AND id = ${params.id}
+          LIMIT 1
+        `;
+
+        const category = categoryRows[0];
+
+        if (!category) {
+          return reply.status(404).send({
+            ok: false,
+            message: "Категория не найдена"
+          });
+        }
+
+        const countRows = await client<{
+          products_count: number;
+        }[]>`
+          SELECT COUNT(*)::int AS products_count
+          FROM products
+          WHERE shop_id = ${shop.id}
+            AND category_id = ${category.id}
+        `;
+
+        const productsCount = Number(
+          countRows[0]?.products_count ?? 0
+        );
+
+        if (productsCount > 0) {
+          return reply.status(409).send({
+            ok: false,
+            message:
+              `Нельзя удалить категорию «${category.name}»: `
+              + `в ней ${productsCount} товар(ов). `
+              + "Перенесите товары или отключите категорию."
+          });
+        }
+
+        await client`
+          DELETE FROM categories
+          WHERE shop_id = ${shop.id}
+            AND id = ${category.id}
+        `;
+
+        return {
+          ok: true
+        };
+      } finally {
+        await client.end();
+      }
+    }
+  );
 
   app.post("/api/admin/products", async (request, reply) => {
     const body = productSchema.parse(

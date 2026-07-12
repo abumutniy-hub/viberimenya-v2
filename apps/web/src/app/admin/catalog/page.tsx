@@ -2,7 +2,10 @@ import {
   CategoryForm,
   ProductForm
 } from "../components/admin-forms";
-import { AdminTable } from "../components/admin-table";
+import {
+  CategoryManager,
+  type CategoryManagerItem
+} from "./category-manager";
 import {
   fetchAdmin,
   type AdminRow
@@ -25,6 +28,16 @@ const statusLabels: Record<string, string> = {
 function text(value: unknown, fallback = "—") {
   const result = String(value ?? "").trim();
   return result || fallback;
+}
+
+function booleanValue(value: unknown) {
+  return (
+    value === true
+    || value === "true"
+    || value === "t"
+    || value === 1
+    || value === "1"
+  );
 }
 
 function money(value: unknown) {
@@ -58,6 +71,43 @@ export default async function AdminCatalogPage() {
 
   const categories = data?.categories ?? [];
   const products = data?.products ?? [];
+
+  const categoryManagerItems: CategoryManagerItem[] =
+    categories
+      .filter(
+        (category) =>
+          typeof category.id === "string"
+          && typeof category.name === "string"
+      )
+      .map((category) => ({
+        id: String(category.id),
+        name: String(category.name),
+        slug: String(category.slug ?? ""),
+        description: String(
+          category.description ?? ""
+        ),
+        sortOrder: Number(
+          category.sort_order ?? 100
+        ),
+        isActive: booleanValue(
+          category.is_active
+        ),
+        productsTotal: Number(
+          category.products_total ?? 0
+        ),
+        activeProducts: Number(
+          category.active_products ?? 0
+        ),
+        draftProducts: Number(
+          category.draft_products ?? 0
+        ),
+        hiddenProducts: Number(
+          category.hidden_products ?? 0
+        ),
+        archivedProducts: Number(
+          category.archived_products ?? 0
+        )
+      }));
 
   const productCategories = categories
     .filter(
@@ -298,35 +348,23 @@ export default async function AdminCatalogPage() {
         <ProductForm categories={productCategories} />
       </section>
 
-      <section className="admin-panel">
+      <section
+        className="admin-panel admin-category-manager-panel"
+        id="catalog-categories"
+      >
         <div className="admin-panel-head">
           <div>
             <span>Структура витрины</span>
-            <h2>Категории</h2>
+            <h2>Управление категориями</h2>
           </div>
+
+          <span className="admin-catalog-count">
+            {categoryManagerItems.length}
+          </span>
         </div>
 
-        <AdminTable
-          rows={categories}
-          emptyText="Категории пока не добавлены."
-          columns={[
-            {
-              key: "name",
-              label: "Название"
-            },
-            {
-              key: "slug",
-              label: "Slug"
-            },
-            {
-              key: "is_active",
-              label: "Активна"
-            },
-            {
-              key: "sort_order",
-              label: "Сортировка"
-            }
-          ]}
+        <CategoryManager
+          categories={categoryManagerItems}
         />
       </section>
 
