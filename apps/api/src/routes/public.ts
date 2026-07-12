@@ -275,47 +275,480 @@ export async function publicRoutes(app: FastifyInstance) {
     }
   });
 
-  app.get("/api/public/products", async () => {
-    const { db, client, shop } = await getShopContext();
+  app.get("/api/public/products", async (request) => {
+    const optionalPriceSchema = z.preprocess(
+      (value) => {
+        if (
+          value === undefined
+          || value === null
+          || value === ""
+        ) {
+          return undefined;
+        }
+
+        return value;
+      },
+      z.coerce
+        .number()
+        .int()
+        .min(0)
+        .max(100_000_000)
+        .optional()
+    );
+
+    const query = z.object({
+      q: z.string()
+        .trim()
+        .max(120)
+        .optional()
+        .default(""),
+
+      category: z.string()
+        .trim()
+        .max(120)
+        .optional()
+        .default(""),
+
+      availability: z.enum([
+        "all",
+        "available",
+        "order"
+      ])
+        .optional()
+        .default("all"),
+
+      sort: z.enum([
+        "recommended",
+        "newest",
+        "price-asc",
+        "price-desc",
+        "name"
+      ])
+        .optional()
+        .default("recommended"),
+
+      minPrice: optionalPriceSchema,
+      maxPrice: optionalPriceSchema,
+
+      featured: z.enum(["true"])
+        .optional(),
+
+      sale: z.enum(["true"])
+        .optional(),
+
+      page: z.coerce
+        .number()
+        .int()
+        .min(1)
+        .max(100_000)
+        .optional()
+        .default(1),
+
+      pageSize: z.coerce
+        .number()
+        .int()
+        .min(1)
+        .max(48)
+        .optional()
+        .default(24)
+    }).parse(request.query ?? {});
+
+    const { client, shop } =
+      await getShopContext();
 
     try {
-      const result = await db
-        .select()
-        .from(products)
-        .where(and(eq(products.shopId, shop.id), eq(products.status, "active")))
-        .orderBy(asc(products.sortOrder), desc(products.createdAt))
-        .limit(100);
+      const searchText =
+        query.q.trim();
 
-      const productIds = result.map((product) => product.id);
+      const searchPattern =
+        `%${searchText}%`;
 
-      const imageRows = productIds.length > 0
-        ? await client<{ product_id: string; url: string; alt: string | null }[]>`
-            SELECT DISTINCT ON (product_id)
-              product_id,
-              url,
-              alt
-            FROM product_images
-            WHERE shop_id = ${shop.id}
-              AND product_id = ANY(${productIds}::uuid[])
-            ORDER BY product_id, is_main DESC, sort_order ASC, created_at ASC
-          `
-        : [];
-
-      const imagesByProductId = new Map(
-        imageRows.map((image) => [
-          image.product_id,
-          {
-            url: image.url,
-            alt: image.alt
-          }
-        ])
+      const categorySlug = (
+        query.category === "all"
+          ? ""
+          : query.category
       );
 
+      const minPrice =
+        query.minPrice ?? null;
+
+      const maxPrice =
+        query.maxPrice ?? null;
+
+      const featuredOnly =
+        query.featured === "true";
+
+      const saleOnly =
+        query.sale === "true";
+
+      const page =
+        query.page;
+
+      const pageSize =
+        query.pageSize;
+
+      const offset =
+        (page - 1) * pageSize;
+
+      type PublicProductRow = {
+        id: string;
+        shopId: string;
+        categoryId: string | null;
+        categoryName: string | null;
+        categorySlug: string | null;
+        slug: string;
+        name: string;
+        shortDescription: string | null;
+        description: string | null;
+        composition: string | null;
+        careText: string | null;
+        price: number;
+        oldPrice: number | null;
+        costPrice: number | null;
+        stockQuantity: number | null;
+        isStockVisible: boolean;
+        status: string;
+        isFeatured: boolean;
+        sortOrder: number;
+        metadata: Record<string, unknown>;
+        createdAt: string;
+        updatedAt: string;
+      };
+
+      const rows = await client<
+        PublicProductRow[]
+      >`
+        SELECT
+          p.id,
+          p.shop_id AS "shopId",
+          p.category_id AS "categoryId",
+          c.name AS "categoryName",
+          c.slug AS "categorySlug",
+          p.slug,
+          p.name,
+          p.short_description
+            AS "shortDescription",
+          p.description,
+          p.composition,
+          p.care_text AS "careText",
+          p.price,
+          p.old_price AS "oldPrice",
+          p.cost_price AS "costPrice",
+          p.stock_quantity
+            AS "stockQuantity",
+          p.is_stock_visible
+            AS "isStockVisible",
+          p.status::text AS status,
+          p.is_featured AS "isFeatured",
+          p.sort_order AS "sortOrder",
+          p.metadata,
+          p.created_at AS "createdAt",
+          p.updated_at AS "updatedAt"
+        FROM products p
+        LEFT JOIN categories c
+          ON c.id = p.category_id
+          AND c.shop_id = p.shop_id
+          AND c.is_active = true
+        WHERE p.shop_id = ${shop.id}
+          AND p.status = 'active'
+          AND (
+            p.category_id IS NULL
+            OR c.id IS NOT NULL
+          )
+          AND (
+            ${searchText} = ''
+            OR p.name ILIKE ${searchPattern}
+            OR p.slug ILIKE ${searchPattern}
+            OR COALESCE(
+              p.short_description,
+              ''
+            ) ILIKE ${searchPattern}
+            OR COALESCE(
+              p.description,
+              ''
+            ) ILIKE ${searchPattern}
+            OR COALESCE(
+              p.composition,
+              ''
+            ) ILIKE ${searchPattern}
+            OR COALESCE(
+              c.name,
+              ''
+            ) ILIKE ${searchPattern}
+          )
+          AND (
+            ${categorySlug} = ''
+            OR c.slug = ${categorySlug}
+          )
+          AND (
+            ${query.availability} = 'all'
+            OR (
+              ${query.availability}
+                = 'available'
+              AND COALESCE(
+                p.stock_quantity,
+                0
+              ) > 0
+            )
+            OR (
+              ${query.availability}
+                = 'order'
+              AND COALESCE(
+                p.stock_quantity,
+                0
+              ) <= 0
+            )
+          )
+          AND (
+            ${minPrice}::integer IS NULL
+            OR p.price >= ${minPrice}
+          )
+          AND (
+            ${maxPrice}::integer IS NULL
+            OR p.price <= ${maxPrice}
+          )
+          AND (
+            ${featuredOnly} = false
+            OR p.is_featured = true
+          )
+          AND (
+            ${saleOnly} = false
+            OR (
+              p.old_price IS NOT NULL
+              AND p.old_price > p.price
+            )
+          )
+        ORDER BY
+          CASE
+            WHEN ${query.sort}
+              = 'recommended'
+            THEN p.is_featured
+          END DESC NULLS LAST,
+
+          CASE
+            WHEN ${query.sort}
+              = 'recommended'
+            THEN p.sort_order
+          END ASC NULLS LAST,
+
+          CASE
+            WHEN ${query.sort}
+              = 'newest'
+            THEN p.created_at
+          END DESC NULLS LAST,
+
+          CASE
+            WHEN ${query.sort}
+              = 'price-asc'
+            THEN p.price
+          END ASC NULLS LAST,
+
+          CASE
+            WHEN ${query.sort}
+              = 'price-desc'
+            THEN p.price
+          END DESC NULLS LAST,
+
+          CASE
+            WHEN ${query.sort}
+              = 'name'
+            THEN LOWER(p.name)
+          END ASC NULLS LAST,
+
+          p.sort_order ASC,
+          p.created_at DESC
+        LIMIT ${pageSize}
+        OFFSET ${offset}
+      `;
+
+      const countRows = await client<{
+        total: number;
+      }[]>`
+        SELECT COUNT(*)::int AS total
+        FROM products p
+        LEFT JOIN categories c
+          ON c.id = p.category_id
+          AND c.shop_id = p.shop_id
+          AND c.is_active = true
+        WHERE p.shop_id = ${shop.id}
+          AND p.status = 'active'
+          AND (
+            p.category_id IS NULL
+            OR c.id IS NOT NULL
+          )
+          AND (
+            ${searchText} = ''
+            OR p.name ILIKE ${searchPattern}
+            OR p.slug ILIKE ${searchPattern}
+            OR COALESCE(
+              p.short_description,
+              ''
+            ) ILIKE ${searchPattern}
+            OR COALESCE(
+              p.description,
+              ''
+            ) ILIKE ${searchPattern}
+            OR COALESCE(
+              p.composition,
+              ''
+            ) ILIKE ${searchPattern}
+            OR COALESCE(
+              c.name,
+              ''
+            ) ILIKE ${searchPattern}
+          )
+          AND (
+            ${categorySlug} = ''
+            OR c.slug = ${categorySlug}
+          )
+          AND (
+            ${query.availability} = 'all'
+            OR (
+              ${query.availability}
+                = 'available'
+              AND COALESCE(
+                p.stock_quantity,
+                0
+              ) > 0
+            )
+            OR (
+              ${query.availability}
+                = 'order'
+              AND COALESCE(
+                p.stock_quantity,
+                0
+              ) <= 0
+            )
+          )
+          AND (
+            ${minPrice}::integer IS NULL
+            OR p.price >= ${minPrice}
+          )
+          AND (
+            ${maxPrice}::integer IS NULL
+            OR p.price <= ${maxPrice}
+          )
+          AND (
+            ${featuredOnly} = false
+            OR p.is_featured = true
+          )
+          AND (
+            ${saleOnly} = false
+            OR (
+              p.old_price IS NOT NULL
+              AND p.old_price > p.price
+            )
+          )
+      `;
+
+      const globalCountRows = await client<{
+        total: number;
+      }[]>`
+        SELECT COUNT(*)::int AS total
+        FROM products p
+        LEFT JOIN categories c
+          ON c.id = p.category_id
+          AND c.shop_id = p.shop_id
+          AND c.is_active = true
+        WHERE p.shop_id = ${shop.id}
+          AND p.status = 'active'
+          AND (
+            p.category_id IS NULL
+            OR c.id IS NOT NULL
+          )
+      `;
+
+      const categoryCountRows = await client<{
+        category_id: string;
+        products_count: number;
+      }[]>`
+        SELECT
+          p.category_id,
+          COUNT(*)::int AS products_count
+        FROM products p
+        INNER JOIN categories c
+          ON c.id = p.category_id
+          AND c.shop_id = p.shop_id
+          AND c.is_active = true
+        WHERE p.shop_id = ${shop.id}
+          AND p.status = 'active'
+        GROUP BY p.category_id
+      `;
+
+      const productIds =
+        rows.map((product) => product.id);
+
+      const imageRows =
+        productIds.length > 0
+          ? await client<{
+              product_id: string;
+              url: string;
+              alt: string | null;
+            }[]>`
+              SELECT DISTINCT ON (product_id)
+                product_id,
+                url,
+                alt
+              FROM product_images
+              WHERE shop_id = ${shop.id}
+                AND product_id = ANY(
+                  ${productIds}::uuid[]
+                )
+              ORDER BY
+                product_id,
+                is_main DESC,
+                sort_order ASC,
+                created_at ASC
+            `
+          : [];
+
+      const imagesByProductId =
+        new Map(
+          imageRows.map((image) => [
+            image.product_id,
+            {
+              url: image.url,
+              alt: image.alt
+            }
+          ])
+        );
+
+      const total =
+        Number(countRows[0]?.total ?? 0);
+
+      const catalogTotal =
+        Number(
+          globalCountRows[0]?.total ?? 0
+        );
+
+      const categoryCounts =
+        Object.fromEntries(
+          categoryCountRows.map((row) => [
+            row.category_id,
+            Number(row.products_count)
+          ])
+        );
+
       return {
-        items: result.map((product) => ({
+        items: rows.map((product) => ({
           ...product,
-          primaryImage: imagesByProductId.get(product.id) ?? null
-        }))
+          primaryImage:
+            imagesByProductId.get(
+              product.id
+            ) ?? null
+        })),
+
+        meta: {
+          total,
+          page,
+          pageSize,
+          pages: Math.ceil(
+            total / pageSize
+          )
+        },
+
+        catalogTotal,
+        categoryCounts
       };
     } finally {
       await client.end();
