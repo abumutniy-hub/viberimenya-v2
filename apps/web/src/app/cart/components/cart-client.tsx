@@ -280,6 +280,7 @@ export function CartClient() {
   const [delivery, setDelivery] = useState<DeliveryData>({ zones: [], intervals: [] });
   const [deliveryType, setDeliveryType] = useState<"delivery" | "pickup">("delivery");
   const [zoneId, setZoneId] = useState("");
+  const [intervalId, setIntervalId] = useState("");
   const [promoCode, setPromoCode] = useState("");
   const [promoMessage, setPromoMessage] = useState("");
   const [discountTotal, setDiscountTotal] = useState(0);
@@ -486,9 +487,22 @@ export function CartClient() {
           recipientPhone: form.get("recipientPhone"),
           deliveryType,
           deliveryAddress: isDelivery ? form.get("deliveryAddress") : "",
-          deliveryDate: isDelivery ? form.get("deliveryDate") : "",
-          deliveryIntervalText: isDelivery ? form.get("deliveryIntervalText") : "",
-          deliveryZoneId: isDelivery ? zoneId : "",
+          deliveryDate:
+            isDelivery
+              ? form.get("deliveryDate")
+              : "",
+
+          deliveryIntervalId:
+            isDelivery
+              ? intervalId
+              : "",
+
+          deliveryIntervalText: "",
+
+          deliveryZoneId:
+            isDelivery
+              ? zoneId
+              : "",
           paymentMethod: form.get("paymentMethod"),
           customerComment: form.get("customerComment"),
           promoCode,
@@ -752,6 +766,7 @@ export function CartClient() {
               setDeliveryType(nextDeliveryType);
               if (nextDeliveryType === "pickup") {
                 setZoneId("");
+                setIntervalId("");
               }
               resetCartAdjustments();
             }}
@@ -784,11 +799,31 @@ export function CartClient() {
 
             <label>
               <span>Интервал</span>
-              <select name="deliveryIntervalText">
-                <option value="">Выберите интервал</option>
-                {delivery.intervals.map((interval) => (
-                  <option key={interval.id} value={interval.name}>{interval.name}</option>
-                ))}
+
+              <select
+                name="deliveryIntervalId"
+                value={intervalId}
+                onChange={(event) => {
+                  setIntervalId(
+                    event.target.value
+                  );
+                }}
+                required
+              >
+                <option value="">
+                  Выберите интервал
+                </option>
+
+                {delivery.intervals.map(
+                  (interval) => (
+                    <option
+                      key={interval.id}
+                      value={interval.id}
+                    >
+                      {interval.name}
+                    </option>
+                  )
+                )}
               </select>
             </label>
 

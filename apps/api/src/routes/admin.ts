@@ -376,13 +376,47 @@ const deliveryZoneSchema = z.object({
   sortOrder: z.coerce.number().int().optional().default(100)
 });
 
+const deliveryTimeSchema = z.string()
+  .trim()
+  .regex(
+    /^([01]\\d|2[0-3]):[0-5]\\d$/,
+    "Время должно быть в формате ЧЧ:ММ"
+  );
+
 const deliveryIntervalSchema = z.object({
-  name: z.string().min(2),
-  startsAt: z.string().min(1),
-  endsAt: z.string().min(1),
-  isActive: z.coerce.boolean().optional().default(true),
-  sortOrder: z.coerce.number().int().optional().default(100)
+  startsAt: deliveryTimeSchema,
+  endsAt: deliveryTimeSchema,
+  isActive: z.coerce.boolean()
+    .optional()
+    .default(true),
+  sortOrder: z.coerce.number()
+    .int()
+    .min(0)
+    .max(100000)
+    .optional()
+    .default(100)
 });
+
+function deliveryTimeToMinutes(
+  value: string
+) {
+  const [
+    hours,
+    minutes
+  ] = value.split(":").map(Number);
+
+  return (
+    Number(hours || 0) * 60
+    + Number(minutes || 0)
+  );
+}
+
+function deliveryIntervalName(
+  startsAt: string,
+  endsAt: string
+) {
+  return `${startsAt}–${endsAt}`;
+}
 
 
 const adminLoginSchema = z.object({
@@ -2547,10 +2581,18 @@ export async function adminRoutes(app: FastifyInstance) {
           ORDER BY sort_order ASC
         `,
         client`
-          SELECT *
-          FROM delivery_intervals
-          WHERE shop_id = ${shop.id}
-          ORDER BY sort_order ASC
+          SELECT
+            di.*,
+            COUNT(o.id)::int AS orders_count
+          FROM delivery_intervals di
+          LEFT JOIN orders o
+            ON o.shop_id = di.shop_id
+           AND o.delivery_interval_id = di.id
+          WHERE di.shop_id = ${shop.id}
+          GROUP BY di.id
+          ORDER BY
+            di.sort_order ASC,
+            di.starts_at ASC
         `
       ]);
 
@@ -2993,6 +3035,430 @@ export async function adminRoutes(app: FastifyInstance) {
 
         await client`
           DELETE FROM delivery_zones
+          WHERE shop_id = ${shop.id}
+            AND id = ${existing.id}
+        `;
+
+        return {
+          ok: true
+        };
+      } finally {
+        await client.end();
+      }
+    }
+  );
+
+  app.post(
+    "/api/admin/delivery/intervals/manage",
+    async (request, reply) => {
+      const body =
+        deliveryIntervalSchema.parse(
+          request.body ?? {}
+        );
+
+      const { client } = createDb();
+
+      try {
+        const shop =
+          await getShop(client);
+
+        const startsAt =
+          body.startsAt.trim();
+
+        const endsAt =
+          body.endsAt.trim();
+
+        const startMinutes =
+          deliveryTimeToMinutes(
+            startsAt
+          );
+
+        const endMinutes =
+          deliveryTimeToMinutes(
+            endsAt
+          );
+
+        if (
+          startMinutes >= endMinutes
+        ) {
+          return reply.status(400).send({
+            ok: false,
+            message:
+              "Время окончания должно быть позже времени начала"
+          });
+        }
+
+        const duplicateRows =
+          await client<{
+            id: string;
+          }[]>`
+            SELECT id
+            FROM delivery_intervals
+            WHERE shop_id = ${shop.id}
+              AND starts_at = ${startsAt}
+              AND ends_at = ${endsAt}
+            LIMIT 1
+          `;
+
+        if (duplicateRows[0]) {
+          return reply.status(409).send({
+            ok: false,
+            message:
+              "Такой интервал уже существует"
+          });
+        }
+
+        if (body.isActive) {
+          const overlapRows =
+            await client<{
+              id: string;
+              name: string;
+            }[]>`
+              SELECT
+                id,
+                name
+              FROM delivery_intervals
+              WHERE shop_id = ${shop.id}
+                AND is_active = true
+                AND starts_at < ${endsAt}
+                AND ends_at > ${startsAt}
+              ORDER BY starts_at
+              LIMIT 1
+            `;
+
+          const overlap =
+            overlapRows[0];
+
+          if (overlap) {
+            return reply.status(409).send({
+              ok: false,
+              message:
+                `Интервал пересекается с «${overlap.name}»`
+            });
+          }
+        }
+
+        const name =
+          deliveryIntervalName(
+            startsAt,
+            endsAt
+          );
+
+        const rows = await client`
+          INSERT INTO delivery_intervals (
+            shop_id,
+            name,
+            starts_at,
+            ends_at,
+            is_active,
+            sort_order,
+            created_at,
+            updated_at
+          )
+          VALUES (
+            ${shop.id},
+            ${name},
+            ${startsAt},
+            ${endsAt},
+            ${body.isActive},
+            ${body.sortOrder},
+            NOW(),
+            NOW()
+          )
+          RETURNING *
+        `;
+
+        return reply.status(201).send({
+          ok: true,
+          interval: rows[0] ?? null
+        });
+      } finally {
+        await client.end();
+      }
+    }
+  );
+
+  app.patch(
+    "/api/admin/delivery/intervals/manage/:id",
+    async (request, reply) => {
+      const params = z.object({
+        id: z.string().uuid()
+      }).parse(request.params ?? {});
+
+      const body =
+        deliveryIntervalSchema.parse(
+          request.body ?? {}
+        );
+
+      const { client } = createDb();
+
+      try {
+        const shop =
+          await getShop(client);
+
+        const existingRows =
+          await client<{
+            id: string;
+            name: string;
+            starts_at: string;
+            ends_at: string;
+            is_active: boolean;
+          }[]>`
+            SELECT
+              id,
+              name,
+              starts_at,
+              ends_at,
+              is_active
+            FROM delivery_intervals
+            WHERE shop_id = ${shop.id}
+              AND id = ${params.id}
+            LIMIT 1
+          `;
+
+        const existing =
+          existingRows[0];
+
+        if (!existing) {
+          return reply.status(404).send({
+            ok: false,
+            message:
+              "Интервал доставки не найден"
+          });
+        }
+
+        const startsAt =
+          body.startsAt.trim();
+
+        const endsAt =
+          body.endsAt.trim();
+
+        const startMinutes =
+          deliveryTimeToMinutes(
+            startsAt
+          );
+
+        const endMinutes =
+          deliveryTimeToMinutes(
+            endsAt
+          );
+
+        if (
+          startMinutes >= endMinutes
+        ) {
+          return reply.status(400).send({
+            ok: false,
+            message:
+              "Время окончания должно быть позже времени начала"
+          });
+        }
+
+        const duplicateRows =
+          await client<{
+            id: string;
+          }[]>`
+            SELECT id
+            FROM delivery_intervals
+            WHERE shop_id = ${shop.id}
+              AND id <> ${existing.id}
+              AND starts_at = ${startsAt}
+              AND ends_at = ${endsAt}
+            LIMIT 1
+          `;
+
+        if (duplicateRows[0]) {
+          return reply.status(409).send({
+            ok: false,
+            message:
+              "Такой интервал уже существует"
+          });
+        }
+
+        if (body.isActive) {
+          const overlapRows =
+            await client<{
+              id: string;
+              name: string;
+            }[]>`
+              SELECT
+                id,
+                name
+              FROM delivery_intervals
+              WHERE shop_id = ${shop.id}
+                AND id <> ${existing.id}
+                AND is_active = true
+                AND starts_at < ${endsAt}
+                AND ends_at > ${startsAt}
+              ORDER BY starts_at
+              LIMIT 1
+            `;
+
+          const overlap =
+            overlapRows[0];
+
+          if (overlap) {
+            return reply.status(409).send({
+              ok: false,
+              message:
+                `Интервал пересекается с «${overlap.name}»`
+            });
+          }
+        }
+
+        if (
+          existing.is_active
+          && !body.isActive
+        ) {
+          const activeRows =
+            await client<{
+              count: number;
+            }[]>`
+              SELECT COUNT(*)::int AS count
+              FROM delivery_intervals
+              WHERE shop_id = ${shop.id}
+                AND id <> ${existing.id}
+                AND is_active = true
+            `;
+
+          const activeCount =
+            Number(
+              activeRows[0]?.count
+              ?? 0
+            );
+
+          if (activeCount === 0) {
+            return reply.status(409).send({
+              ok: false,
+              message:
+                "Нельзя отключить последний активный интервал"
+            });
+          }
+        }
+
+        const name =
+          deliveryIntervalName(
+            startsAt,
+            endsAt
+          );
+
+        const rows = await client`
+          UPDATE delivery_intervals
+          SET
+            name = ${name},
+            starts_at = ${startsAt},
+            ends_at = ${endsAt},
+            is_active = ${body.isActive},
+            sort_order = ${body.sortOrder},
+            updated_at = NOW()
+          WHERE shop_id = ${shop.id}
+            AND id = ${existing.id}
+          RETURNING *
+        `;
+
+        return {
+          ok: true,
+          interval: rows[0] ?? null
+        };
+      } finally {
+        await client.end();
+      }
+    }
+  );
+
+  app.delete(
+    "/api/admin/delivery/intervals/manage/:id",
+    async (request, reply) => {
+      const params = z.object({
+        id: z.string().uuid()
+      }).parse(request.params ?? {});
+
+      const { client } = createDb();
+
+      try {
+        const shop =
+          await getShop(client);
+
+        const existingRows =
+          await client<{
+            id: string;
+            name: string;
+            is_active: boolean;
+          }[]>`
+            SELECT
+              id,
+              name,
+              is_active
+            FROM delivery_intervals
+            WHERE shop_id = ${shop.id}
+              AND id = ${params.id}
+            LIMIT 1
+          `;
+
+        const existing =
+          existingRows[0];
+
+        if (!existing) {
+          return reply.status(404).send({
+            ok: false,
+            message:
+              "Интервал доставки не найден"
+          });
+        }
+
+        const ordersRows =
+          await client<{
+            count: number;
+          }[]>`
+            SELECT COUNT(*)::int AS count
+            FROM orders
+            WHERE shop_id = ${shop.id}
+              AND delivery_interval_id =
+                ${existing.id}
+          `;
+
+        const ordersCount =
+          Number(
+            ordersRows[0]?.count
+            ?? 0
+          );
+
+        if (ordersCount > 0) {
+          return reply.status(409).send({
+            ok: false,
+            message:
+              `Интервал используется в ${ordersCount} заказах. Отключите его вместо удаления.`
+          });
+        }
+
+        if (existing.is_active) {
+          const activeRows =
+            await client<{
+              count: number;
+            }[]>`
+              SELECT COUNT(*)::int AS count
+              FROM delivery_intervals
+              WHERE shop_id = ${shop.id}
+                AND id <> ${existing.id}
+                AND is_active = true
+            `;
+
+          const activeCount =
+            Number(
+              activeRows[0]?.count
+              ?? 0
+            );
+
+          if (activeCount === 0) {
+            return reply.status(409).send({
+              ok: false,
+              message:
+                "Нельзя удалить последний активный интервал"
+            });
+          }
+        }
+
+        await client`
+          DELETE FROM delivery_intervals
           WHERE shop_id = ${shop.id}
             AND id = ${existing.id}
         `;

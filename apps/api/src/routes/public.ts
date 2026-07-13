@@ -23,8 +23,19 @@ const createOrderSchema = z.object({
   deliveryType: z.enum(["delivery", "pickup"]).default("delivery"),
   deliveryAddress: z.string().optional().default(""),
   deliveryDate: z.string().optional().default(""),
-  deliveryIntervalText: z.string().optional().default(""),
-  deliveryZoneId: z.string().uuid().optional().or(z.literal("")).default(""),
+  deliveryIntervalId: z.string()
+    .uuid()
+    .optional()
+    .or(z.literal(""))
+    .default(""),
+  deliveryIntervalText: z.string()
+    .optional()
+    .default(""),
+  deliveryZoneId: z.string()
+    .uuid()
+    .optional()
+    .or(z.literal(""))
+    .default(""),
   paymentMethod: z.enum(["cash_on_delivery", "transfer_after_confirm", "online_card", "sbp"]).default("transfer_after_confirm"),
   customerComment: z.string().optional().default(""),
   promoCode: z.string().optional().default(""),
@@ -1806,6 +1817,67 @@ export async function publicRoutes(app: FastifyInstance) {
         deliveryPrice = Number(zoneRows[0]?.price ?? 0);
       }
 
+      let selectedDeliveryInterval:
+        {
+          id: string;
+          name: string;
+        }
+        | null = null;
+
+      if (
+        body.deliveryType
+        === "delivery"
+      ) {
+        const intervalRows =
+          body.deliveryIntervalId
+            ? await client<{
+                id: string;
+                name: string;
+              }[]>`
+                SELECT
+                  id,
+                  name
+                FROM delivery_intervals
+                WHERE shop_id = ${shop.id}
+                  AND id =
+                    ${body.deliveryIntervalId}
+                  AND is_active = true
+                LIMIT 1
+              `
+            : body.deliveryIntervalText
+                .trim()
+              ? await client<{
+                  id: string;
+                  name: string;
+                }[]>`
+                  SELECT
+                    id,
+                    name
+                  FROM delivery_intervals
+                  WHERE shop_id = ${shop.id}
+                    AND name =
+                      ${body.deliveryIntervalText.trim()}
+                    AND is_active = true
+                  LIMIT 1
+                `
+              : [];
+
+        const interval =
+          intervalRows[0];
+
+        if (!interval) {
+          throw new HttpError(
+            400,
+            "Выберите доступный интервал доставки"
+          );
+        }
+
+        selectedDeliveryInterval = {
+          id: interval.id,
+          name: interval.name
+        };
+      }
+
       let discountTotal = 0;
       let promoId: string | null = null;
       const promoCode = normalizePromoCode(body.promoCode || "");
@@ -1967,6 +2039,7 @@ export async function publicRoutes(app: FastifyInstance) {
           payment_method,
           delivery_type,
           delivery_zone_id,
+          delivery_interval_id,
           delivery_date,
           delivery_address_text,
           delivery_comment,
@@ -1993,9 +2066,11 @@ export async function publicRoutes(app: FastifyInstance) {
           ${body.paymentMethod},
           ${body.deliveryType},
           ${body.deliveryZoneId || null},
+          ${selectedDeliveryInterval?.id || null},
           ${body.deliveryDate || null},
           ${body.deliveryAddress},
-          ${body.deliveryIntervalText},
+          ${selectedDeliveryInterval?.name
+            || body.deliveryIntervalText},
           ${body.recipientName || body.customerName},
           ${recipientPhone},
           ${body.customerComment},

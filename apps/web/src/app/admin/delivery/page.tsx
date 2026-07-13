@@ -1,12 +1,4 @@
 import {
-  AdminTable
-} from "../components/admin-table";
-
-import {
-  DeliveryIntervalForm
-} from "../components/admin-forms";
-
-import {
   fetchAdmin,
   type AdminRow
 } from "../lib/admin-api";
@@ -15,6 +7,11 @@ import {
   DeliveryZoneManager,
   type DeliveryZoneManagerItem
 } from "./delivery-zone-manager";
+
+import {
+  DeliveryIntervalManager,
+  type DeliveryIntervalManagerItem
+} from "./delivery-interval-manager";
 
 export const dynamic =
   "force-dynamic";
@@ -71,12 +68,12 @@ export default async function AdminDeliveryPage() {
       "/api/admin/delivery"
     );
 
-  const rows =
+  const zoneRows =
     data?.zones ?? [];
 
   const zones:
     DeliveryZoneManagerItem[] =
-      rows
+      zoneRows
         .filter(
           (zone) =>
             typeof zone.id === "string"
@@ -86,33 +83,41 @@ export default async function AdminDeliveryPage() {
         .map((zone) => ({
           id: String(zone.id),
           name: String(zone.name),
+
           description: String(
             zone.description ?? ""
           ),
+
           price: numberValue(
             zone.price
           ),
+
           freeFromAmount:
             nullableNumber(
               zone.free_from_amount
             ),
+
           isExpressAvailable:
             booleanValue(
               zone.is_express_available
             ),
+
           expressPrice:
             nullableNumber(
               zone.express_price
             ),
+
           isActive:
             booleanValue(
               zone.is_active
             ),
+
           sortOrder:
             numberValue(
               zone.sort_order,
               100
             ),
+
           updatedAt: String(
             zone.updated_at ?? ""
           )
@@ -148,18 +153,71 @@ export default async function AdminDeliveryPage() {
         ) > 0
     ).length;
 
-  const intervals =
+  const intervalRows =
     data?.intervals ?? [];
+
+  const intervals:
+    DeliveryIntervalManagerItem[] =
+      intervalRows
+        .filter(
+          (interval) =>
+            typeof interval.id
+              === "string"
+        )
+        .map((interval) => ({
+          id: String(interval.id),
+
+          name: String(
+            interval.name ?? ""
+          ),
+
+          startsAt: String(
+            interval.starts_at ?? ""
+          ),
+
+          endsAt: String(
+            interval.ends_at ?? ""
+          ),
+
+          isActive:
+            booleanValue(
+              interval.is_active
+            ),
+
+          sortOrder:
+            numberValue(
+              interval.sort_order,
+              100
+            ),
+
+          ordersCount:
+            numberValue(
+              interval.orders_count
+            ),
+
+          updatedAt: String(
+            interval.updated_at ?? ""
+          )
+        }));
+
+  const activeIntervals =
+    intervals.filter(
+      (interval) =>
+        interval.isActive
+    ).length;
 
   return (
     <div className="admin-page admin-delivery-page">
       <div className="admin-page-head">
         <div>
           <span>Логистика</span>
+
           <h1>Доставка</h1>
+
           <p>
             Управление зонами, тарифами,
-            бесплатной и срочной доставкой.
+            бесплатной, срочной доставкой
+            и доступным временем.
           </p>
         </div>
       </div>
@@ -173,7 +231,7 @@ export default async function AdminDeliveryPage() {
         </article>
 
         <article>
-          <span>Активных</span>
+          <span>Активных зон</span>
           <strong>{activeZones}</strong>
         </article>
 
@@ -190,9 +248,9 @@ export default async function AdminDeliveryPage() {
         </article>
 
         <article>
-          <span>Интервалов</span>
+          <span>Активных интервалов</span>
           <strong>
-            {intervals.length}
+            {activeIntervals}
           </strong>
         </article>
       </section>
@@ -214,50 +272,20 @@ export default async function AdminDeliveryPage() {
         />
       </section>
 
-      <section className="admin-panel">
+      <section className="admin-panel admin-delivery-intervals-panel">
         <div className="admin-panel-head">
           <div>
             <span>Расписание</span>
-            <h2>Добавить интервал</h2>
-          </div>
-        </div>
-
-        <DeliveryIntervalForm />
-      </section>
-
-      <section className="admin-panel">
-        <div className="admin-panel-head">
-          <div>
-            <span>Доступное время</span>
             <h2>Интервалы доставки</h2>
           </div>
 
           <span className="admin-delivery-count">
-            {intervals.length}
+            {activeIntervals}/{intervals.length}
           </span>
         </div>
 
-        <AdminTable
-          rows={intervals}
-          emptyText="Интервалы пока не добавлены."
-          columns={[
-            {
-              key: "name",
-              label: "Название"
-            },
-            {
-              key: "starts_at",
-              label: "Начало"
-            },
-            {
-              key: "ends_at",
-              label: "Окончание"
-            },
-            {
-              key: "is_active",
-              label: "Активен"
-            }
-          ]}
+        <DeliveryIntervalManager
+          intervals={intervals}
         />
       </section>
     </div>
