@@ -131,6 +131,42 @@ function InfoRow({ label, value }: { label: string; value: unknown }) {
   );
 }
 
+function recordValue(
+  value: unknown
+): Record<string, unknown> {
+  if (
+    value
+    && typeof value === "object"
+    && !Array.isArray(value)
+  ) {
+    return value as
+      Record<string, unknown>;
+  }
+
+  if (
+    typeof value === "string"
+    && value.trim()
+  ) {
+    try {
+      const parsed =
+        JSON.parse(value);
+
+      if (
+        parsed
+        && typeof parsed === "object"
+        && !Array.isArray(parsed)
+      ) {
+        return parsed as
+          Record<string, unknown>;
+      }
+    } catch {
+      return {};
+    }
+  }
+
+  return {};
+}
+
 export default async function AdminOrderDetailPage({ params }: PageProps) {
   const { id } = await params;
   const data = await fetchAdmin<Response>(`/api/admin/orders/${id}`);
@@ -162,9 +198,66 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
   const bouquetPhotoUrl = safeBouquetPhotoUrl(
     order.bouquet_photo_url
   );
-  const deliveryType = String(order.delivery_type || "");
-  const isPickup = deliveryType === "pickup";
-  const trackingToken = String(order.tracking_token || "");
+  const deliveryType =
+    String(
+      order.delivery_type || ""
+    );
+
+  const isPickup =
+    deliveryType === "pickup";
+
+  const orderMetadata =
+    recordValue(
+      order.metadata
+    );
+
+  const deliverySnapshot =
+    recordValue(
+      orderMetadata.delivery
+    );
+
+  const hasDeliverySnapshot =
+    Object.keys(
+      deliverySnapshot
+    ).length > 0;
+
+  const deliveryTariffName =
+    String(
+      deliverySnapshot.tariffName
+      ?? ""
+    ).trim()
+    || (
+      isPickup
+        ? "Самовывоз"
+        : "Обычная доставка"
+    );
+
+  const deliveryZoneName =
+    String(
+      deliverySnapshot.zoneName
+      ?? ""
+    ).trim();
+
+  const deliveryIsExpress = (
+    deliverySnapshot.isExpress
+      === true
+    || deliverySnapshot.isExpress
+      === "true"
+  );
+
+  const deliveryFreeThresholdApplied = (
+    deliverySnapshot
+      .freeThresholdApplied
+      === true
+    || deliverySnapshot
+      .freeThresholdApplied
+      === "true"
+  );
+
+  const trackingToken =
+    String(
+      order.tracking_token || ""
+    );
   const deliveryIntervalName = String(order.delivery_interval_name || "").trim();
   const deliveryCommentText = String(order.delivery_comment || "").trim();
   const isDeliveryCommentJustInterval = /^\d{1,2}:\d{2}\s*[—–-]\s*\d{1,2}:\d{2}$/.test(deliveryCommentText);
@@ -293,21 +386,144 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
           <ContactActions phone={String(order.recipient_phone || "")} />
         </article>
 
-        <article className="admin-panel admin-order-detail-card">
+        <article
+          className={[
+            "admin-panel",
+            "admin-order-detail-card",
+            "admin-order-delivery-card",
+            deliveryIsExpress
+              ? "is-express"
+              : ""
+          ].filter(Boolean).join(" ")}
+        >
           <div className="admin-panel-head">
-            <h2>{isPickup ? "Самовывоз" : "Доставка"}</h2>
+            <div>
+              <span>Логистика</span>
+
+              <h2>
+                {isPickup
+                  ? "Самовывоз"
+                  : deliveryTariffName}
+              </h2>
+            </div>
+
+            {deliveryIsExpress ? (
+              <span className="admin-express-order-badge">
+                СРОЧНО
+              </span>
+            ) : null}
           </div>
-          <InfoRow label="Тип" value={isPickup ? "Самовывоз" : "Доставка"} />
-          {!isPickup ? <InfoRow label="Дата" value={dateOnly(order.delivery_date)} /> : null}
-          {!isPickup ? <InfoRow label="Интервал" value={deliveryIntervalText} /> : null}
-          {!isPickup && visibleDeliveryComment ? (
-            <InfoRow label="Комментарий к доставке" value={visibleDeliveryComment} />
+
+          <InfoRow
+            label="Тип получения"
+            value={
+              isPickup
+                ? "Самовывоз"
+                : "Доставка"
+            }
+          />
+
+          {!isPickup ? (
+            <InfoRow
+              label="Тариф"
+              value={deliveryTariffName}
+            />
           ) : null}
-          {!isPickup ? <InfoRow label="Адрес" value={order.delivery_address_text} /> : null}
-          {!isPickup && order.delivery_address_text ? (
-            <DeliveryAddressActions address={String(order.delivery_address_text || "")} />
+
+          {!isPickup
+            && deliveryZoneName ? (
+            <InfoRow
+              label="Зона"
+              value={deliveryZoneName}
+            />
           ) : null}
-          <InfoRow label={isPickup ? "Стоимость" : "Доставка"} value={money(order.delivery_price)} />
+
+          {!isPickup
+            && hasDeliverySnapshot ? (
+            <InfoRow
+              label="Срочная доставка"
+              value={
+                deliveryIsExpress
+                  ? "Да, приоритетная"
+                  : "Нет"
+              }
+            />
+          ) : null}
+
+          {!isPickup
+            && deliveryFreeThresholdApplied ? (
+            <InfoRow
+              label="Бесплатный порог"
+              value="Применён"
+            />
+          ) : null}
+
+          {!isPickup ? (
+            <InfoRow
+              label="Дата"
+              value={
+                dateOnly(
+                  order.delivery_date
+                )
+              }
+            />
+          ) : null}
+
+          {!isPickup ? (
+            <InfoRow
+              label="Интервал"
+              value={deliveryIntervalText}
+            />
+          ) : null}
+
+          {!isPickup
+            && visibleDeliveryComment ? (
+            <InfoRow
+              label="Комментарий к доставке"
+              value={
+                visibleDeliveryComment
+              }
+            />
+          ) : null}
+
+          {!isPickup ? (
+            <InfoRow
+              label="Адрес"
+              value={
+                order.delivery_address_text
+              }
+            />
+          ) : null}
+
+          {!isPickup
+            && order.delivery_address_text ? (
+            <DeliveryAddressActions
+              address={
+                String(
+                  order.delivery_address_text
+                  || ""
+                )
+              }
+            />
+          ) : null}
+
+          <InfoRow
+            label={
+              isPickup
+                ? "Стоимость"
+                : "Стоимость тарифа"
+            }
+            value={
+              Number(
+                order.delivery_price
+                || 0
+              ) > 0
+                ? money(
+                    order.delivery_price
+                  )
+                : "Бесплатно"
+            }
+          />
         </article>
 
         <article className="admin-panel admin-order-detail-card admin-order-payment-card">

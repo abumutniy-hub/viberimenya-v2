@@ -91,6 +91,163 @@ function orderStatusChip(row: AdminRow) {
   );
 }
 
+function recordValue(
+  value: unknown
+): Record<string, unknown> {
+  if (
+    value
+    && typeof value === "object"
+    && !Array.isArray(value)
+  ) {
+    return value as
+      Record<string, unknown>;
+  }
+
+  if (
+    typeof value === "string"
+    && value.trim()
+  ) {
+    try {
+      const parsed =
+        JSON.parse(value);
+
+      if (
+        parsed
+        && typeof parsed === "object"
+        && !Array.isArray(parsed)
+      ) {
+        return parsed as
+          Record<string, unknown>;
+      }
+    } catch {
+      return {};
+    }
+  }
+
+  return {};
+}
+
+function deliverySnapshot(
+  row: AdminRow
+) {
+  const metadata =
+    recordValue(row.metadata);
+
+  return recordValue(
+    metadata.delivery
+  );
+}
+
+function isExpressOrder(
+  row: AdminRow
+) {
+  const snapshot =
+    deliverySnapshot(row);
+
+  return (
+    snapshot.isExpress === true
+    || String(
+      snapshot.isExpress ?? ""
+    )
+      .trim()
+      .toLowerCase()
+      === "true"
+  );
+}
+
+function deliveryTariffName(
+  row: AdminRow
+) {
+  const snapshot =
+    deliverySnapshot(row);
+
+  const name =
+    String(
+      snapshot.tariffName ?? ""
+    ).trim();
+
+  if (name) {
+    return name;
+  }
+
+  return field(
+    row,
+    "delivery_type"
+  ) === "pickup"
+    ? "Самовывоз"
+    : "Обычная доставка";
+}
+
+function isActiveExpressOrder(
+  row: AdminRow
+) {
+  const status =
+    field(row, "status");
+
+  return (
+    isExpressOrder(row)
+    && status !== "delivered"
+    && status !== "cancelled"
+  );
+}
+
+function orderCreatedTimestamp(
+  row: AdminRow
+) {
+  const timestamp =
+    Date.parse(
+      String(
+        row.created_at ?? ""
+      )
+    );
+
+  return Number.isFinite(timestamp)
+    ? timestamp
+    : 0;
+}
+
+function sortOrders(
+  rows: AdminRow[]
+) {
+  return rows
+    .map((row, index) => ({
+      row,
+      index
+    }))
+    .sort((left, right) => {
+      const priorityDifference =
+        Number(
+          isActiveExpressOrder(
+            right.row
+          )
+        )
+        - Number(
+          isActiveExpressOrder(
+            left.row
+          )
+        );
+
+      if (priorityDifference !== 0) {
+        return priorityDifference;
+      }
+
+      const dateDifference =
+        orderCreatedTimestamp(
+          right.row
+        )
+        - orderCreatedTimestamp(
+            left.row
+          );
+
+      if (dateDifference !== 0) {
+        return dateDifference;
+      }
+
+      return left.index - right.index;
+    })
+    .map((item) => item.row);
+}
+
 function paymentStatusChip(row: AdminRow) {
   const status = field(row, "payment_status");
 
@@ -117,7 +274,7 @@ export default async function AdminOrdersPage() {
 
       <section className="admin-panel">
         <AdminTable
-          rows={data?.items ?? []}
+          rows={sortOrders(data?.items ?? [])}
           emptyText="Заказов пока нет."
           columns={[
             {
@@ -133,7 +290,39 @@ export default async function AdminOrdersPage() {
             {
               key: "status",
               label: "Статус",
-              render: (row) => orderStatusChip(row)
+
+              render: (row) => {
+                const status =
+                  field(
+                    row,
+                    "status"
+                  );
+
+                const isExpress =
+                  isExpressOrder(row);
+
+                return (
+                  <div className="admin-order-status-stack">
+                    {isExpress ? (
+                      <span className="admin-order-express-list-badge">
+                        СРОЧНО
+                      </span>
+                    ) : null}
+
+                    <span
+                      className={
+                        `admin-status-chip status-${statusClass(
+                          status
+                        )}`
+                      }
+                    >
+                      {orderStatusLabels[status]
+                        || status
+                        || "—"}
+                    </span>
+                  </div>
+                );
+              }
             },
             {
               key: "customer_name",
@@ -148,15 +337,61 @@ export default async function AdminOrdersPage() {
             {
               key: "delivery_type",
               label: "Получение",
+
               render: (row) => {
-                const deliveryType = field(row, "delivery_type");
-                const isPickup = deliveryType === "pickup";
+                const deliveryType =
+                  field(
+                    row,
+                    "delivery_type"
+                  );
+
+                const isPickup =
+                  deliveryType === "pickup";
+
+                const isExpress =
+                  isExpressOrder(row);
+
+                const tariffName =
+                  deliveryTariffName(row);
 
                 return (
-                  <div className="admin-order-delivery-cell">
-                    <strong>{isPickup ? "Самовывоз" : "Доставка"}</strong>
-                    <span>{isPickup ? "Без доставки" : `Дата: ${dateOnly(row.delivery_date)}`}</span>
-                    {!isPickup ? <em>{money(row.delivery_price)}</em> : null}
+                  <div
+                    className={[
+                      "admin-order-delivery-cell",
+                      isExpress
+                        ? "is-express"
+                        : ""
+                    ].filter(Boolean).join(" ")}
+                  >
+                    <strong>
+                      {isPickup
+                        ? "Самовывоз"
+                        : isExpress
+                          ? "Срочная доставка"
+                          : tariffName}
+                    </strong>
+
+                    <span>
+                      {isPickup
+                        ? "Без доставки"
+                        : `Дата: ${dateOnly(
+                            row.delivery_date
+                          )}`}
+                    </span>
+
+                    {isExpress ? (
+                      <small className="admin-order-express-note">
+                        Приоритетный заказ
+                      </small>
+                    ) : null}
+
+                    {!isPickup ? (
+                      <em>
+                        {money(
+                          row.delivery_price
+                        )}
+                      </em>
+                    ) : null}
                   </div>
                 );
               }

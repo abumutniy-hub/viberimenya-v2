@@ -20,7 +20,16 @@ const createOrderSchema = z.object({
   customerPhone: z.string().min(5),
   recipientName: z.string().optional().default(""),
   recipientPhone: z.string().optional().default(""),
-  deliveryType: z.enum(["delivery", "pickup"]).default("delivery"),
+  deliveryType: z.enum([
+    "delivery",
+    "pickup"
+  ]).default("delivery"),
+
+  deliveryService: z.enum([
+    "standard",
+    "express"
+  ]).optional().default("standard"),
+
   deliveryAddress: z.string().optional().default(""),
   deliveryDate: z.string().optional().default(""),
   deliveryIntervalId: z.string()
@@ -1237,11 +1246,43 @@ export async function publicRoutes(app: FastifyInstance) {
         LIMIT 20
       `;
 
+      const telegramRows =
+        await client<{
+          telegram_id: string;
+          notifications_enabled: boolean;
+        }[]>`
+          SELECT
+            telegram_id,
+            notifications_enabled
+          FROM telegram_accounts
+          WHERE customer_id =
+              ${session.customer_id}
+            AND is_active = true
+          ORDER BY linked_at DESC
+          LIMIT 1
+        `;
+
+      const telegramAccount =
+        telegramRows[0] ?? null;
+
       return {
         ok: true,
         customer: customerRows[0],
         orders,
-        bonuses
+        bonuses,
+
+        telegram: {
+          connected:
+            Boolean(
+              telegramAccount
+                ?.telegram_id
+            ),
+
+          notificationsEnabled:
+            telegramAccount
+              ?.notifications_enabled
+            ?? false
+        }
       };
     } finally {
       await client.end();
@@ -1376,6 +1417,50 @@ export async function publicRoutes(app: FastifyInstance) {
         return reply.status(401).send({
           ok: false,
           message: "Сессия истекла"
+        });
+      }
+
+      const existingTelegramRows =
+        await client<{
+          telegram_id: string;
+        }[]>`
+          SELECT telegram_id
+          FROM telegram_accounts
+          WHERE shop_id =
+              ${session.shop_id}
+            AND customer_id =
+              ${session.customer_id}
+            AND is_active = true
+          ORDER BY linked_at DESC
+          LIMIT 1
+        `;
+
+      if (
+        existingTelegramRows[0]
+          ?.telegram_id
+      ) {
+        await client`
+          UPDATE customer_link_tokens
+          SET
+            status = 'cancelled',
+            updated_at = NOW()
+          WHERE shop_id =
+              ${session.shop_id}
+            AND customer_id =
+              ${session.customer_id}
+            AND provider = 'telegram'
+            AND purpose =
+              'connect_channel'
+            AND status = 'pending'
+            AND consumed_at IS NULL
+        `;
+
+        return reply.status(409).send({
+          ok: false,
+          code:
+            "telegram_already_connected",
+          message:
+            "Telegram уже подключён"
         });
       }
 
@@ -1802,19 +1887,138 @@ export async function publicRoutes(app: FastifyInstance) {
         return sum + Number(product?.price ?? 0) * item.quantity;
       }, 0);
 
+      type DeliveryZoneSnapshot = {
+        id: string;
+        name: string;
+        price: number;
+        free_from_amount: number | null;
+        is_express_available: boolean;
+        express_price: number | null;
+      };
+
+      let selectedDeliveryZone:
+        DeliveryZoneSnapshot | null =
+          null;
+
       let deliveryPrice = 0;
 
-      if (body.deliveryZoneId) {
-        const zoneRows = await client<{ price: number }[]>`
-          SELECT price
-          FROM delivery_zones
-          WHERE shop_id = ${shop.id}
-            AND id = ${body.deliveryZoneId}
-            AND is_active = true
-          LIMIT 1
-        `;
+      let deliveryTariffName =
+        body.deliveryType === "pickup"
+          ? "Самовывоз"
+          : "Обычная доставка";
 
-        deliveryPrice = Number(zoneRows[0]?.price ?? 0);
+      let deliveryIsExpress = false;
+
+      let deliveryFreeThresholdApplied =
+        false;
+
+      if (
+        body.deliveryType
+        === "delivery"
+      ) {
+        if (!body.deliveryZoneId) {
+          throw new HttpError(
+            400,
+            "Выберите зону доставки"
+          );
+        }
+
+        const zoneRows =
+          await client<
+            DeliveryZoneSnapshot[]
+          >`
+            SELECT
+              id,
+              name,
+              price,
+              free_from_amount,
+              is_express_available,
+              express_price
+            FROM delivery_zones
+            WHERE shop_id = ${shop.id}
+              AND id =
+                ${body.deliveryZoneId}
+              AND is_active = true
+              AND LOWER(BTRIM(name))
+                <> 'самовывоз'
+            LIMIT 1
+          `;
+
+        const zone =
+          zoneRows[0];
+
+        if (!zone) {
+          throw new HttpError(
+            400,
+            "Зона доставки недоступна"
+          );
+        }
+
+        selectedDeliveryZone = zone;
+
+        const basePrice =
+          Math.max(
+            0,
+            Number(zone.price || 0)
+          );
+
+        const freeFromAmount =
+          Math.max(
+            0,
+            Number(
+              zone.free_from_amount
+              || 0
+            )
+          );
+
+        const expressPrice =
+          Math.max(
+            0,
+            Number(
+              zone.express_price
+              || 0
+            )
+          );
+
+        deliveryIsExpress =
+          body.deliveryService
+          === "express";
+
+        if (deliveryIsExpress) {
+          if (
+            !zone.is_express_available
+            || expressPrice <= 0
+          ) {
+            throw new HttpError(
+              400,
+              "Срочная доставка недоступна для выбранной зоны"
+            );
+          }
+
+          deliveryPrice =
+            expressPrice;
+
+          deliveryTariffName =
+            "Срочная доставка";
+        } else if (
+          freeFromAmount > 0
+          && subtotalAmount
+            >= freeFromAmount
+        ) {
+          deliveryPrice = 0;
+
+          deliveryTariffName =
+            "Бесплатная доставка";
+
+          deliveryFreeThresholdApplied =
+            true;
+        } else {
+          deliveryPrice =
+            basePrice;
+
+          deliveryTariffName =
+            "Обычная доставка";
+        }
       }
 
       let selectedDeliveryInterval:
@@ -2081,7 +2285,72 @@ export async function publicRoutes(app: FastifyInstance) {
           0,
           ${totalAmount},
           ${trackingToken},
-          ${JSON.stringify({ promoCode: promoCode || null })},
+          ${JSON.stringify({
+            promoCode:
+              promoCode || null,
+
+            delivery: {
+              calculationVersion: 1,
+
+              service:
+                body.deliveryType
+                === "pickup"
+                  ? "pickup"
+                  : deliveryIsExpress
+                    ? "express"
+                    : "standard",
+
+              isExpress:
+                deliveryIsExpress,
+
+              tariffName:
+                deliveryTariffName,
+
+              zoneId:
+                selectedDeliveryZone?.id
+                ?? null,
+
+              zoneName:
+                selectedDeliveryZone?.name
+                ?? null,
+
+              basePrice:
+                selectedDeliveryZone
+                  ? Number(
+                      selectedDeliveryZone
+                        .price
+                      || 0
+                    )
+                  : 0,
+
+              expressPrice:
+                selectedDeliveryZone
+                  ? Number(
+                      selectedDeliveryZone
+                        .express_price
+                      || 0
+                    )
+                  : 0,
+
+              freeFromAmount:
+                selectedDeliveryZone
+                  ? Number(
+                      selectedDeliveryZone
+                        .free_from_amount
+                      || 0
+                    )
+                  : 0,
+
+              freeThresholdApplied:
+                deliveryFreeThresholdApplied,
+
+              appliedPrice:
+                deliveryPrice,
+
+              calculatedFromSubtotal:
+                subtotalAmount
+            }
+          })},
           NOW(),
           NOW()
         )
@@ -2206,8 +2475,31 @@ export async function publicRoutes(app: FastifyInstance) {
               totalAmount,
               discountTotal,
               bonusSpent,
-              deliveryType: body.deliveryType,
-              deliveryDate: body.deliveryDate || null,
+              deliveryType:
+                body.deliveryType,
+
+              deliveryService:
+                body.deliveryType
+                === "pickup"
+                  ? "pickup"
+                  : deliveryIsExpress
+                    ? "express"
+                    : "standard",
+
+              deliveryIsExpress,
+              deliveryTariffName,
+              deliveryPrice,
+
+              deliveryZoneName:
+                selectedDeliveryZone?.name
+                ?? null,
+
+              deliveryIntervalName:
+                selectedDeliveryInterval?.name
+                ?? null,
+
+              deliveryDate:
+                body.deliveryDate || null,
               trackingToken,
               trackingUrl: `/order/track/${trackingToken}`
             })},
@@ -2246,8 +2538,31 @@ export async function publicRoutes(app: FastifyInstance) {
               totalAmount,
               discountTotal,
               bonusSpent,
-              deliveryType: body.deliveryType,
-              deliveryDate: body.deliveryDate || null,
+              deliveryType:
+                body.deliveryType,
+
+              deliveryService:
+                body.deliveryType
+                === "pickup"
+                  ? "pickup"
+                  : deliveryIsExpress
+                    ? "express"
+                    : "standard",
+
+              deliveryIsExpress,
+              deliveryTariffName,
+              deliveryPrice,
+
+              deliveryZoneName:
+                selectedDeliveryZone?.name
+                ?? null,
+
+              deliveryIntervalName:
+                selectedDeliveryInterval?.name
+                ?? null,
+
+              deliveryDate:
+                body.deliveryDate || null,
               trackingToken,
               trackingUrl: `/order/track/${trackingToken}`
             })} AS jsonb),
@@ -2265,30 +2580,80 @@ export async function publicRoutes(app: FastifyInstance) {
 
       await client`
         UPDATE customer_link_tokens
-        SET status = 'cancelled',
-            updated_at = NOW()
+        SET
+          status = 'cancelled',
+          updated_at = NOW()
         WHERE shop_id = ${shop.id}
-          AND customer_id = ${customer.id}
+          AND customer_id =
+            ${customer.id}
           AND provider = 'telegram'
-          AND purpose = 'connect_channel'
+          AND purpose =
+            'connect_channel'
           AND status = 'pending'
           AND consumed_at IS NULL
       `;
 
-      const telegramLinkCode = createTelegramLinkCode();
+      const linkedTelegramRows =
+        await client<{
+          telegram_id: string;
+        }[]>`
+          SELECT telegram_id
+          FROM telegram_accounts
+          WHERE shop_id = ${shop.id}
+            AND customer_id =
+              ${customer.id}
+            AND is_active = true
+          ORDER BY linked_at DESC
+          LIMIT 1
+        `;
 
-      await client`
-        INSERT INTO customer_link_tokens (
-          shop_id, customer_id, order_id, provider, purpose,
-          token, status, expires_at, metadata, created_at, updated_at
-        )
-        VALUES (
-          ${shop.id}, ${customer.id}, ${order.id}, 'telegram', 'connect_channel',
-          ${telegramLinkCode}, 'pending', NOW() + INTERVAL '30 minutes',
-          ${JSON.stringify({ source: "site_order_success", orderNumber, mode: "code" })},
-          NOW(), NOW()
-        )
-      `;
+      const telegramAlreadyConnected =
+        Boolean(
+          linkedTelegramRows[0]
+            ?.telegram_id
+        );
+
+      let telegramLinkCode:
+        string | null = null;
+
+      if (!telegramAlreadyConnected) {
+        telegramLinkCode =
+          createTelegramLinkCode();
+
+        await client`
+          INSERT INTO customer_link_tokens (
+            shop_id,
+            customer_id,
+            order_id,
+            provider,
+            purpose,
+            token,
+            status,
+            expires_at,
+            metadata,
+            created_at,
+            updated_at
+          )
+          VALUES (
+            ${shop.id},
+            ${customer.id},
+            ${order.id},
+            'telegram',
+            'connect_channel',
+            ${telegramLinkCode},
+            'pending',
+            NOW() + INTERVAL '30 minutes',
+            ${JSON.stringify({
+              source:
+                "site_order_success",
+              orderNumber,
+              mode: "code"
+            })},
+            NOW(),
+            NOW()
+          )
+        `;
+      }
 
       const customerSessionToken = createSessionToken();
 
@@ -2325,6 +2690,9 @@ export async function publicRoutes(app: FastifyInstance) {
           discountTotal,
           bonusSpent,
           promoCode,
+          deliveryPrice,
+          deliveryTariffName,
+          deliveryIsExpress,
           trackingToken,
           telegramLinkCode
         }

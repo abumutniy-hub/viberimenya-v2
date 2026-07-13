@@ -104,6 +104,16 @@ export function AccountClient() {
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
   const [bonuses, setBonuses] = useState<Bonus[]>([]);
+
+  const [
+    telegramConnected,
+    setTelegramConnected
+  ] = useState(false);
+
+  const [
+    telegramNotificationsEnabled,
+    setTelegramNotificationsEnabled
+  ] = useState(false);
   const [telegramCode, setTelegramCode] = useState("");
 
   async function loadAccount() {
@@ -119,6 +129,17 @@ export function AccountClient() {
         setCustomer(data.customer);
         setOrders(data.orders || []);
         setBonuses(data.bonuses || []);
+
+        setTelegramConnected(
+          data.telegram?.connected
+          === true
+        );
+
+        setTelegramNotificationsEnabled(
+          data.telegram
+            ?.notificationsEnabled
+          === true
+        );
       } else {
         setCustomer(null);
       }
@@ -219,6 +240,8 @@ export function AccountClient() {
     setCustomer(null);
     setOrders([]);
     setBonuses([]);
+    setTelegramConnected(false);
+    setTelegramNotificationsEnabled(false);
     setCode("");
     setMessage("");
     setStep("phone");
@@ -343,7 +366,29 @@ export function AccountClient() {
       </section>
 
 
-      <section className="account-card">
+            {telegramConnected ? (
+        <section className="account-card account-telegram-card is-connected">
+          <div className="account-telegram-connected">
+            <div className="account-telegram-connected-icon">
+              ✓
+            </div>
+
+            <div>
+              <h2>Telegram подключён</h2>
+
+              <p>
+                Уведомления по заказам
+                {
+                  telegramNotificationsEnabled
+                    ? " включены."
+                    : " сейчас выключены."
+                }
+              </p>
+            </div>
+          </div>
+        </section>
+      ) : (
+<section className="account-card">
         <h2>Telegram</h2>
         <p>Подключите Telegram, чтобы получать уведомления по заказам и быстро открывать личный кабинет.</p>
         <button type="button" onClick={createTelegramCode}>
@@ -357,6 +402,7 @@ export function AccountClient() {
           </div>
         ) : null}
       </section>
+      )}
 
       <section className="account-card">
         <h2>Мои заказы</h2>

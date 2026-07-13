@@ -17,8 +17,19 @@ type CartItem = {
 type StoredCartItem = Record<string, unknown>;
 
 type DeliveryData = {
-  zones: Array<{ id: string; name: string; price: number }>;
-  intervals: Array<{ id: string; name: string }>;
+  zones: Array<{
+    id: string;
+    name: string;
+    price: number;
+    freeFromAmount: number | null;
+    isExpressAvailable: boolean;
+    expressPrice: number | null;
+  }>;
+
+  intervals: Array<{
+    id: string;
+    name: string;
+  }>;
 };
 
 type AccountCustomer = {
@@ -281,6 +292,14 @@ export function CartClient() {
   const [deliveryType, setDeliveryType] = useState<"delivery" | "pickup">("delivery");
   const [zoneId, setZoneId] = useState("");
   const [intervalId, setIntervalId] = useState("");
+
+  const [
+    deliveryService,
+    setDeliveryService
+  ] = useState<
+    "standard" | "express"
+  >("standard");
+
   const [promoCode, setPromoCode] = useState("");
   const [promoMessage, setPromoMessage] = useState("");
   const [discountTotal, setDiscountTotal] = useState(0);
@@ -344,10 +363,102 @@ export function CartClient() {
     [items]
   );
 
-  const isDelivery = deliveryType === "delivery";
-  const deliveryPrice = isDelivery ? Number(delivery.zones.find((zone) => zone.id === zoneId)?.price ?? 0) : 0;
-  const amountBeforeBonus = Math.max(0, subtotal + deliveryPrice - discountTotal);
-  const total = Math.max(0, amountBeforeBonus - bonusToSpend);
+  const isDelivery =
+    deliveryType === "delivery";
+
+  const selectedZone =
+    delivery.zones.find(
+      (zone) =>
+        zone.id === zoneId
+    ) ?? null;
+
+  const deliveryIsExpress = (
+    isDelivery
+    && deliveryService === "express"
+    && selectedZone?.isExpressAvailable
+      === true
+    && Number(
+      selectedZone.expressPrice ?? 0
+    ) > 0
+  );
+
+  const freeFromAmount =
+    Math.max(
+      0,
+      Number(
+        selectedZone?.freeFromAmount
+        ?? 0
+      )
+    );
+
+  const standardDeliveryQualifiesForFree = (
+    isDelivery
+    && Boolean(selectedZone)
+    && freeFromAmount > 0
+    && subtotal >= freeFromAmount
+  );
+
+  const standardDeliveryIsFree = (
+    !deliveryIsExpress
+    && standardDeliveryQualifiesForFree
+  );
+
+  const deliveryPrice =
+    !isDelivery || !selectedZone
+      ? 0
+      : deliveryIsExpress
+        ? Math.max(
+            0,
+            Number(
+              selectedZone.expressPrice
+              ?? 0
+            )
+          )
+        : standardDeliveryIsFree
+          ? 0
+          : Math.max(
+              0,
+              Number(
+                selectedZone.price
+                ?? 0
+              )
+            );
+
+  const deliveryTariffLabel =
+    !isDelivery
+      ? "Самовывоз"
+      : deliveryIsExpress
+        ? "Срочная доставка"
+        : standardDeliveryIsFree
+          ? "Бесплатная доставка"
+          : "Обычная доставка";
+
+  const remainingForFreeDelivery = (
+    isDelivery
+    && selectedZone
+    && !deliveryIsExpress
+    && freeFromAmount > 0
+  )
+    ? Math.max(
+        0,
+        freeFromAmount - subtotal
+      )
+    : 0;
+
+  const amountBeforeBonus =
+    Math.max(
+      0,
+      subtotal
+      + deliveryPrice
+      - discountTotal
+    );
+
+  const total =
+    Math.max(
+      0,
+      amountBeforeBonus
+      - bonusToSpend
+    );
 
   function resetCartAdjustments() {
     setDiscountTotal(0);
@@ -486,7 +597,18 @@ export function CartClient() {
           recipientName: form.get("recipientName"),
           recipientPhone: form.get("recipientPhone"),
           deliveryType,
-          deliveryAddress: isDelivery ? form.get("deliveryAddress") : "",
+
+          deliveryService:
+            isDelivery
+              ? deliveryService
+              : "standard",
+
+          deliveryAddress:
+            isDelivery
+              ? form.get(
+                  "deliveryAddress"
+                )
+              : "",
           deliveryDate:
             isDelivery
               ? form.get("deliveryDate")
@@ -669,14 +791,48 @@ export function CartClient() {
 
 
         {isDelivery ? (
-          <div className="checkout-delivery">
-            <span>Доставка</span>
-            <strong>{deliveryPrice > 0 ? money(deliveryPrice) : "Выберите зону"}</strong>
+          <div
+            className={[
+              "checkout-delivery",
+              deliveryIsExpress
+                ? "express"
+                : "",
+              standardDeliveryIsFree
+                ? "free"
+                : ""
+            ].filter(Boolean).join(" ")}
+          >
+            <div>
+              <span>
+                {deliveryTariffLabel}
+              </span>
+
+              {selectedZone ? (
+                <small>
+                  {selectedZone.name}
+                </small>
+              ) : null}
+            </div>
+
+            <strong>
+              {!selectedZone
+                ? "Выберите зону"
+                : deliveryPrice > 0
+                  ? money(deliveryPrice)
+                  : "Бесплатно"}
+            </strong>
           </div>
         ) : (
-          <div className="checkout-delivery">
-            <span>Самовывоз</span>
-            <strong>0 ₽</strong>
+          <div className="checkout-delivery free">
+            <div>
+              <span>Самовывоз</span>
+
+              <small>
+                Получение в магазине
+              </small>
+            </div>
+
+            <strong>Бесплатно</strong>
           </div>
         )}
 
@@ -767,6 +923,9 @@ export function CartClient() {
               if (nextDeliveryType === "pickup") {
                 setZoneId("");
                 setIntervalId("");
+                setDeliveryService(
+                  "standard"
+                );
               }
               resetCartAdjustments();
             }}
@@ -780,22 +939,171 @@ export function CartClient() {
           <>
             <label>
               <span>Зона доставки</span>
+
               <select
                 name="deliveryZoneId"
                 value={zoneId}
                 onChange={(event) => {
-                  setZoneId(event.target.value);
+                  setZoneId(
+                    event.target.value
+                  );
+
+                  setDeliveryService(
+                    "standard"
+                  );
+
                   resetCartAdjustments();
                 }}
+                required
               >
-                <option value="">Выберите зону</option>
-                {delivery.zones.map((zone) => (
-                  <option key={zone.id} value={zone.id}>{zone.name} — {money(zone.price)}</option>
-                ))}
+                <option value="">
+                  Выберите зону
+                </option>
+
+                {delivery.zones.map(
+                  (zone) => (
+                    <option
+                      key={zone.id}
+                      value={zone.id}
+                    >
+                      {zone.name}
+                    </option>
+                  )
+                )}
               </select>
             </label>
 
-            <label><span>Дата доставки</span><input name="deliveryDate" type="date" /></label>
+            {selectedZone ? (
+              <fieldset className="checkout-delivery-service">
+                <legend>
+                  Тариф доставки
+                </legend>
+
+                <label
+                  className={[
+                    "checkout-delivery-service-option",
+                    deliveryService
+                      === "standard"
+                      ? "active"
+                      : ""
+                  ].filter(Boolean).join(" ")}
+                >
+                  <input
+                    type="radio"
+                    name="deliveryService"
+                    value="standard"
+                    checked={
+                      deliveryService
+                        === "standard"
+                    }
+                    onChange={() => {
+                      setDeliveryService(
+                        "standard"
+                      );
+
+                      resetCartAdjustments();
+                    }}
+                  />
+
+                  <span>
+                    <strong>
+                      Обычная доставка
+                    </strong>
+
+                    <small>
+                      {standardDeliveryQualifiesForFree
+                        ? "Бесплатно"
+                        : money(
+                            selectedZone.price
+                          )}
+                    </small>
+                  </span>
+                </label>
+
+                {selectedZone
+                  .isExpressAvailable
+                  && Number(
+                    selectedZone
+                      .expressPrice
+                    ?? 0
+                  ) > 0 ? (
+                  <label
+                    className={[
+                      "checkout-delivery-service-option",
+                      deliveryService
+                        === "express"
+                        ? "active express"
+                        : ""
+                    ].filter(Boolean).join(" ")}
+                  >
+                    <input
+                      type="radio"
+                      name="deliveryService"
+                      value="express"
+                      checked={
+                        deliveryService
+                          === "express"
+                      }
+                      onChange={() => {
+                        setDeliveryService(
+                          "express"
+                        );
+
+                        resetCartAdjustments();
+                      }}
+                    />
+
+                    <span>
+                      <strong>
+                        Срочная доставка
+                      </strong>
+
+                      <small>
+                        {money(
+                          Number(
+                            selectedZone
+                              .expressPrice
+                            ?? 0
+                          )
+                        )}
+                      </small>
+                    </span>
+                  </label>
+                ) : null}
+
+                {deliveryIsExpress ? (
+                  <p className="checkout-delivery-service-note express">
+                    Срочный тариф оплачивается
+                    отдельно и не становится
+                    бесплатным от суммы заказа.
+                  </p>
+                ) : freeFromAmount > 0 ? (
+                  <p
+                    className={[
+                      "checkout-delivery-service-note",
+                      standardDeliveryIsFree
+                        ? "success"
+                        : ""
+                    ].filter(Boolean).join(" ")}
+                  >
+                    {remainingForFreeDelivery > 0
+                      ? `До бесплатной доставки осталось ${money(
+                          remainingForFreeDelivery
+                        )}`
+                      : "Бесплатная доставка активирована"}
+                  </p>
+                ) : null}
+              </fieldset>
+            ) : null}
+
+            <label>
+              <span>Дата доставки</span>
+
+              <input
+                name="deliveryDate"
+                type="date"
+              />
+            </label>
 
             <label>
               <span>Интервал</span>
