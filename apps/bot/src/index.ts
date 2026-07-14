@@ -4051,276 +4051,690 @@ async function handleFloristReadyOrder(callbackQuery: TelegramCallbackQuery, ord
   );
 }
 
-async function handleCourierDeliveryOrders(chatId: number) {
-  const replyMarkup = await mainKeyboardForChat(chatId);
-  const profile = await getTelegramProfile(String(chatId));
+/* ЕДИНАЯ КАРТОЧКА КУРЬЕРА 6.6.2 */
+type CourierOrderCard = {
+  id: string;
+  order_number: string;
+  status: string;
+  courier_id: string | null;
+  delivery_date: string | null;
+  delivery_interval_name: string | null;
+  delivery_address_text: string | null;
+  delivery_comment: string | null;
+  recipient_name: string | null;
+  recipient_phone: string | null;
+  delivery_price: number;
+  delivery_is_express: boolean;
+  delivery_tariff_name: string | null;
+  delivery_zone_name: string | null;
+  courier_name: string | null;
+  created_at: string;
+};
+
+async function loadCourierOrderCard(
+  shopId: string,
+  orderId: string
+): Promise<CourierOrderCard | null> {
+  const rows =
+    await sql<CourierOrderCard[]>`
+      SELECT
+        o.id,
+        o.order_number,
+        o.status,
+        o.courier_id,
+        o.delivery_date,
+        di.name
+          AS delivery_interval_name,
+        o.delivery_address_text,
+        o.delivery_comment,
+        o.recipient_name,
+        o.recipient_phone,
+        o.delivery_price,
+
+        CASE
+          WHEN LOWER(
+            COALESCE(
+              o.metadata
+                -> 'delivery'
+                ->> 'isExpress',
+              'false'
+            )
+          ) = 'true'
+            THEN true
+          ELSE false
+        END AS delivery_is_express,
+
+        COALESCE(
+          NULLIF(
+            o.metadata
+              -> 'delivery'
+              ->> 'tariffName',
+            ''
+          ),
+          CASE
+            WHEN LOWER(
+              COALESCE(
+                o.metadata
+                  -> 'delivery'
+                  ->> 'isExpress',
+                'false'
+              )
+            ) = 'true'
+              THEN 'Срочная доставка'
+            ELSE 'Обычная доставка'
+          END
+        ) AS delivery_tariff_name,
+
+        COALESCE(
+          NULLIF(
+            o.metadata
+              -> 'delivery'
+              ->> 'zoneName',
+            ''
+          ),
+          dz.name
+        ) AS delivery_zone_name,
+
+        courier.name
+          AS courier_name,
+
+        o.created_at
+
+      FROM orders o
+
+      LEFT JOIN delivery_intervals di
+        ON di.id =
+          o.delivery_interval_id
+       AND di.shop_id =
+          o.shop_id
+
+      LEFT JOIN delivery_zones dz
+        ON dz.id =
+          o.delivery_zone_id
+       AND dz.shop_id =
+          o.shop_id
+
+      LEFT JOIN users courier
+        ON courier.id =
+          o.courier_id
+
+      WHERE o.shop_id = ${shopId}
+        AND o.id = ${orderId}
+      LIMIT 1
+    `;
+
+  return rows[0] ?? null;
+}
+
+function courierWhatsappDigits(
+  value: string | null
+) {
+  let digits =
+    String(value || "")
+      .replace(/\D/g, "");
+
+  if (
+    digits.length === 11
+    && digits.startsWith("8")
+  ) {
+    digits =
+      "7" + digits.slice(1);
+  }
+
+  return digits.length >= 10
+    ? digits
+    : "";
+}
+
+function courierOrderButtonRows(
+  order: CourierOrderCard
+): TelegramInlineKeyboardButton[][] {
+  const rows:
+    TelegramInlineKeyboardButton[][] =
+    [];
+
+  if (order.status === "ready") {
+    rows.push([
+      {
+        text: "🚚 Принять доставку",
+        callback_data:
+          `courier:accept:${order.id}`
+      }
+    ]);
+  }
+
+  if (
+    order.status
+    === "assigned_courier"
+  ) {
+    rows.push([
+      {
+        text: "🚗 Выехал",
+        callback_data:
+          `courier:start:${order.id}`
+      }
+    ]);
+  }
+
+  if (
+    order.status
+    === "delivering"
+  ) {
+    rows.push([
+      {
+        text: "✅ Доставлено",
+        callback_data:
+          `courier:delivered:${order.id}`
+      }
+    ]);
+  }
+
+  const address =
+    String(
+      order.delivery_address_text
+      || ""
+    ).trim();
+
+  if (address) {
+    const encodedAddress =
+      encodeURIComponent(address);
+
+    rows.push([
+      {
+        text: "🗺 Яндекс",
+        url:
+          `https://yandex.ru/maps/?text=${encodedAddress}`
+      },
+      {
+        text: "📍 Google",
+        url:
+          "https://www.google.com/maps/"
+          + "search/?api=1&query="
+          + encodedAddress
+      }
+    ]);
+  }
+
+  const whatsappDigits =
+    courierWhatsappDigits(
+      order.recipient_phone
+    );
+
+  if (whatsappDigits) {
+    rows.push([
+      {
+        text: "💬 WhatsApp",
+        url:
+          `https://wa.me/${whatsappDigits}`
+      }
+    ]);
+  }
+
+  rows.push([
+    {
+      text: "🔄 Обновить доставки",
+      callback_data: "courier:list"
+    }
+  ]);
+
+  return rows;
+}
+
+function courierOrderCardText(
+  order: CourierOrderCard,
+  showCourierName = false
+) {
+  const statusLabels:
+    Record<string, string> = {
+      ready:
+        "Ожидает принятия",
+      assigned_courier:
+        "Принят курьером",
+      delivering:
+        "Курьер в пути",
+      delivered:
+        "Доставлен"
+    };
+
+  const isExpress =
+    order.delivery_is_express;
+
+  const interval =
+    String(
+      order.delivery_interval_name
+      || ""
+    ).trim();
+
+  const comment =
+    String(
+      order.delivery_comment
+      || ""
+    ).trim();
+
+  const visibleComment =
+    comment
+    && comment !== interval
+      ? comment
+      : "";
+
+  return [
+    isExpress
+      ? `🔴 СРОЧНО · ${order.order_number}`
+      : `📦 ${order.order_number}`,
+
+    "",
+
+    `Статус: ${
+      statusLabels[order.status]
+      || order.status
+    }`,
+
+    `Тариф: ${
+      order.delivery_tariff_name
+      || (
+        isExpress
+          ? "Срочная доставка"
+          : "Обычная доставка"
+      )
+    }`,
+
+    `Стоимость доставки: ${
+      Number(
+        order.delivery_price || 0
+      ) > 0
+        ? money(
+            order.delivery_price
+          )
+        : "Бесплатно"
+    }`,
+
+    order.delivery_zone_name
+      ? `Зона: ${
+          order.delivery_zone_name
+        }`
+      : "",
+
+    `Дата: ${
+      order.delivery_date
+        ? shortDateText(
+            order.delivery_date
+          )
+        : "не указана"
+    }`,
+
+    interval
+      ? `Интервал: ${interval}`
+      : "",
+
+    order.recipient_name
+      ? `Получатель: ${
+          order.recipient_name
+        }`
+      : "",
+
+    order.recipient_phone
+      ? `Телефон: ${
+          order.recipient_phone
+        }`
+      : "",
+
+    order.delivery_address_text
+      ? `Адрес: ${
+          order.delivery_address_text
+        }`
+      : "Адрес: не указан",
+
+    visibleComment
+      ? `Комментарий: ${
+          visibleComment
+        }`
+      : "",
+
+    showCourierName
+    && order.courier_name
+      ? `Курьер: ${
+          order.courier_name
+        }`
+      : ""
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+async function sendCourierOrderCard(
+  chatId: number,
+  order: CourierOrderCard,
+  showCourierName = false
+) {
+  await sendTelegramMessage(
+    chatId,
+    courierOrderCardText(
+      order,
+      showCourierName
+    ),
+    {
+      reply_markup:
+        inlineKeyboard(
+          courierOrderButtonRows(order)
+        )
+    }
+  );
+}
+
+/* КУРЬЕРСКИЙ РАБОЧИЙ ЭКРАН 6.6.1 */
+async function handleCourierDeliveryOrders(
+  chatId: number
+) {
+  const replyMarkup =
+    await mainKeyboardForChat(chatId);
+
+  const profile =
+    await getTelegramProfile(
+      String(chatId)
+    );
 
   if (!profile?.user_id) {
-    await sendTelegramMessage(chatId, "🚚 Раздел доставки доступен только сотруднику.", {
-      reply_markup: replyMarkup
-    });
+    await sendTelegramMessage(
+      chatId,
+      "🚚 Раздел доставки доступен только сотруднику.",
+      {
+        reply_markup: replyMarkup
+      }
+    );
+
     return;
   }
 
-  if (!["owner", "admin", "courier"].includes(profile.role || "")) {
-    await sendTelegramMessage(chatId, "🚚 Раздел доставки доступен только курьеру.", {
-      reply_markup: replyMarkup
-    });
+  if (
+    ![
+      "owner",
+      "admin",
+      "courier"
+    ].includes(
+      profile.role || ""
+    )
+  ) {
+    await sendTelegramMessage(
+      chatId,
+      "🚚 Раздел доставки доступен только курьеру.",
+      {
+        reply_markup: replyMarkup
+      }
+    );
+
     return;
   }
 
-  const orders = await sql<{
+  const canSeeAllDeliveries =
+    [
+      "owner",
+      "admin"
+    ].includes(
+      profile.role || ""
+    );
+
+  const rows = await sql<{
     id: string;
-    order_number: string;
     status: string;
-    delivery_date: string | null;
-    delivery_interval_name: string | null;
-    delivery_address_text: string | null;
-    delivery_comment: string | null;
-    recipient_name: string | null;
-    recipient_phone: string | null;
-    created_at: string;
+    delivery_is_express: boolean;
   }[]>`
     SELECT
       o.id,
-      o.order_number,
       o.status,
-      o.delivery_date,
-      di.name AS delivery_interval_name,
-      o.delivery_address_text,
-      o.delivery_comment,
-      o.recipient_name,
-      o.recipient_phone,
-      o.created_at
+
+      CASE
+        WHEN LOWER(
+          COALESCE(
+            o.metadata
+              -> 'delivery'
+              ->> 'isExpress',
+            'false'
+          )
+        ) = 'true'
+          THEN true
+        ELSE false
+      END AS delivery_is_express
+
     FROM orders o
-    LEFT JOIN delivery_intervals di
-      ON di.id = o.delivery_interval_id
-     AND di.shop_id = o.shop_id
-    WHERE o.shop_id = ${profile.shop_id}
-      AND o.courier_id = ${profile.user_id}
-      AND o.status IN ('ready', 'assigned_courier', 'delivering')
+
+    WHERE o.shop_id =
+        ${profile.shop_id}
+
+      AND o.delivery_type =
+        'delivery'
+
+      AND o.courier_id
+        IS NOT NULL
+
+      AND (
+        ${canSeeAllDeliveries}::boolean
+        = true
+
+        OR o.courier_id =
+          ${profile.user_id}
+      )
+
+      AND o.status IN (
+        'ready',
+        'assigned_courier',
+        'delivering'
+      )
+
     ORDER BY
-      CASE o.status
-        WHEN 'ready' THEN 1
-        WHEN 'assigned_courier' THEN 2
-        WHEN 'delivering' THEN 3
-        ELSE 4
+      CASE
+        WHEN LOWER(
+          COALESCE(
+            o.metadata
+              -> 'delivery'
+              ->> 'isExpress',
+            'false'
+          )
+        ) = 'true'
+          THEN 0
+        ELSE 1
       END,
-      o.delivery_date NULLS LAST,
-      o.created_at DESC
-    LIMIT 10
+
+      CASE o.status
+        WHEN 'delivering'
+          THEN 0
+        WHEN 'assigned_courier'
+          THEN 1
+        WHEN 'ready'
+          THEN 2
+        ELSE 10
+      END,
+
+      COALESCE(
+        o.delivery_date,
+        o.created_at
+      ),
+
+      o.created_at
+
+    LIMIT 20
   `;
 
-  if (!orders.length) {
+  if (rows.length === 0) {
     await sendTelegramMessage(
       chatId,
       [
-        "🚚 Доставка",
+        "🚚 Активные доставки",
         "",
-        "У вас пока нет активных доставок."
+        "Назначенных доставок сейчас нет.",
+        "",
+        "Новые заказы появятся здесь после назначения курьера."
       ].join("\n"),
       {
         reply_markup: replyMarkup
       }
     );
+
     return;
   }
+
+  const expressCount =
+    rows.filter(
+      row =>
+        row.delivery_is_express
+    ).length;
+
+  const deliveringCount =
+    rows.filter(
+      row =>
+        row.status === "delivering"
+    ).length;
 
   await sendTelegramMessage(
     chatId,
     [
-      "🚚 Доставка",
+      "🚚 Активные доставки",
       "",
-      `Активных доставок: ${orders.length}`,
-      "Ниже отправляю карточки заказов."
+      `Всего: ${rows.length}`,
+      `🔴 Срочных: ${expressCount}`,
+      `🚗 В пути: ${deliveringCount}`,
+      "",
+      canSeeAllDeliveries
+        ? "Показаны доставки всех курьеров."
+        : "Сначала показаны срочные и текущие доставки."
     ].join("\n"),
     {
       reply_markup: replyMarkup
     }
   );
 
-  for (const order of orders) {
-    const rows: TelegramInlineKeyboardButton[][] = [];
+  for (const row of rows) {
+    const order =
+      await loadCourierOrderCard(
+        profile.shop_id,
+        row.id
+      );
 
-    if (order.status === "ready") {
-      rows.push([
-        {
-          text: "🚚 Принять доставку",
-          callback_data: `courier:accept:${order.id}`
-        }
-      ]);
+    if (!order) {
+      continue;
     }
 
-    if (order.status === "assigned_courier") {
-      rows.push([
-        {
-          text: "🚗 Выехал",
-          callback_data: `courier:start:${order.id}`
-        }
-      ]);
-    }
-
-    if (order.status === "delivering") {
-      rows.push([
-        {
-          text: "✅ Доставлено",
-          callback_data: `courier:delivered:${order.id}`
-        }
-      ]);
-    }
-
-    const recipientPhone = normalizePhone(String(order.recipient_phone || ""));
-    const recipientPhoneDigits = phoneDigitsOnly(recipientPhone);
-
-    if (recipientPhoneDigits) {
-      rows.push([
-        {
-          text: "WhatsApp",
-          url: `https://wa.me/${recipientPhoneDigits}`
-        }
-      ]);
-    }
-
-    if (order.delivery_address_text) {
-      const encodedAddress = encodeURIComponent(order.delivery_address_text);
-
-      rows.push([
-        {
-          text: "Яндекс.Карты",
-          url: `https://yandex.ru/maps/?text=${encodedAddress}`
-        },
-        {
-          text: "Google Maps",
-          url: `https://www.google.com/maps/search/?api=1&query=${encodedAddress}`
-        }
-      ]);
-    }
-
-    rows.push([
-      {
-        text: "🔄 Обновить список",
-        callback_data: "courier:list"
-      }
-    ]);
-
-    const orderCardText = [
-      `Заказ ${order.order_number}`,
-      `Статус: ${orderStatusText(order.status)}`,
-      order.delivery_date ? `Дата: ${shortDateText(order.delivery_date)}` : "",
-      order.delivery_interval_name ? `Интервал: ${order.delivery_interval_name}` : "",
-      order.delivery_address_text ? `Адрес: ${order.delivery_address_text}` : "",
-      order.recipient_name ? `Получатель: ${order.recipient_name}` : "",
-      order.recipient_phone ? `Телефон: ${order.recipient_phone}` : "",
-      order.delivery_comment ? `Комментарий: ${order.delivery_comment}` : ""
-    ].filter(Boolean).join("\n");
-
-    try {
-      await sendTelegramMessage(chatId, orderCardText, {
-        reply_markup: inlineKeyboard(rows)
-      });
-    } catch (error) {
-      console.error(`[bot-worker] failed to send courier order card order=${order.id}`, error);
-
-      try {
-        await sendTelegramMessage(
-          chatId,
-          [
-            orderCardText,
-            "",
-            "Кнопки временно недоступны. Обновите раздел доставки через меню."
-          ].join("\n")
-        );
-      } catch (fallbackError) {
-        console.error(`[bot-worker] failed to send fallback courier order card order=${order.id}`, fallbackError);
-      }
-    }
+    await sendCourierOrderCard(
+      chatId,
+      order,
+      canSeeAllDeliveries
+    );
   }
 }
 
-async function handleCourierStartDelivery(callbackQuery: TelegramCallbackQuery, orderId: string) {
-  const message = callbackQuery.message;
+async function handleCourierStartDelivery(
+  callbackQuery: TelegramCallbackQuery,
+  orderId: string
+) {
+  const message =
+    callbackQuery.message;
 
-  if (!message || message.chat.type !== "private") {
-    await answerCallbackQuery(callbackQuery.id);
-    return;
-  }
-
-  const chatId = message.chat.id;
-  const profile = await getTelegramProfile(String(chatId));
-
-  if (!profile?.user_id) {
-    await answerCallbackQuery(callbackQuery.id, "Доступно только сотруднику");
-    return;
-  }
-
-  const orderRows = await sql<{
-    id: string;
-    order_number: string;
-    status: string;
-    courier_id: string | null;
-  }[]>`
-    SELECT id, order_number, status, courier_id
-    FROM orders
-    WHERE id = ${orderId}
-      AND shop_id = ${profile.shop_id}
-    LIMIT 1
-  `;
-
-  const order = orderRows[0];
-
-  if (!order) {
-    await answerCallbackQuery(callbackQuery.id, "Заказ не найден");
-    return;
-  }
-
-  if (order.courier_id !== profile.user_id) {
-    await answerCallbackQuery(callbackQuery.id, "Заказ назначен другому курьеру");
-    return;
-  }
-
-  if (order.status === "delivering") {
-    await answerCallbackQuery(callbackQuery.id, "Вы уже в пути");
-
-    await sendTelegramMessage(
-      chatId,
-      [
-        `🚗 Вы уже в пути по заказу ${order.order_number}`,
-        "",
-        "После вручения заказа нажмите «Доставлено»."
-      ].join("\n"),
-      {
-        reply_markup: inlineKeyboard([
-          [
-            {
-              text: "✅ Доставлено",
-              callback_data: `courier:delivered:${order.id}`
-            }
-          ],
-          [
-            {
-              text: "🔄 Обновить список",
-              callback_data: "courier:list"
-            }
-          ]
-        ])
-      }
+  if (
+    !message
+    || message.chat.type !== "private"
+  ) {
+    await answerCallbackQuery(
+      callbackQuery.id
     );
 
     return;
   }
 
-  if (order.status !== "assigned_courier") {
-    await answerCallbackQuery(callbackQuery.id, "Сначала примите доставку");
+  const chatId =
+    message.chat.id;
+
+  const profile =
+    await getTelegramProfile(
+      String(chatId)
+    );
+
+  if (!profile?.user_id) {
+    await answerCallbackQuery(
+      callbackQuery.id,
+      "Доступно только сотруднику"
+    );
+
     return;
   }
 
-  await sql`
-    UPDATE orders
-    SET status = 'delivering',
+  const order =
+    await loadCourierOrderCard(
+      profile.shop_id,
+      orderId
+    );
+
+  if (!order) {
+    await answerCallbackQuery(
+      callbackQuery.id,
+      "Заказ не найден"
+    );
+
+    return;
+  }
+
+  if (
+    order.courier_id
+    !== profile.user_id
+  ) {
+    await answerCallbackQuery(
+      callbackQuery.id,
+      "Заказ назначен другому курьеру"
+    );
+
+    return;
+  }
+
+  if (
+    order.status === "delivering"
+  ) {
+    await answerCallbackQuery(
+      callbackQuery.id,
+      "Вы уже в пути"
+    );
+
+    await sendCourierOrderCard(
+      chatId,
+      order
+    );
+
+    return;
+  }
+
+  if (
+    order.status
+    !== "assigned_courier"
+  ) {
+    await answerCallbackQuery(
+      callbackQuery.id,
+      "Сначала примите доставку"
+    );
+
+    return;
+  }
+
+  const updated =
+    await sql<{ id: string }[]>`
+      UPDATE orders
+      SET
+        status = 'delivering',
         updated_at = NOW()
-    WHERE id = ${order.id}
-      AND shop_id = ${profile.shop_id}
-  `;
+      WHERE id = ${order.id}
+        AND shop_id =
+          ${profile.shop_id}
+        AND courier_id =
+          ${profile.user_id}
+        AND status =
+          'assigned_courier'
+      RETURNING id
+    `;
+
+  if (!updated[0]) {
+    await answerCallbackQuery(
+      callbackQuery.id,
+      "Статус уже изменился"
+    );
+
+    return;
+  }
 
   await sql`
     INSERT INTO order_status_history (
@@ -4335,7 +4749,7 @@ async function handleCourierStartDelivery(callbackQuery: TelegramCallbackQuery, 
     VALUES (
       ${profile.shop_id},
       ${order.id},
-      ${order.status}::order_status,
+      'assigned_courier',
       'delivering',
       ${profile.user_id},
       'Курьер выехал на доставку через Telegram',
@@ -4344,100 +4758,141 @@ async function handleCourierStartDelivery(callbackQuery: TelegramCallbackQuery, 
   `;
 
   await queueCustomerOrderNotification({
-    shopId: profile.shop_id,
-    orderId: order.id,
-    type: "order_delivering",
-    status: "delivering"
+    shopId:
+      profile.shop_id,
+    orderId:
+      order.id,
+    type:
+      "order_delivering",
+    status:
+      "delivering"
   });
 
-  await answerCallbackQuery(callbackQuery.id, "Статус: в доставке");
-
-  await sendTelegramMessage(
-    chatId,
-    [
-      `🚗 Вы выехали по заказу ${order.order_number}`,
-      "",
-      "Статус в CRM изменён на «В доставке».",
-      "После вручения заказа нажмите «Доставлено»."
-    ].join("\n"),
-    {
-      reply_markup: inlineKeyboard([
-        [
-          {
-            text: "✅ Доставлено",
-            callback_data: `courier:delivered:${order.id}`
-          }
-        ],
-        [
-          {
-            text: "🔄 Обновить список",
-            callback_data: "courier:list"
-          }
-        ]
-      ])
-    }
+  await answerCallbackQuery(
+    callbackQuery.id,
+    "Статус: в доставке"
   );
+
+  const nextOrder =
+    await loadCourierOrderCard(
+      profile.shop_id,
+      order.id
+    );
+
+  if (nextOrder) {
+    await sendCourierOrderCard(
+      chatId,
+      nextOrder
+    );
+  }
 }
 
-async function handleCourierDeliveredOrder(callbackQuery: TelegramCallbackQuery, orderId: string) {
-  const message = callbackQuery.message;
+async function handleCourierDeliveredOrder(
+  callbackQuery: TelegramCallbackQuery,
+  orderId: string
+) {
+  const message =
+    callbackQuery.message;
 
-  if (!message || message.chat.type !== "private") {
-    await answerCallbackQuery(callbackQuery.id);
+  if (
+    !message
+    || message.chat.type !== "private"
+  ) {
+    await answerCallbackQuery(
+      callbackQuery.id
+    );
+
     return;
   }
 
-  const chatId = message.chat.id;
-  const profile = await getTelegramProfile(String(chatId));
+  const chatId =
+    message.chat.id;
+
+  const profile =
+    await getTelegramProfile(
+      String(chatId)
+    );
 
   if (!profile?.user_id) {
-    await answerCallbackQuery(callbackQuery.id, "Доступно только сотруднику");
+    await answerCallbackQuery(
+      callbackQuery.id,
+      "Доступно только сотруднику"
+    );
+
     return;
   }
 
-  const orderRows = await sql<{
-    id: string;
-    order_number: string;
-    status: string;
-    courier_id: string | null;
-  }[]>`
-    SELECT id, order_number, status, courier_id
-    FROM orders
-    WHERE id = ${orderId}
-      AND shop_id = ${profile.shop_id}
-    LIMIT 1
-  `;
-
-  const order = orderRows[0];
+  const order =
+    await loadCourierOrderCard(
+      profile.shop_id,
+      orderId
+    );
 
   if (!order) {
-    await answerCallbackQuery(callbackQuery.id, "Заказ не найден");
+    await answerCallbackQuery(
+      callbackQuery.id,
+      "Заказ не найден"
+    );
+
     return;
   }
 
-  if (order.courier_id !== profile.user_id) {
-    await answerCallbackQuery(callbackQuery.id, "Заказ назначен другому курьеру");
+  if (
+    order.courier_id
+    !== profile.user_id
+  ) {
+    await answerCallbackQuery(
+      callbackQuery.id,
+      "Заказ назначен другому курьеру"
+    );
+
     return;
   }
 
   if (order.status === "delivered") {
-    await answerCallbackQuery(callbackQuery.id, "Заказ уже доставлен");
+    await answerCallbackQuery(
+      callbackQuery.id,
+      "Заказ уже доставлен"
+    );
+
     return;
   }
 
-  if (order.status !== "delivering") {
-    await answerCallbackQuery(callbackQuery.id, "Сначала отметьте выезд");
+  if (
+    order.status !== "delivering"
+  ) {
+    await answerCallbackQuery(
+      callbackQuery.id,
+      "Сначала отметьте выезд"
+    );
+
     return;
   }
 
-  await sql`
-    UPDATE orders
-    SET status = 'delivered',
-        delivered_at = NOW(),
+  const updated =
+    await sql<{ id: string }[]>`
+      UPDATE orders
+      SET
+        status = 'delivered',
         updated_at = NOW()
-    WHERE id = ${order.id}
-      AND shop_id = ${profile.shop_id}
-  `;
+      WHERE id = ${order.id}
+        AND shop_id =
+          ${profile.shop_id}
+        AND courier_id =
+          ${profile.user_id}
+        AND status =
+          'delivering'
+      RETURNING id
+    `;
+
+  if (!updated[0]) {
+    await answerCallbackQuery(
+      callbackQuery.id,
+      "Статус уже изменился"
+    );
+
+    return;
+  }
 
   await sql`
     INSERT INTO order_status_history (
@@ -4452,7 +4907,7 @@ async function handleCourierDeliveredOrder(callbackQuery: TelegramCallbackQuery,
     VALUES (
       ${profile.shop_id},
       ${order.id},
-      ${order.status}::order_status,
+      'delivering',
       'delivered',
       ${profile.user_id},
       'Курьер отметил доставку через Telegram',
@@ -4461,86 +4916,158 @@ async function handleCourierDeliveredOrder(callbackQuery: TelegramCallbackQuery,
   `;
 
   await queueCustomerOrderNotification({
-    shopId: profile.shop_id,
-    orderId: order.id,
-    type: "order_delivered",
-    status: "delivered"
+    shopId:
+      profile.shop_id,
+    orderId:
+      order.id,
+    type:
+      "order_delivered",
+    status:
+      "delivered"
   });
 
-  await answerCallbackQuery(callbackQuery.id, "Заказ доставлен");
+  await answerCallbackQuery(
+    callbackQuery.id,
+    "Заказ доставлен"
+  );
 
   await sendTelegramMessage(
     chatId,
     [
       `✅ Заказ ${order.order_number} доставлен`,
       "",
-      "Статус в CRM изменён на «Доставлен»."
+      "Статус сохранён в CRM.",
+      "Заказ удалён из активных доставок."
     ].join("\n"),
     {
-      reply_markup: await mainKeyboardForChat(chatId)
+      reply_markup:
+        inlineKeyboard([
+          [
+            {
+              text:
+                "🔄 Обновить доставки",
+              callback_data:
+                "courier:list"
+            }
+          ]
+        ])
     }
   );
 }
 
-async function handleCourierAcceptOrder(callbackQuery: TelegramCallbackQuery, orderId: string) {
-  const message = callbackQuery.message;
+async function handleCourierAcceptOrder(
+  callbackQuery: TelegramCallbackQuery,
+  orderId: string
+) {
+  const message =
+    callbackQuery.message;
 
-  if (!message || message.chat.type !== "private") {
-    await answerCallbackQuery(callbackQuery.id);
+  if (
+    !message
+    || message.chat.type !== "private"
+  ) {
+    await answerCallbackQuery(
+      callbackQuery.id
+    );
+
     return;
   }
 
-  const chatId = message.chat.id;
-  const profile = await getTelegramProfile(String(chatId));
+  const chatId =
+    message.chat.id;
+
+  const profile =
+    await getTelegramProfile(
+      String(chatId)
+    );
 
   if (!profile?.user_id) {
-    await answerCallbackQuery(callbackQuery.id, "Доступно только сотруднику");
+    await answerCallbackQuery(
+      callbackQuery.id,
+      "Доступно только сотруднику"
+    );
+
     return;
   }
 
-  const orderRows = await sql<{
-    id: string;
-    order_number: string;
-    status: string;
-    courier_id: string | null;
-  }[]>`
-    SELECT id, order_number, status, courier_id
-    FROM orders
-    WHERE id = ${orderId}
-      AND shop_id = ${profile.shop_id}
-    LIMIT 1
-  `;
-
-  const order = orderRows[0];
+  const order =
+    await loadCourierOrderCard(
+      profile.shop_id,
+      orderId
+    );
 
   if (!order) {
-    await answerCallbackQuery(callbackQuery.id, "Заказ не найден");
+    await answerCallbackQuery(
+      callbackQuery.id,
+      "Заказ не найден"
+    );
+
     return;
   }
 
-  if (order.courier_id !== profile.user_id) {
-    await answerCallbackQuery(callbackQuery.id, "Заказ назначен другому курьеру");
+  if (
+    order.courier_id
+    !== profile.user_id
+  ) {
+    await answerCallbackQuery(
+      callbackQuery.id,
+      "Заказ назначен другому курьеру"
+    );
+
     return;
   }
 
-  if (order.status === "assigned_courier") {
-    await answerCallbackQuery(callbackQuery.id, "Доставка уже принята");
-    await handleCourierDeliveryOrders(chatId);
+  if (
+    order.status
+    === "assigned_courier"
+  ) {
+    await answerCallbackQuery(
+      callbackQuery.id,
+      "Доставка уже принята"
+    );
+
+    await sendCourierOrderCard(
+      chatId,
+      order
+    );
+
     return;
   }
 
   if (order.status !== "ready") {
-    await answerCallbackQuery(callbackQuery.id, "Заказ ещё не готов к доставке");
+    await answerCallbackQuery(
+      callbackQuery.id,
+      "Заказ ещё не готов к доставке"
+    );
+
     return;
   }
 
-  await sql`
-    UPDATE orders
-    SET status = 'assigned_courier',
+  const updated =
+    await sql<{ id: string }[]>`
+      UPDATE orders
+      SET
+        status =
+          'assigned_courier',
         updated_at = NOW()
-    WHERE id = ${order.id}
-      AND shop_id = ${profile.shop_id}
-  `;
+      WHERE id = ${order.id}
+        AND shop_id =
+          ${profile.shop_id}
+        AND courier_id =
+          ${profile.user_id}
+        AND status =
+          'ready'
+      RETURNING id
+    `;
+
+  if (!updated[0]) {
+    await answerCallbackQuery(
+      callbackQuery.id,
+      "Статус уже изменился"
+    );
+
+    return;
+  }
 
   await sql`
     INSERT INTO order_status_history (
@@ -4555,7 +5082,7 @@ async function handleCourierAcceptOrder(callbackQuery: TelegramCallbackQuery, or
     VALUES (
       ${profile.shop_id},
       ${order.id},
-      ${order.status}::order_status,
+      'ready',
       'assigned_courier',
       ${profile.user_id},
       'Курьер принял доставку через Telegram',
@@ -4563,33 +5090,23 @@ async function handleCourierAcceptOrder(callbackQuery: TelegramCallbackQuery, or
     )
   `;
 
-  await answerCallbackQuery(callbackQuery.id, "Доставка принята");
-
-  await sendTelegramMessage(
-    chatId,
-    [
-      `🚚 Доставка по заказу ${order.order_number} принята`,
-      "",
-      "Статус в CRM изменён на «Передан курьеру».",
-      "Когда вы выедете к получателю, нажмите «Выехал»."
-    ].join("\n"),
-    {
-      reply_markup: inlineKeyboard([
-        [
-          {
-            text: "🚗 Выехал",
-            callback_data: `courier:start:${order.id}`
-          }
-        ],
-        [
-          {
-            text: "🔄 Обновить список",
-            callback_data: "courier:list"
-          }
-        ]
-      ])
-    }
+  await answerCallbackQuery(
+    callbackQuery.id,
+    "Доставка принята"
   );
+
+  const nextOrder =
+    await loadCourierOrderCard(
+      profile.shop_id,
+      order.id
+    );
+
+  if (nextOrder) {
+    await sendCourierOrderCard(
+      chatId,
+      nextOrder
+    );
+  }
 }
 
 async function handleCallbackQuery(callbackQuery: TelegramCallbackQuery) {
@@ -5516,7 +6033,45 @@ async function processNotificationEvents() {
 
         const actionReplyMarkup = actionButtonRows.length ? inlineKeyboard(actionButtonRows) : null;
 
-        if (event.type === "florist_order_assigned" && productImageUrl) {
+        if (
+          event.type
+          === "courier_order_assigned"
+          && orderId
+        ) {
+          const courierOrder =
+            await loadCourierOrderCard(
+              event.shop_id,
+              orderId
+            );
+
+          if (!courierOrder) {
+            throw new Error(
+              "Courier order not found"
+            );
+          }
+
+          const courierChatId =
+            Number(chatId);
+
+          if (
+            !Number.isSafeInteger(
+              courierChatId
+            )
+          ) {
+            throw new Error(
+              "Invalid courier Telegram chat ID"
+            );
+          }
+
+          await sendCourierOrderCard(
+            courierChatId,
+            courierOrder
+          );
+        } else if (
+          event.type
+          === "florist_order_assigned"
+          && productImageUrl
+        ) {
           await sendTelegramPhoto(chatId, productImageUrl, message);
 
           if (actionReplyMarkup) {

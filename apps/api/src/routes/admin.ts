@@ -2035,40 +2035,12 @@ export async function adminRoutes(app: FastifyInstance) {
       `;
         const updatedOrder = updatedRows[0] as Record<string, any> | undefined;
 
-        await client`
-          INSERT INTO notification_events (
-            shop_id,
-            order_id,
-            type,
-            channel,
-            recipient_type,
-            status,
-            payload,
-            created_at,
-            updated_at
-          )
-          VALUES (
-            ${shop.id},
-            ${order.id},
-            'order_confirmed',
-            'telegram',
-            'staff',
-            'pending',
-            ${JSON.stringify({
-              orderId: order.id,
-              orderNumber: updatedOrder?.order_number ?? null,
-              previousStatus: order.status,
-              status: "confirmed",
-              paymentStatus: updatedOrder?.payment_status ?? null,
-              totalAmount: updatedOrder?.total_amount ?? updatedOrder?.total ?? null,
-              customerPhone: updatedOrder?.customer_phone ?? null,
-              trackingToken: updatedOrder?.tracking_token ?? null,
-              trackingUrl: updatedOrder?.tracking_token ? `/order/track/${updatedOrder.tracking_token}` : null
-            })},
-            NOW(),
-            NOW()
-          )
-        `;
+        /* STAFF ORDER CONFIRMED EVENT REMOVED
+         *
+         * Подтверждение заказа отправляется клиенту.
+         * Общая рассылка сотрудникам не создаётся.
+         * Флорист и курьер получают адресные назначения.
+         */
 
         await queueCustomerOrderNotification(client, {
           shopId: shop.id,
