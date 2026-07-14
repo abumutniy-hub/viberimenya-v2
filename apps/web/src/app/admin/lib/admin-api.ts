@@ -3,6 +3,66 @@ import { redirect } from "next/navigation";
 
 export type AdminRow = Record<string, unknown>;
 
+type AdminMeResponse = {
+  user?: {
+    role?: string;
+    home?: string;
+  };
+};
+
+function adminHomeForRole(
+  role: string
+) {
+  if (
+    role === "florist"
+    || role === "courier"
+  ) {
+    return "/admin/orders";
+  }
+
+  return "/admin";
+}
+
+async function resolveAdminHome(
+  baseUrl: string,
+  cookieHeader: string
+) {
+  const init:
+    RequestInit = {
+      cache: "no-store"
+    };
+
+  if (cookieHeader) {
+    init.headers = {
+      cookie: cookieHeader
+    };
+  }
+
+  const response =
+    await fetch(
+      `${baseUrl}/api/admin/auth/me`,
+      init
+    );
+
+  if (!response.ok) {
+    return "/admin/login";
+  }
+
+  const data = (
+    await response
+      .json()
+      .catch(() => null)
+  ) as AdminMeResponse | null;
+
+  const role =
+    data?.user?.role || "";
+
+  return (
+    data?.user?.home
+    || adminHomeForRole(role)
+  );
+}
+
 export async function fetchAdmin<T>(path: string): Promise<T | null> {
   const baseUrl = process.env.API_INTERNAL_URL ?? "http://127.0.0.1:4001";
 
@@ -21,7 +81,13 @@ export async function fetchAdmin<T>(path: string): Promise<T | null> {
     }
 
     if (response.status === 403) {
-      redirect("/admin");
+      const home =
+        await resolveAdminHome(
+          baseUrl,
+          cookieHeader
+        );
+
+      redirect(home);
     }
 
     if (!response.ok) {

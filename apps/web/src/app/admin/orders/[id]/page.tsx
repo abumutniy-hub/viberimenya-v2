@@ -17,6 +17,14 @@ type Response = {
   items: AdminRow[];
   history: AdminRow[];
   staff: OrderStaffMember[];
+
+  viewer?: {
+    userId?: string;
+    role?: string;
+    canManage?: boolean;
+    canChangeStatus?: boolean;
+    canUseInternalChat?: boolean;
+  };
 };
 
 const orderStatusLabels: Record<string, string> = {
@@ -170,6 +178,23 @@ function recordValue(
 export default async function AdminOrderDetailPage({ params }: PageProps) {
   const { id } = await params;
   const data = await fetchAdmin<Response>(`/api/admin/orders/${id}`);
+  /*
+   * ROLE ORDER DETAIL PAGE 7.2.2B-3B
+   */
+  const viewerRole =
+    String(
+      data?.viewer?.role
+      || "manager"
+    );
+
+  const canManage =
+    data?.viewer?.canManage
+    ?? (
+      viewerRole === "owner"
+      || viewerRole === "admin"
+      || viewerRole === "manager"
+    );
+
   const order = data?.order;
   const items = data?.items ?? [];
   const history = data?.history ?? [];
@@ -268,7 +293,13 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
       : "";
 
   return (
-    <div className="admin-page admin-order-detail-page">
+    <div
+      className={[
+        "admin-page",
+        "admin-order-detail-page",
+        `admin-order-detail-role-${viewerRole}`
+      ].join(" ")}
+    >
       <div className="admin-page-head">
         <div>
           <span>CRM / заказ</span>
@@ -283,15 +314,23 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
           <span className={`admin-status-chip status-${statusClass(status)}`}>
             {orderStatusLabels[status] || status || "—"}
           </span>
-          <span className={`admin-status-chip payment-${statusClass(paymentStatus)}`}>
-            {paymentStatusLabels[paymentStatus] || paymentStatus || "—"}
-          </span>
+          {canManage ? (
+            <span
+              className={`admin-status-chip payment-${statusClass(paymentStatus)}`}
+            >
+              {paymentStatusLabels[paymentStatus]
+                || paymentStatus
+                || "—"}
+            </span>
+          ) : null}
         </div>
 
-        <div className="admin-order-detail-total">
-          <span>Итого</span>
-          <strong>{money(order.total)}</strong>
-        </div>
+        {canManage ? (
+          <div className="admin-order-detail-total">
+            <span>Итого</span>
+            <strong>{money(order.total)}</strong>
+          </div>
+        ) : null}
 
         <OrderActions
           orderId={String(order.id)}
@@ -304,6 +343,7 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
           problemReturnStatus={String(order.problem_return_status || "")}
           showDetailsLink={false}
           showStatusActions
+          viewerRole={viewerRole}
         />
       </section>
 
@@ -367,7 +407,7 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
       </section>
 
       <section className="admin-order-detail-grid admin-order-main-grid">
-        <article className="admin-panel admin-order-detail-card">
+        <article className="admin-panel admin-order-detail-card admin-order-customer-card">
           <div className="admin-panel-head">
             <h2>Клиент</h2>
           </div>
@@ -377,7 +417,7 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
           <InfoRow label="Email" value={order.customer_email} />
         </article>
 
-        <article className="admin-panel admin-order-detail-card">
+        <article className="admin-panel admin-order-detail-card admin-order-recipient-card">
           <div className="admin-panel-head">
             <h2>Получатель</h2>
           </div>
@@ -608,17 +648,26 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
 
                 <div>
                   <strong>{text(item.product_name)}</strong>
-                  <span>{Number(item.quantity || 0)} × {money(item.price)}</span>
+                  <span>
+                    {Number(item.quantity || 0)}
+                    {canManage
+                      ? ` × ${money(item.price)}`
+                      : ""}
+                  </span>
                 </div>
               </div>
-              <strong>{money(item.total)}</strong>
+              {canManage ? (
+                <strong>
+                  {money(item.total)}
+                </strong>
+              ) : null}
             </article>
           ))}
         </div>
       </section>
 
       <section className="admin-order-detail-grid admin-order-summary-grid">
-        <article className="admin-panel admin-order-detail-card">
+        <article className="admin-panel admin-order-detail-card admin-order-finance-card">
           <div className="admin-panel-head">
             <h2>Финансы</h2>
           </div>

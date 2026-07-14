@@ -112,7 +112,8 @@ export function OrderActions({
   internalChatPreview = "",
   problemReturnStatus = "",
   showDetailsLink = true,
-  showStatusActions = false
+  showStatusActions = false,
+  viewerRole = "manager"
 }: {
   orderId: string;
   status: string;
@@ -124,6 +125,7 @@ export function OrderActions({
   problemReturnStatus?: string;
   showDetailsLink?: boolean;
   showStatusActions?: boolean;
+  viewerRole?: string;
 }) {
   const [isConfirming, setIsConfirming] = useState(false);
   const [isPaying, setIsPaying] = useState(false);
@@ -140,10 +142,31 @@ export function OrderActions({
   const [chatCount, setChatCount] = useState(Number(internalChatCount || 0));
   const [chatPreview, setChatPreview] = useState(internalChatPreview || "");
 
-  const canMarkPaid = status !== "new" && status !== "cancelled" && paymentStatus !== "paid";
-  const canAddPaymentLink = status === "confirmed" && paymentStatus !== "paid";
-  const trackingUrl = trackingToken ? `/order/track/${trackingToken}` : "";
-  const hiddenChatBadge = !isChatOpen && chatCount > 0;
+  /* ROLE ORDER ACTIONS 7.2.2B-1 */
+  const canManage =
+    viewerRole === "owner"
+    || viewerRole === "admin"
+    || viewerRole === "manager";
+
+  const canMarkPaid =
+    canManage
+    && status !== "new"
+    && status !== "cancelled"
+    && paymentStatus !== "paid";
+
+  const canAddPaymentLink =
+    canManage
+    && status === "confirmed"
+    && paymentStatus !== "paid";
+
+  const trackingUrl =
+    canManage && trackingToken
+      ? `/order/track/${trackingToken}`
+      : "";
+
+  const hiddenChatBadge =
+    !isChatOpen
+    && chatCount > 0;
 
   const validProblemReturnStatus =
     problemEligibleOrderStatuses.has(problemReturnStatus)
@@ -161,16 +184,69 @@ export function OrderActions({
         }
       : null;
 
-  const nextStatusAction =
+  const unrestrictedNextStatusAction =
     returnFromProblemAction
     || nextOrderStatusActionByStatus[status]
     || null;
 
+  const allowedStatusTargets =
+    viewerRole === "florist"
+      ? new Set([
+          "confirmed",
+          "assembling",
+          "ready",
+          "problem"
+        ])
+      : viewerRole === "courier"
+        ? new Set([
+            "ready",
+            "assigned_courier",
+            "delivering",
+            "delivered",
+            "problem"
+          ])
+        : null;
+
+  const nextStatusAction =
+    unrestrictedNextStatusAction
+    && (
+      !allowedStatusTargets
+      || allowedStatusTargets.has(
+        unrestrictedNextStatusAction.status
+      )
+    )
+      ? unrestrictedNextStatusAction
+      : null;
+
   const canSetProblem =
-    problemEligibleOrderStatuses.has(status);
+    problemEligibleOrderStatuses.has(
+      status
+    )
+    && (
+      canManage
+
+      || (
+        viewerRole === "florist"
+        && [
+          "confirmed",
+          "assembling",
+          "ready"
+        ].includes(status)
+      )
+
+      || (
+        viewerRole === "courier"
+        && [
+          "ready",
+          "assigned_courier",
+          "delivering"
+        ].includes(status)
+      )
+    );
 
   const canCancel =
-    status !== "delivered"
+    canManage
+    && status !== "delivered"
     && status !== "cancelled";
 
   async function loadInternalChat() {
@@ -432,7 +508,12 @@ async function changeStatus(
 }
 
   return (
-    <div className="admin-order-actions">
+    <div
+      className={[
+        "admin-order-actions",
+        `admin-order-actions-role-${viewerRole}`
+      ].join(" ")}
+    >
       <div className="admin-order-link-actions">
         {showDetailsLink ? (
           <a className="admin-small-link" href={`/admin/orders/${orderId}`}>
@@ -440,7 +521,7 @@ async function changeStatus(
           </a>
         ) : null}
 
-        {trackingToken ? (
+        {canManage && trackingToken ? (
           <>
             <a className="admin-small-link" href={trackingUrl} target="_blank" rel="noreferrer">
               Открыть заказ
@@ -452,7 +533,7 @@ async function changeStatus(
         ) : null}
       </div>
 
-      {status === "new" ? (
+      {canManage && status === "new" ? (
         <button
           type="button"
           className="admin-action-button"
@@ -483,24 +564,32 @@ async function changeStatus(
         </div>
       ) : null}
 
-      {paymentStatus === "paid" ? (
-        <span className="admin-paid-badge">Оплачен</span>
-      ) : canMarkPaid ? (
-        <button
-          type="button"
-          className="admin-action-button secondary"
-          disabled={isPaying}
-          onClick={markPaid}
-        >
-          {isPaying ? "..." : "Отметить оплаченным"}
-        </button>
-      ) : (
-        <span className="admin-muted-badge">
-          {status === "cancelled"
-            ? "Оплата недоступна"
-            : "Оплата после подтверждения"}
-        </span>
-      )}
+      {canManage ? (
+        paymentStatus === "paid" ? (
+          <span className="admin-paid-badge">
+            Оплачен
+          </span>
+        ) : canMarkPaid ? (
+          <button
+            type="button"
+            className="admin-action-button secondary"
+            disabled={isPaying}
+            onClick={markPaid}
+          >
+            {isPaying
+              ? "..."
+              : "Отметить оплаченным"}
+          </button>
+        ) : (
+          <span className="admin-muted-badge">
+            {status === "cancelled"
+              ? "Оплата недоступна"
+              : status === "new"
+                ? "Сначала подтвердите"
+                : "Оплата после подтверждения"}
+          </span>
+        )
+      ) : null}
 
       {showStatusActions ? (
         <div className="admin-status-actions">

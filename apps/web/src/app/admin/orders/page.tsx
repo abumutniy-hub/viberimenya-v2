@@ -7,6 +7,12 @@ export const dynamic = "force-dynamic";
 
 type Response = {
   items: AdminRow[];
+
+  viewer?: {
+    userId?: string;
+    role?: string;
+    scope?: string;
+  };
 };
 
 const orderStatusLabels: Record<string, string> = {
@@ -259,16 +265,46 @@ function paymentStatusChip(row: AdminRow) {
 }
 
 export default async function AdminOrdersPage() {
-  const data = await fetchAdmin<Response>("/api/admin/orders");
+  const data =
+    await fetchAdmin<Response>(
+      "/api/admin/orders"
+    );
+
+  const viewerRole =
+    String(
+      data?.viewer?.role
+      || "manager"
+    );
+
+  const isFieldRole =
+    viewerRole === "florist"
+    || viewerRole === "courier";
 
   return (
-    <div className="admin-page admin-orders-page">
+    <div
+      className={[
+        "admin-page",
+        "admin-orders-page",
+        `admin-orders-role-${viewerRole}`
+      ].join(" ")}
+    >
       <AdminPresenceHeartbeat />
       <div className="admin-page-head">
         <div>
           <span>CRM</span>
-          <h1>Заказы</h1>
-          <p>Рабочий список заказов: статус, клиент, получение, оплата и быстрые действия.</p>
+          <h1>
+            {isFieldRole
+              ? "Мои заказы"
+              : "Заказы"}
+          </h1>
+
+          <p>
+            {viewerRole === "florist"
+              ? "Назначенные вам заказы на сборку и внутренний чат команды."
+              : viewerRole === "courier"
+                ? "Назначенные вам доставки и контакты получателя."
+                : "Рабочий список заказов: статус, клиент, получение, оплата и быстрые действия."}
+          </p>
         </div>
       </div>
 
@@ -326,7 +362,10 @@ export default async function AdminOrdersPage() {
             },
             {
               key: "customer_name",
-              label: "Клиент",
+              label:
+                viewerRole === "courier"
+                  ? "Получатель"
+                  : "Клиент",
               render: (row) => (
                 <div className="admin-order-customer-cell">
                   <strong>{field(row, "customer_name") || "Без имени"}</strong>
@@ -434,7 +473,8 @@ export default async function AdminOrdersPage() {
                   trackingToken={String(row.tracking_token || "")}
                   internalChatCount={Number(row.internal_chat_unread_count || 0)}
                   internalChatPreview={String(row.internal_chat_last_message || "")}
-                />
+                  viewerRole={viewerRole}
+/>
               )
             }
           ]}

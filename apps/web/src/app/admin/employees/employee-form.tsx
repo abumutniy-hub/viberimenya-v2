@@ -1,132 +1,416 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import {
+  useState,
+  type FormEvent
+} from "react";
 
-type CreateEmployeeResponse = {
+type ApiResponse = {
   ok?: boolean;
   message?: string;
-  telegramLinkCode?: string;
+  telegramLinkCode?: string | null;
+  login?: string;
 };
 
-export function EmployeeForm() {
-  const [isSaving, setIsSaving] = useState(false);
-  const [telegramLinkCode, setTelegramLinkCode] = useState("");
+type Credentials = {
+  login: string;
+  password: string;
+};
 
-  async function onSubmit(event: FormEvent<HTMLFormElement>) {
+async function readApiResponse(
+  response: Response
+): Promise<ApiResponse | null> {
+  return (
+    await response
+      .json()
+      .catch(() => null)
+  ) as ApiResponse | null;
+}
+
+function generatePassword() {
+  const alphabet =
+    "ABCDEFGHJKLMNPQRSTUVWXYZ"
+    + "abcdefghijkmnopqrstuvwxyz"
+    + "23456789"
+    + "!@#$%";
+
+  const values =
+    new Uint32Array(14);
+
+  crypto.getRandomValues(values);
+
+  return Array.from(
+    values,
+    value =>
+      alphabet[
+        value % alphabet.length
+      ]
+  ).join("");
+}
+
+async function copyText(
+  value: string,
+  label: string
+) {
+  try {
+    await navigator.clipboard.writeText(
+      value
+    );
+
+    alert(`${label} скопирован`);
+  } catch {
+    window.prompt(
+      `Скопируйте ${label.toLowerCase()}:`,
+      value
+    );
+  }
+}
+
+export function EmployeeForm() {
+  const [isSaving, setIsSaving] =
+    useState(false);
+
+  const [password, setPassword] =
+    useState("");
+
+  const [
+    showPassword,
+    setShowPassword
+  ] = useState(false);
+
+  const [
+    credentials,
+    setCredentials
+  ] =
+    useState<Credentials | null>(
+      null
+    );
+
+  const [
+    telegramCode,
+    setTelegramCode
+  ] = useState("");
+
+  async function onSubmit(
+    event:
+      FormEvent<HTMLFormElement>
+  ) {
     event.preventDefault();
 
-    const form = event.currentTarget;
-    const formData = new FormData(form);
+    const form =
+      event.currentTarget;
+
+    const formData =
+      new FormData(form);
 
     const payload = {
-      name: String(formData.get("name") || "").trim(),
-      phone: String(formData.get("phone") || "").trim(),
-      email: String(formData.get("email") || "").trim(),
-      telegramUsername: String(formData.get("telegramUsername") || "").trim(),
-      password: String(formData.get("password") || "").trim(),
-      role: String(formData.get("role") || "florist")
+      name:
+        String(
+          formData.get("name") || ""
+        ).trim(),
+
+      phone:
+        String(
+          formData.get("phone") || ""
+        ).trim(),
+
+      email:
+        String(
+          formData.get("email") || ""
+        ).trim(),
+
+      role:
+        String(
+          formData.get("role")
+          || "florist"
+        ),
+
+      telegramUsername: "",
+
+      password:
+        password.trim(),
+
+      isActive: true
     };
 
-    if (!payload.name || !payload.phone) {
-      alert("Укажите имя и телефон сотрудника");
+    if (
+      !payload.name
+      || !payload.phone
+    ) {
+      alert(
+        "Укажите имя и телефон сотрудника"
+      );
+
       return;
     }
 
-    if (payload.password.length < 6) {
-      alert("Укажите пароль сотрудника минимум из 6 символов");
+    if (
+      payload.password.length < 8
+    ) {
+      alert(
+        "Пароль должен содержать минимум 8 символов"
+      );
+
       return;
     }
 
     setIsSaving(true);
-    setTelegramLinkCode("");
+    setCredentials(null);
+    setTelegramCode("");
 
     try {
-      const response = await fetch("/api/admin/employees", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
+      const response =
+        await fetch(
+          "/api/admin/employees",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type":
+                "application/json"
+            },
+            body:
+              JSON.stringify(payload)
+          }
+        );
 
-      const data = await response.json().catch(() => null) as CreateEmployeeResponse | null;
+      const data =
+        await readApiResponse(response);
 
       if (!response.ok) {
-        throw new Error(data?.message || "Не удалось создать сотрудника");
+        throw new Error(
+          data?.message
+          || "Не удалось создать сотрудника"
+        );
       }
+
+      setCredentials({
+        login:
+          data?.login
+          || payload.email
+          || payload.phone,
+
+        password:
+          payload.password
+      });
+
+      setTelegramCode(
+        data?.telegramLinkCode || ""
+      );
 
       form.reset();
-
-      if (data?.telegramLinkCode) {
-        setTelegramLinkCode(data.telegramLinkCode);
-      }
-
-      setIsSaving(false);
+      setPassword("");
+      setShowPassword(false);
     } catch (error) {
-      alert(error instanceof Error ? error.message : "Не удалось создать сотрудника");
+      alert(
+        error instanceof Error
+          ? error.message
+          : "Не удалось создать сотрудника"
+      );
+    } finally {
       setIsSaving(false);
-    }
-  }
-
-  async function copyTelegramCode() {
-    if (!telegramLinkCode) return;
-
-    try {
-      await navigator.clipboard.writeText(telegramLinkCode);
-      alert("Код скопирован");
-    } catch {
-      alert(telegramLinkCode);
     }
   }
 
   return (
     <div className="admin-employee-form-wrap">
-      <form className="admin-employee-form" onSubmit={onSubmit}>
+      <form
+        className="admin-employee-form"
+        onSubmit={onSubmit}
+      >
         <div>
           <label>Имя</label>
-          <input name="name" placeholder="Например: Анна" />
+          <input
+            name="name"
+            placeholder="Например: Анна"
+            required
+          />
         </div>
 
         <div>
-          <label>Телефон</label>
-          <input name="phone" placeholder="+79990000002" />
+          <label>
+            Телефон для входа
+          </label>
+          <input
+            name="phone"
+            placeholder="+79990000002"
+            autoComplete="tel"
+            required
+          />
         </div>
 
         <div>
-          <label>Email</label>
-          <input name="email" placeholder="employee@example.com" />
-        </div>
-
-        <div>
-          <label>Telegram</label>
-          <input name="telegramUsername" placeholder="@username" />
-        </div>
-
-        <div>
-          <label>Пароль для CRM</label>
-          <input name="password" type="password" placeholder="Минимум 6 символов" autoComplete="new-password" />
+          <label>
+            Email для входа
+          </label>
+          <input
+            name="email"
+            type="email"
+            placeholder="employee@example.com"
+            autoComplete="email"
+          />
         </div>
 
         <div>
           <label>Роль</label>
-          <select name="role" defaultValue="florist">
-            <option value="manager">Менеджер</option>
-            <option value="florist">Флорист</option>
-            <option value="courier">Курьер</option>
-            <option value="admin">Администратор</option>
+          <select
+            name="role"
+            defaultValue="florist"
+          >
+            <option value="manager">
+              Менеджер
+            </option>
+            <option value="florist">
+              Флорист
+            </option>
+            <option value="courier">
+              Курьер
+            </option>
+            <option value="admin">
+              Администратор
+            </option>
           </select>
         </div>
 
-        <button type="submit" disabled={isSaving}>
-          {isSaving ? "Добавляем..." : "Добавить сотрудника"}
+        <div>
+          <label>
+            Временный пароль CRM
+          </label>
+
+          <input
+            type={
+              showPassword
+                ? "text"
+                : "password"
+            }
+            value={password}
+            onChange={event =>
+              setPassword(
+                event.target.value
+              )
+            }
+            placeholder="Минимум 8 символов"
+            autoComplete="new-password"
+            required
+          />
+
+          <div className="admin-employee-action-row">
+            <button
+              type="button"
+              onClick={() => {
+                const generated =
+                  generatePassword();
+
+                setPassword(generated);
+                setShowPassword(true);
+              }}
+            >
+              Сгенерировать
+            </button>
+
+            <button
+              type="button"
+              disabled={!password}
+              onClick={() =>
+                void copyText(
+                  password,
+                  "Пароль"
+                )
+              }
+            >
+              Скопировать
+            </button>
+
+            <button
+              type="button"
+              onClick={() =>
+                setShowPassword(
+                  value => !value
+                )
+              }
+            >
+              {showPassword
+                ? "Скрыть"
+                : "Показать"}
+            </button>
+          </div>
+        </div>
+
+        <button
+          type="submit"
+          disabled={isSaving}
+        >
+          {isSaving
+            ? "Добавляем..."
+            : "Добавить сотрудника"}
         </button>
       </form>
 
-      {telegramLinkCode ? (
+      {credentials ? (
         <div className="admin-employee-telegram-link">
           <div>
-            <strong>Код для привязки Telegram</strong>
-            <span>Передайте код сотруднику. Он откроет бота, нажмёт «🔗 Привязать аккаунт» и введёт код.</span>
+            <strong>
+              Данные для входа в CRM
+            </strong>
+
+            <span>
+              Логин:{" "}
+              {credentials.login}
+            </span>
+
+            <span>
+              Пароль:{" "}
+              {credentials.password}
+            </span>
+
+            <span>
+              viberimenya.ru/admin/login
+            </span>
           </div>
-          <button type="button" onClick={copyTelegramCode}>
+
+          <button
+            type="button"
+            onClick={() =>
+              void copyText(
+                [
+                  "Вход в CRM:",
+                  "https://viberimenya.ru/admin/login",
+                  `Логин: ${credentials.login}`,
+                  `Пароль: ${credentials.password}`
+                ].join("\n"),
+                "Данные для входа"
+              )
+            }
+          >
+            Скопировать доступ
+          </button>
+        </div>
+      ) : null}
+
+      {telegramCode ? (
+        <div className="admin-employee-telegram-link">
+          <div>
+            <strong>
+              Код привязки Telegram
+            </strong>
+
+            <span>
+              Код действует 30 минут.
+            </span>
+
+            <span>
+              Код: {telegramCode}
+            </span>
+          </div>
+
+          <button
+            type="button"
+            onClick={() =>
+              void copyText(
+                telegramCode,
+                "Telegram-код"
+              )
+            }
+          >
             Скопировать код
           </button>
         </div>

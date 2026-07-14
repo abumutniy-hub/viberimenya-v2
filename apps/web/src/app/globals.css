@@ -11534,3 +11534,912 @@ body {
     align-items: flex-start;
   }
 }
+
+/* =========================================================
+   EMPLOYEE UI 7.1.1
+   Карточки сотрудников и компактная форма управления
+   ========================================================= */
+
+.admin-employees-workspace {
+  --employee-surface: #fffdf9;
+  --employee-soft: #f5f0e9;
+  --employee-line: rgba(25, 23, 22, 0.1);
+  --employee-muted: rgba(25, 23, 22, 0.58);
+  --employee-green: #26774d;
+  --employee-red: #9f2f2f;
+}
+
+.admin-employees-workspace .admin-page-head {
+  margin-bottom: 22px;
+}
+
+.admin-employees-workspace .admin-employee-create-panel {
+  margin-bottom: 24px;
+  overflow: hidden;
+}
+
+.admin-employees-workspace
+  .admin-employee-create-panel
+  .admin-panel-head {
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--employee-line);
+}
+
+.admin-employees-workspace
+  .admin-employee-create-panel
+  .admin-panel-head p,
+.admin-employees-workspace
+  .admin-employees-list-head p {
+  max-width: 720px;
+  margin: 7px 0 0;
+  line-height: 1.5;
+  color: var(--employee-muted);
+}
+
+/* Форма создания */
+
+.admin-employees-workspace
+  .admin-employee-form-wrap {
+  padding: 0;
+}
+
+.admin-employees-workspace
+  .admin-employee-form {
+  display: grid;
+  grid-template-columns:
+    repeat(12, minmax(0, 1fr));
+  gap: 18px 14px;
+  align-items: start;
+  padding: 22px;
+}
+
+.admin-employees-workspace
+  .admin-employee-form > div {
+  min-width: 0;
+}
+
+.admin-employees-workspace
+  .admin-employee-form > div:nth-child(1),
+.admin-employees-workspace
+  .admin-employee-form > div:nth-child(2),
+.admin-employees-workspace
+  .admin-employee-form > div:nth-child(3),
+.admin-employees-workspace
+  .admin-employee-form > div:nth-child(4) {
+  grid-column: span 3;
+}
+
+.admin-employees-workspace
+  .admin-employee-form > div:nth-child(5) {
+  grid-column: span 8;
+  display: grid;
+  grid-template-columns:
+    minmax(220px, 1fr)
+    auto;
+  column-gap: 12px;
+  align-items: end;
+}
+
+.admin-employees-workspace
+  .admin-employee-form > div:nth-child(5) > label {
+  grid-column: 1 / -1;
+}
+
+.admin-employees-workspace
+  .admin-employee-form > div:nth-child(5)
+  > input {
+  grid-column: 1;
+}
+
+.admin-employees-workspace
+  .admin-employee-form > div:nth-child(5)
+  > .admin-employee-action-row {
+  grid-column: 2;
+  flex-wrap: nowrap;
+}
+
+.admin-employees-workspace
+  .admin-employee-form > button[type="submit"] {
+  grid-column: span 4;
+  width: 100%;
+  min-height: 46px;
+  align-self: end;
+}
+
+.admin-employees-workspace
+  .admin-employee-form label {
+  display: block;
+  margin-bottom: 7px;
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: 0.075em;
+  text-transform: uppercase;
+  color: rgba(25, 23, 22, 0.55);
+}
+
+.admin-employees-workspace
+  .admin-employee-form input,
+.admin-employees-workspace
+  .admin-employee-form select {
+  width: 100%;
+  min-height: 46px;
+  border: 1px solid var(--employee-line);
+  border-radius: 14px;
+  background: #fff;
+  padding: 0 14px;
+  font: inherit;
+  color: #171414;
+  outline: none;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.admin-employees-workspace
+  .admin-employee-form input:focus,
+.admin-employees-workspace
+  .admin-employee-form select:focus {
+  border-color: rgba(25, 23, 22, 0.32);
+  box-shadow:
+    0 0 0 3px rgba(25, 23, 22, 0.06);
+}
+
+.admin-employees-workspace
+  .admin-employee-form button {
+  min-height: 40px;
+  border: 0;
+  border-radius: 999px;
+  padding: 0 16px;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.admin-employees-workspace
+  .admin-employee-form
+  .admin-employee-action-row button {
+  background: rgba(25, 23, 22, 0.08);
+  color: #171414;
+}
+
+.admin-employees-workspace
+  .admin-employee-form
+  .admin-employee-action-row button:first-child {
+  background: #171414;
+  color: #fff;
+}
+
+.admin-employees-workspace
+  .admin-employee-form > button[type="submit"] {
+  background: #171414;
+  color: #fff;
+}
+
+.admin-employees-workspace
+  .admin-employee-form button:disabled {
+  opacity: 0.48;
+  cursor: default;
+}
+
+/* Результат создания и Telegram-код */
+
+.admin-employees-workspace
+  .admin-employee-telegram-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin: 0 22px 18px;
+  padding: 16px 18px;
+  border: 1px solid rgba(38, 119, 77, 0.17);
+  border-radius: 18px;
+  background: rgba(38, 119, 77, 0.08);
+}
+
+.admin-employees-workspace
+  .admin-employee-telegram-link > div {
+  min-width: 0;
+}
+
+.admin-employees-workspace
+  .admin-employee-telegram-link strong,
+.admin-employees-workspace
+  .admin-employee-telegram-link span {
+  display: block;
+}
+
+.admin-employees-workspace
+  .admin-employee-telegram-link strong {
+  margin-bottom: 5px;
+  font-size: 14px;
+  color: #183b2a;
+}
+
+.admin-employees-workspace
+  .admin-employee-telegram-link span {
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.4;
+  color: rgba(24, 59, 42, 0.72);
+}
+
+.admin-employees-workspace
+  .admin-employee-telegram-link button {
+  flex: 0 0 auto;
+  min-height: 40px;
+  border: 0;
+  border-radius: 999px;
+  background: #183b2a;
+  color: #fff;
+  padding: 0 16px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+/* Заголовок списка */
+
+.admin-employees-workspace
+  .admin-employees-panel {
+  overflow: visible;
+}
+
+.admin-employees-workspace
+  .admin-employees-list-head {
+  border-bottom: 1px solid var(--employee-line);
+}
+
+.admin-employees-workspace
+  .admin-employees-list-head h2 {
+  margin-bottom: 0;
+}
+
+/* Таблица превращается в карточки */
+
+.admin-employees-workspace
+  .admin-employees-table-wrap {
+  overflow: visible;
+  padding: 18px;
+}
+
+.admin-employees-workspace
+  .admin-employees-table {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  border-collapse: separate;
+}
+
+.admin-employees-workspace
+  .admin-employees-table thead {
+  display: none;
+}
+
+.admin-employees-workspace
+  .admin-employees-table tbody {
+  display: grid;
+  gap: 14px;
+}
+
+.admin-employees-workspace
+  .admin-employees-table tr {
+  display: grid;
+  grid-template-columns:
+    minmax(170px, 1.1fr)
+    minmax(150px, 0.85fr)
+    minmax(190px, 1.15fr)
+    minmax(125px, 0.65fr)
+    minmax(110px, 0.55fr);
+  gap: 14px 18px;
+  align-items: start;
+  padding: 18px;
+  border: 1px solid var(--employee-line);
+  border-radius: 20px;
+  background: var(--employee-surface);
+  box-shadow:
+    0 10px 30px rgba(50, 39, 30, 0.035);
+}
+
+.admin-employees-workspace
+  .admin-employees-table td {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  font-size: 13px;
+  line-height: 1.42;
+  overflow-wrap: anywhere;
+}
+
+.admin-employees-workspace
+  .admin-employees-table td::before {
+  display: block;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.085em;
+  text-transform: uppercase;
+  color: rgba(25, 23, 22, 0.45);
+}
+
+.admin-employees-workspace
+  .admin-employees-table td:nth-child(1)::before {
+  content: "Сотрудник";
+}
+
+.admin-employees-workspace
+  .admin-employees-table td:nth-child(2)::before {
+  content: "Телефон";
+}
+
+.admin-employees-workspace
+  .admin-employees-table td:nth-child(3)::before {
+  content: "Email";
+}
+
+.admin-employees-workspace
+  .admin-employees-table td:nth-child(4)::before {
+  content: "Роль";
+}
+
+.admin-employees-workspace
+  .admin-employees-table td:nth-child(5)::before {
+  content: "Статус";
+}
+
+.admin-employees-workspace
+  .admin-employees-table td:nth-child(6) {
+  display: none;
+}
+
+.admin-employees-workspace
+  .admin-employees-table td:nth-child(7) {
+  grid-column: 1 / -1;
+  padding-top: 16px;
+  border-top: 1px solid var(--employee-line);
+}
+
+.admin-employees-workspace
+  .admin-employees-table td:nth-child(7)::before {
+  content: "Доступ и управление";
+  margin-bottom: 4px;
+}
+
+.admin-employees-workspace
+  .admin-employees-table td strong {
+  display: block;
+  max-width: none;
+  font-size: 14px;
+}
+
+.admin-employees-workspace
+  .admin-employees-table td:nth-child(4),
+.admin-employees-workspace
+  .admin-employees-table td:nth-child(5) {
+  display: inline-flex;
+  width: fit-content;
+  min-height: 30px;
+  align-items: center;
+  align-content: center;
+  padding: 6px 11px;
+  border-radius: 999px;
+  background: var(--employee-soft);
+  font-weight: 750;
+}
+
+.admin-employees-workspace
+  .admin-employees-table td:nth-child(4)::before,
+.admin-employees-workspace
+  .admin-employees-table td:nth-child(5)::before {
+  display: none;
+}
+
+/* Сведения о доступе */
+
+.admin-employees-workspace
+  .admin-employee-actions {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.admin-employees-workspace
+  .admin-employee-telegram-status {
+  display: grid;
+  grid-template-columns:
+    repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  font-size: 12px;
+  color: #171414;
+}
+
+.admin-employees-workspace
+  .admin-employee-telegram-status span {
+  display: block;
+  min-width: 0;
+  min-height: 54px;
+  padding: 11px 12px;
+  border: 1px solid var(--employee-line);
+  border-radius: 14px;
+  background: var(--employee-soft);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.admin-employees-workspace
+  .admin-employee-link-box {
+  display: grid;
+  grid-template-columns:
+    minmax(180px, 320px)
+    auto;
+  gap: 9px;
+  justify-content: start;
+}
+
+.admin-employees-workspace
+  .admin-employee-link-box input {
+  min-height: 40px;
+  border: 1px solid var(--employee-line);
+  border-radius: 12px;
+  background: #fff;
+  padding: 0 12px;
+  font: inherit;
+  font-size: 13px;
+}
+
+.admin-employees-workspace
+  .admin-employee-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.admin-employees-workspace
+  .admin-employee-actions button {
+  min-height: 38px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(25, 23, 22, 0.08);
+  color: #171414;
+  padding: 0 14px;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background 160ms ease,
+    transform 160ms ease;
+}
+
+.admin-employees-workspace
+  .admin-employee-actions button:hover {
+  background: rgba(25, 23, 22, 0.13);
+}
+
+.admin-employees-workspace
+  .admin-employee-actions button:active {
+  transform: translateY(1px);
+}
+
+.admin-employees-workspace
+  .admin-employee-actions button.danger {
+  background: rgba(164, 45, 45, 0.1);
+  color: var(--employee-red);
+}
+
+.admin-employees-workspace
+  .admin-employee-actions button.danger:hover {
+  background: rgba(164, 45, 45, 0.16);
+}
+
+.admin-employees-workspace
+  .admin-employee-actions button:disabled {
+  opacity: 0.48;
+  cursor: default;
+}
+
+/* Редактирование */
+
+.admin-employees-workspace
+  .admin-employee-edit {
+  display: grid;
+  grid-template-columns:
+    repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--employee-line);
+  border-radius: 18px;
+  background: var(--employee-soft);
+}
+
+.admin-employees-workspace
+  .admin-employee-edit input,
+.admin-employees-workspace
+  .admin-employee-edit select {
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  border: 1px solid var(--employee-line);
+  border-radius: 13px;
+  background: #fff;
+  padding: 0 12px;
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+
+.admin-employees-workspace
+  .admin-employee-edit
+  > .admin-employee-action-row {
+  grid-column: 1 / -1;
+}
+
+.admin-employees-workspace
+  .admin-employee-edit > label {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border: 1px solid var(--employee-line);
+  border-radius: 13px;
+  background: #fff;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.admin-employees-workspace
+  .admin-employee-edit
+  > label input {
+  width: auto;
+  min-height: auto;
+}
+
+.admin-employees-workspace
+  .admin-employee-edit
+  > button:last-child {
+  min-height: 42px;
+  background: #171414;
+  color: #fff;
+}
+
+/* Планшет */
+
+@media (max-width: 1180px) {
+  .admin-employees-workspace
+    .admin-employee-form > div:nth-child(1),
+  .admin-employees-workspace
+    .admin-employee-form > div:nth-child(2),
+  .admin-employees-workspace
+    .admin-employee-form > div:nth-child(3),
+  .admin-employees-workspace
+    .admin-employee-form > div:nth-child(4) {
+    grid-column: span 6;
+  }
+
+  .admin-employees-workspace
+    .admin-employee-form > div:nth-child(5) {
+    grid-column: span 8;
+  }
+
+  .admin-employees-workspace
+    .admin-employee-form > button[type="submit"] {
+    grid-column: span 4;
+  }
+
+  .admin-employees-workspace
+    .admin-employees-table tr {
+    grid-template-columns:
+      repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-employees-workspace
+    .admin-employees-table td:nth-child(7) {
+    grid-column: 1 / -1;
+  }
+
+  .admin-employees-workspace
+    .admin-employee-telegram-status {
+    grid-template-columns:
+      repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Небольшой планшет */
+
+@media (max-width: 820px) {
+  .admin-employees-workspace
+    .admin-employee-form {
+    grid-template-columns:
+      repeat(2, minmax(0, 1fr));
+    padding: 18px;
+  }
+
+  .admin-employees-workspace
+    .admin-employee-form > div:nth-child(1),
+  .admin-employees-workspace
+    .admin-employee-form > div:nth-child(2),
+  .admin-employees-workspace
+    .admin-employee-form > div:nth-child(3),
+  .admin-employees-workspace
+    .admin-employee-form > div:nth-child(4),
+  .admin-employees-workspace
+    .admin-employee-form > div:nth-child(5),
+  .admin-employees-workspace
+    .admin-employee-form > button[type="submit"] {
+    grid-column: span 2;
+  }
+
+  .admin-employees-workspace
+    .admin-employee-form > div:nth-child(5) {
+    grid-template-columns: 1fr;
+    row-gap: 10px;
+  }
+
+  .admin-employees-workspace
+    .admin-employee-form > div:nth-child(5)
+    > input,
+  .admin-employees-workspace
+    .admin-employee-form > div:nth-child(5)
+    > .admin-employee-action-row {
+    grid-column: 1;
+  }
+
+  .admin-employees-workspace
+    .admin-employee-form > div:nth-child(5)
+    > .admin-employee-action-row {
+    flex-wrap: wrap;
+  }
+
+  .admin-employees-workspace
+    .admin-employee-telegram-link {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+/* Телефон */
+
+@media (max-width: 620px) {
+  .admin-employees-workspace
+    .admin-employee-form {
+    grid-template-columns: 1fr;
+    gap: 14px;
+    padding: 16px;
+  }
+
+  .admin-employees-workspace
+    .admin-employee-form > div:nth-child(1),
+  .admin-employees-workspace
+    .admin-employee-form > div:nth-child(2),
+  .admin-employees-workspace
+    .admin-employee-form > div:nth-child(3),
+  .admin-employees-workspace
+    .admin-employee-form > div:nth-child(4),
+  .admin-employees-workspace
+    .admin-employee-form > div:nth-child(5),
+  .admin-employees-workspace
+    .admin-employee-form > button[type="submit"] {
+    grid-column: 1;
+  }
+
+  .admin-employees-workspace
+    .admin-employee-form
+    .admin-employee-action-row {
+    display: grid;
+    grid-template-columns:
+      repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .admin-employees-workspace
+    .admin-employee-form
+    .admin-employee-action-row button:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .admin-employees-workspace
+    .admin-employee-telegram-link {
+    margin: 0 16px 16px;
+  }
+
+  .admin-employees-workspace
+    .admin-employees-table-wrap {
+    padding: 12px;
+  }
+
+  .admin-employees-workspace
+    .admin-employees-table tr {
+    grid-template-columns: 1fr;
+    gap: 13px;
+    padding: 16px;
+  }
+
+  .admin-employees-workspace
+    .admin-employees-table td:nth-child(7) {
+    grid-column: 1;
+  }
+
+  .admin-employees-workspace
+    .admin-employee-telegram-status {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-employees-workspace
+    .admin-employee-link-box {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-employees-workspace
+    .admin-employee-action-row {
+    display: grid;
+    grid-template-columns:
+      repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-employees-workspace
+    .admin-employee-actions button {
+    width: 100%;
+    white-space: normal;
+  }
+
+  .admin-employees-workspace
+    .admin-employee-edit {
+    grid-template-columns: 1fr;
+    padding: 14px;
+  }
+
+  .admin-employees-workspace
+    .admin-employee-edit
+    > .admin-employee-action-row {
+    grid-column: 1;
+  }
+
+  .admin-employees-workspace
+    .admin-employee-edit
+    > button:last-child {
+    width: 100%;
+  }
+}
+
+/* =========================================================
+   ROLE ORDERS PAGE 7.2.2B-2B
+   Ролевой список назначенных заказов
+   ========================================================= */
+
+/*
+ * Колонки таблицы:
+ * 1 — заказ
+ * 2 — статус
+ * 3 — клиент / получатель
+ * 4 — получение
+ * 5 — оплата
+ * 6 — сумма
+ * 7 — действия
+ */
+
+/* Флористу не показываются клиент, оплата и сумма. */
+.admin-orders-role-florist
+  .admin-table th:nth-child(3),
+.admin-orders-role-florist
+  .admin-table td:nth-child(3),
+.admin-orders-role-florist
+  .admin-table th:nth-child(5),
+.admin-orders-role-florist
+  .admin-table td:nth-child(5),
+.admin-orders-role-florist
+  .admin-table th:nth-child(6),
+.admin-orders-role-florist
+  .admin-table td:nth-child(6) {
+  display: none;
+}
+
+/* Курьеру оставляется получатель, но скрываются финансы. */
+.admin-orders-role-courier
+  .admin-table th:nth-child(5),
+.admin-orders-role-courier
+  .admin-table td:nth-child(5),
+.admin-orders-role-courier
+  .admin-table th:nth-child(6),
+.admin-orders-role-courier
+  .admin-table td:nth-child(6) {
+  display: none;
+}
+
+.admin-orders-role-florist
+  .admin-table,
+.admin-orders-role-courier
+  .admin-table {
+  min-width: 720px;
+}
+
+.admin-orders-role-florist
+  .admin-order-actions,
+.admin-orders-role-courier
+  .admin-order-actions {
+  min-width: 190px;
+}
+
+@media (max-width: 720px) {
+  .admin-orders-role-florist
+    .admin-table,
+  .admin-orders-role-courier
+    .admin-table {
+    min-width: 650px;
+  }
+}
+
+/* =========================================================
+   ROLE ORDER DETAIL PAGE 7.2.2B-3B
+   Детальная карточка заказа по роли
+   ========================================================= */
+
+/*
+ * Полевые роли не видят управление командой,
+ * покупателя, оплату, финансы и служебный
+ * комментарий руководства.
+ */
+.admin-order-detail-role-florist
+  .admin-order-assignees-card,
+.admin-order-detail-role-courier
+  .admin-order-assignees-card,
+.admin-order-detail-role-florist
+  .admin-order-customer-card,
+.admin-order-detail-role-courier
+  .admin-order-customer-card,
+.admin-order-detail-role-florist
+  .admin-order-payment-card,
+.admin-order-detail-role-courier
+  .admin-order-payment-card,
+.admin-order-detail-role-florist
+  .admin-order-finance-card,
+.admin-order-detail-role-courier
+  .admin-order-finance-card,
+.admin-order-detail-role-florist
+  .admin-order-internal-comment-card,
+.admin-order-detail-role-courier
+  .admin-order-internal-comment-card {
+  display: none;
+}
+
+/* Получатель нужен курьеру, но не флористу. */
+.admin-order-detail-role-florist
+  .admin-order-recipient-card {
+  display: none;
+}
+
+/*
+ * Стоимость тарифа является финансовой
+ * информацией и скрывается у обеих ролей.
+ * Сейчас это последняя строка карточки
+ * логистики.
+ */
+.admin-order-detail-role-florist
+  .admin-order-delivery-card
+  .admin-order-info-row:last-child,
+.admin-order-detail-role-courier
+  .admin-order-delivery-card
+  .admin-order-info-row:last-child {
+  display: none;
+}
+
+.admin-order-detail-role-florist
+  .admin-order-items-card,
+.admin-order-detail-role-courier
+  .admin-order-items-card {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 860px) {
+  .admin-order-detail-role-florist
+    .admin-order-main-grid,
+  .admin-order-detail-role-courier
+    .admin-order-main-grid,
+  .admin-order-detail-role-florist
+    .admin-order-summary-grid,
+  .admin-order-detail-role-courier
+    .admin-order-summary-grid {
+    grid-template-columns: 1fr;
+  }
+}

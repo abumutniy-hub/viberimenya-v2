@@ -50,7 +50,14 @@ export function AdminLoginClient() {
         return;
       }
 
-      window.location.href = "/admin";
+      const role =
+        data.user?.role || "";
+
+      window.location.href =
+        role === "florist"
+        || role === "courier"
+          ? "/admin/orders"
+          : "/admin";
     } catch {
       setMessage("Ошибка соединения. Попробуйте ещё раз.");
       setIsBusy(false);

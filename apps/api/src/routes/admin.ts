@@ -77,32 +77,152 @@ function clearAdminSessionCookie() {
   return `${ADMIN_SESSION_COOKIE}=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0`;
 }
 
-const ALL_ADMIN_ROLES: AdminRole[] = ["owner", "admin", "manager", "florist", "courier"];
-const OWNER_ADMIN_ROLES: AdminRole[] = ["owner", "admin"];
-const OPERATIONS_ROLES: AdminRole[] = ["owner", "admin", "manager"];
+/* ROLE ACCESS 7.2.1 */
+const ALL_ADMIN_ROLES: AdminRole[] = [
+  "owner",
+  "admin",
+  "manager",
+  "florist",
+  "courier"
+];
 
-function getRequiredAdminRoles(path: string, method: string): AdminRole[] {
-  const normalizedMethod = method.toUpperCase();
+const OWNER_ADMIN_ROLES: AdminRole[] = [
+  "owner",
+  "admin"
+];
 
-  if (path.startsWith("/api/admin/auth/")) return ALL_ADMIN_ROLES;
-  if (path.startsWith("/api/admin/dashboard")) return ALL_ADMIN_ROLES;
-  if (path.startsWith("/api/admin/presence")) return ALL_ADMIN_ROLES;
+const MANAGEMENT_ROLES: AdminRole[] = [
+  "owner",
+  "admin",
+  "manager"
+];
 
-  if (path.startsWith("/api/admin/orders")) {
-    if (normalizedMethod === "GET") return ALL_ADMIN_ROLES;
-    if (path.includes("/internal-chat") || path.endsWith("/status")) return ALL_ADMIN_ROLES;
-
-    return OPERATIONS_ROLES;
+function adminHomeForRole(
+  role: string
+) {
+  if (
+    role === "florist"
+    || role === "courier"
+  ) {
+    return "/admin/orders";
   }
 
-  if (path.startsWith("/api/admin/customers")) return OPERATIONS_ROLES;
-  if (path.startsWith("/api/admin/catalog")) return OPERATIONS_ROLES;
-  if (path.startsWith("/api/admin/categories")) return OPERATIONS_ROLES;
-  if (path.startsWith("/api/admin/products")) return OPERATIONS_ROLES;
-  if (path.startsWith("/api/admin/product-images")) return OPERATIONS_ROLES;
-  if (path.startsWith("/api/admin/delivery")) return OPERATIONS_ROLES;
-  if (path.startsWith("/api/admin/employees")) return OWNER_ADMIN_ROLES;
-  if (path.startsWith("/api/admin/settings")) return OWNER_ADMIN_ROLES;
+  return "/admin";
+}
+
+function getRequiredAdminRoles(
+  path: string,
+  method: string
+): AdminRole[] {
+  const normalizedMethod =
+    method.toUpperCase();
+
+  if (
+    path.startsWith(
+      "/api/admin/auth/"
+    )
+  ) {
+    return ALL_ADMIN_ROLES;
+  }
+
+  if (
+    path.startsWith(
+      "/api/admin/dashboard"
+    )
+  ) {
+    return MANAGEMENT_ROLES;
+  }
+
+  /*
+   * Страница заказов использует heartbeat.
+   * Доступ разрешён всем рабочим ролям,
+   * а endpoint обновляет именно текущего
+   * сотрудника.
+   */
+  if (
+    path.startsWith(
+      "/api/admin/presence"
+    )
+  ) {
+    return ALL_ADMIN_ROLES;
+  }
+
+  if (
+    path.startsWith(
+      "/api/admin/orders"
+    )
+  ) {
+    if (
+      normalizedMethod === "GET"
+    ) {
+      return ALL_ADMIN_ROLES;
+    }
+
+    if (
+      path.includes(
+        "/internal-chat"
+      )
+    ) {
+      return ALL_ADMIN_ROLES;
+    }
+
+    /*
+     * Смена статусов флористом и курьером
+     * будет ограничена назначением и
+     * допустимыми переходами в 7.2.2.
+     */
+    if (
+      path.endsWith("/status")
+    ) {
+      return ALL_ADMIN_ROLES;
+    }
+
+    return MANAGEMENT_ROLES;
+  }
+
+  if (
+    path.startsWith(
+      "/api/admin/customers"
+    )
+  ) {
+    return MANAGEMENT_ROLES;
+  }
+
+  /*
+   * Каталог и тарифы изменяют структуру
+   * магазина. Менеджер заказов не имеет
+   * к ним доступа.
+   */
+  if (
+    path.startsWith(
+      "/api/admin/catalog"
+    )
+    || path.startsWith(
+      "/api/admin/categories"
+    )
+    || path.startsWith(
+      "/api/admin/products"
+    )
+    || path.startsWith(
+      "/api/admin/product-images"
+    )
+    || path.startsWith(
+      "/api/admin/delivery"
+    )
+  ) {
+    return OWNER_ADMIN_ROLES;
+  }
+
+  if (
+    path.startsWith(
+      "/api/admin/employees"
+    )
+    || path.startsWith(
+      "/api/admin/settings"
+    )
+  ) {
+    return OWNER_ADMIN_ROLES;
+  }
 
   return OWNER_ADMIN_ROLES;
 }
@@ -424,14 +544,49 @@ const adminLoginSchema = z.object({
   password: z.string().min(6)
 });
 
+/* EMPLOYEE ACCESS SECURITY 7.1 */
 const employeeSchema = z.object({
-  name: z.string().min(2),
-  phone: z.string().min(5),
-  email: z.string().email().optional().or(z.literal("")).default(""),
-  telegramUsername: z.string().optional().default(""),
-  role: z.enum(["admin", "manager", "florist", "courier"]),
-  password: z.string().optional().default(""),
-  isActive: z.coerce.boolean().optional().default(true)
+  name: z.string()
+    .trim()
+    .min(2)
+    .max(120),
+
+  phone: z.string()
+    .trim()
+    .min(5)
+    .max(40),
+
+  email: z.union([
+    z.string()
+      .trim()
+      .email()
+      .max(255),
+    z.literal("")
+  ])
+    .optional()
+    .default(""),
+
+  telegramUsername: z.string()
+    .trim()
+    .max(100)
+    .optional()
+    .default(""),
+
+  role: z.enum([
+    "admin",
+    "manager",
+    "florist",
+    "courier"
+  ]),
+
+  password: z.string()
+    .max(128)
+    .optional()
+    .default(""),
+
+  isActive: z.coerce.boolean()
+    .optional()
+    .default(true)
 });
 
 const orderAssigneesSchema = z.object({
@@ -721,7 +876,11 @@ export async function adminRoutes(app: FastifyInstance) {
           name: user.name,
           phone: user.phone,
           email: user.email,
-          role: user.role
+          role: user.role,
+          home:
+            adminHomeForRole(
+              user.role
+            )
         }
       };
     } finally {
@@ -786,7 +945,11 @@ export async function adminRoutes(app: FastifyInstance) {
           name: user.name,
           phone: user.phone,
           email: user.email,
-          role: user.role
+          role: user.role,
+          home:
+            adminHomeForRole(
+              user.role
+            )
         }
       };
     } finally {
@@ -862,53 +1025,89 @@ export async function adminRoutes(app: FastifyInstance) {
     }
   });
 
-  app.post("/api/admin/presence", async () => {
+  app.post("/api/admin/presence", async (request, reply) => {
+    const adminContext =
+      (request as AdminRequest)
+        .adminContext;
+
+    if (!adminContext?.userId) {
+      return reply.status(401).send({
+        ok: false,
+        message:
+          "Требуется вход в CRM"
+      });
+    }
+
     const { client } = createDb();
 
     try {
-      const shop = await getShop(client);
-
-      const rows = await client`
-        WITH current_staff AS (
-          SELECT u.id
-          FROM users u
-          JOIN shop_users su ON su.user_id = u.id
-          WHERE su.shop_id = ${shop.id}
-            AND su.is_active = true
-            AND u.status = 'active'
-            AND su.role IN ('owner', 'admin', 'manager')
-          ORDER BY
-            CASE su.role
-              WHEN 'owner' THEN 1
-              WHEN 'admin' THEN 2
-              WHEN 'manager' THEN 3
-              ELSE 10
-            END,
-            u.created_at ASC
-          LIMIT 1
-        )
-        UPDATE users u
-        SET last_login_at = NOW(),
+      const rows =
+        await client<{
+          id: string;
+          name: string | null;
+          last_login_at: string;
+        }[]>`
+          UPDATE users u
+          SET
+            last_login_at = NOW(),
             updated_at = NOW()
-        FROM current_staff
-        WHERE u.id = current_staff.id
-        RETURNING u.id, u.name, u.last_login_at
-      `;
+          WHERE u.id =
+            ${adminContext.userId}
+
+            AND EXISTS (
+              SELECT 1
+              FROM shop_users su
+              WHERE su.shop_id =
+                ${adminContext.shopId}
+                AND su.user_id = u.id
+                AND su.is_active = true
+            )
+
+          RETURNING
+            u.id,
+            u.name,
+            u.last_login_at
+        `;
 
       return {
         ok: true,
-        staff: rows[0] ?? null
+        staff:
+          rows[0] ?? null
       };
     } finally {
       await client.end();
     }
   });
 
-  app.get("/api/admin/orders", async () => {
+  /* ASSIGNED ORDER ACCESS 7.2.2A */
+  app.get("/api/admin/orders", async (request, reply) => {
     const { client } = createDb();
 
     try {
       const shop = await getShop(client);
+
+      const adminContext =
+        (request as AdminRequest)
+          .adminContext;
+
+      if (!adminContext?.userId) {
+        return reply.status(401).send({
+          ok: false,
+          message:
+            "Требуется вход в CRM"
+        });
+      }
+
+      if (
+        adminContext.shopId
+        !== shop.id
+      ) {
+        return reply.status(403).send({
+          ok: false,
+          message:
+            "Нет доступа к этому магазину"
+        });
+      }
 
       const items = await client`
         SELECT
@@ -941,11 +1140,94 @@ export async function adminRoutes(app: FastifyInstance) {
             AND cm.message_scope = 'internal'
         ) ic ON true
         WHERE o.shop_id = ${shop.id}
+          AND (
+            ${adminContext.role}::text
+              NOT IN (
+                'florist',
+                'courier'
+              )
+
+            OR (
+              ${adminContext.role}::text
+                = 'florist'
+              AND o.florist_id =
+                ${adminContext.userId}
+            )
+
+            OR (
+              ${adminContext.role}::text
+                = 'courier'
+              AND o.courier_id =
+                ${adminContext.userId}
+            )
+          )
         ORDER BY o.created_at DESC
         LIMIT 100
       `;
 
-      return { shop, items };
+      /*
+       * ROLE ORDERS DATA 7.2.2B-2A
+       *
+       * Полевым сотрудникам API списка
+       * не отдаёт финансовые данные,
+       * оплату и публичные ссылки.
+       */
+      const isFieldRole =
+        adminContext.role === "florist"
+        || adminContext.role === "courier";
+
+      const visibleItems =
+        isFieldRole
+          ? items.map((rawItem) => {
+              const item = rawItem as Record<string, unknown>;
+
+              return {
+                ...item,
+
+                customer_name:
+                  adminContext.role
+                    === "courier"
+                    ? item.recipient_name
+                      ?? null
+                    : null,
+
+                customer_phone:
+                  adminContext.role
+                    === "courier"
+                    ? item.recipient_phone
+                      ?? null
+                    : null,
+
+                customer_email: null,
+                subtotal: null,
+                discount_amount: null,
+                delivery_price: null,
+                total: null,
+                total_amount: null,
+                payment_status: null,
+                payment_method: null,
+                payment_url: null,
+                tracking_token: null
+              };
+            })
+          : items;
+
+      return {
+        shop,
+        items: visibleItems,
+        viewer: {
+          userId:
+            adminContext.userId,
+          role:
+            adminContext.role,
+          scope:
+            adminContext.role === "florist"
+              ? "assigned_florist"
+              : adminContext.role === "courier"
+                ? "assigned_courier"
+                : "all_orders"
+        }
+      };
     } finally {
       await client.end();
     }
@@ -960,6 +1242,29 @@ export async function adminRoutes(app: FastifyInstance) {
 
     try {
       const shop = await getShop(client);
+
+      const adminContext =
+        (request as AdminRequest)
+          .adminContext;
+
+      if (!adminContext?.userId) {
+        return reply.status(401).send({
+          ok: false,
+          message:
+            "Требуется вход в CRM"
+        });
+      }
+
+      if (
+        adminContext.shopId
+        !== shop.id
+      ) {
+        return reply.status(403).send({
+          ok: false,
+          message:
+            "Нет доступа к этому магазину"
+        });
+      }
 
       const orderRows = await client`
         SELECT
@@ -984,6 +1289,27 @@ export async function adminRoutes(app: FastifyInstance) {
         ) p ON true
         WHERE o.shop_id = ${shop.id}
           AND o.id = ${params.id}
+          AND (
+            ${adminContext.role}::text
+              NOT IN (
+                'florist',
+                'courier'
+              )
+
+            OR (
+              ${adminContext.role}::text
+                = 'florist'
+              AND o.florist_id =
+                ${adminContext.userId}
+            )
+
+            OR (
+              ${adminContext.role}::text
+                = 'courier'
+              AND o.courier_id =
+                ${adminContext.userId}
+            )
+          )
         LIMIT 1
       `;
 
@@ -1048,6 +1374,72 @@ export async function adminRoutes(app: FastifyInstance) {
         problem_return_status: problemReturnStatus
       };
 
+      /*
+       * ROLE ORDER DETAIL DATA 7.2.2B-3A
+       *
+       * Полевые роли получают только данные,
+       * необходимые для своей рабочей задачи.
+       */
+      const isFieldRole =
+        adminContext.role === "florist"
+        || adminContext.role === "courier";
+
+      const orderRecord =
+        orderWithChat as Record<string, unknown>;
+
+      const visibleOrder =
+        isFieldRole
+          ? {
+              ...orderRecord,
+
+              customer_name: null,
+              customer_phone: null,
+              customer_email: null,
+
+              recipient_name:
+                adminContext.role === "courier"
+                  ? orderRecord.recipient_name ?? null
+                  : null,
+
+              recipient_phone:
+                adminContext.role === "courier"
+                  ? orderRecord.recipient_phone ?? null
+                  : null,
+
+              delivery_address_text:
+                adminContext.role === "courier"
+                  ? orderRecord.delivery_address_text ?? null
+                  : null,
+
+              subtotal: null,
+              delivery_price: null,
+              delivery_cost: null,
+              discount_total: null,
+              discount_amount: null,
+              promo_discount: null,
+              bonus_discount: null,
+              bonus_spent: null,
+              total: null,
+              total_amount: null,
+
+              payment_status: null,
+              payment_method: null,
+              payment_url: null,
+              latest_payment_status: null,
+              latest_payment_method: null,
+              latest_payment_provider: null,
+              latest_payment_created_at: null,
+              latest_payment_paid_at: null,
+
+              tracking_token: null,
+              internal_comment: null,
+
+              manager_id: null,
+              florist_id: null,
+              courier_id: null
+            }
+          : orderWithChat;
+
       const items = await client`
         SELECT
           oi.product_id,
@@ -1070,6 +1462,19 @@ export async function adminRoutes(app: FastifyInstance) {
         ORDER BY oi.created_at ASC
       `;
 
+      const visibleItems =
+        isFieldRole
+          ? items.map((rawItem) => {
+              const item = rawItem as Record<string, unknown>;
+
+              return {
+                ...item,
+                price: null,
+                total: null
+              };
+            })
+          : items;
+
       const history = await client`
         SELECT
           h.id,
@@ -1088,7 +1493,11 @@ export async function adminRoutes(app: FastifyInstance) {
         LIMIT 50
       `;
 
-      const staff = await client`
+      const staff =
+        MANAGEMENT_ROLES.includes(
+          adminContext.role
+        )
+          ? await client`
         SELECT
           su.user_id,
           su.role,
@@ -1120,14 +1529,29 @@ export async function adminRoutes(app: FastifyInstance) {
             ELSE 99
           END,
           u.name ASC NULLS LAST
-      `;
+      `
+          : [];
 
       return {
         ok: true,
-        order: orderWithChat,
-        items,
+        order: visibleOrder,
+        items: visibleItems,
         history,
-        staff
+        staff,
+        viewer: {
+          userId:
+            adminContext.userId,
+          role:
+            adminContext.role,
+          canManage:
+            MANAGEMENT_ROLES.includes(
+              adminContext.role
+            ),
+          canChangeStatus:
+            true,
+          canUseInternalChat:
+            true
+        }
       };
     } finally {
       await client.end();
@@ -1433,11 +1857,55 @@ export async function adminRoutes(app: FastifyInstance) {
     try {
       const shop = await getShop(client);
 
+      const adminContext =
+        (request as AdminRequest)
+          .adminContext;
+
+      if (!adminContext?.userId) {
+        return reply.status(401).send({
+          ok: false,
+          message:
+            "Требуется вход в CRM"
+        });
+      }
+
+      if (
+        adminContext.shopId
+        !== shop.id
+      ) {
+        return reply.status(403).send({
+          ok: false,
+          message:
+            "Нет доступа к этому магазину"
+        });
+      }
+
       const orderRows = await client<{ id: string; order_number: string; tracking_token: string }[]>`
         SELECT id, order_number, tracking_token
         FROM orders
         WHERE shop_id = ${shop.id}
           AND id = ${params.id}
+          AND (
+            ${adminContext.role}::text
+              NOT IN (
+                'florist',
+                'courier'
+              )
+
+            OR (
+              ${adminContext.role}::text
+                = 'florist'
+              AND florist_id =
+                ${adminContext.userId}
+            )
+
+            OR (
+              ${adminContext.role}::text
+                = 'courier'
+              AND courier_id =
+                ${adminContext.userId}
+            )
+          )
         LIMIT 1
       `;
 
@@ -1538,7 +2006,13 @@ export async function adminRoutes(app: FastifyInstance) {
         order,
         chat,
         messages,
-        staffPresence
+        staffPresence,
+        viewer: {
+          userId:
+            adminContext.userId,
+          role:
+            adminContext.role
+        }
       };
     } finally {
       await client.end();
@@ -1580,6 +2054,27 @@ export async function adminRoutes(app: FastifyInstance) {
         FROM orders
         WHERE shop_id = ${shop.id}
           AND id = ${params.id}
+          AND (
+            ${adminContext.role}::text
+              NOT IN (
+                'florist',
+                'courier'
+              )
+
+            OR (
+              ${adminContext.role}::text
+                = 'florist'
+              AND florist_id =
+                ${adminContext.userId}
+            )
+
+            OR (
+              ${adminContext.role}::text
+                = 'courier'
+              AND courier_id =
+                ${adminContext.userId}
+            )
+          )
         LIMIT 1
       `;
 
@@ -1743,11 +2238,41 @@ export async function adminRoutes(app: FastifyInstance) {
         });
       }
 
-      const orderRows = await client<{ id: string; status: string }[]>`
-        SELECT id, status
+      const orderRows = await client<{
+        id: string;
+        status: string;
+        florist_id: string | null;
+        courier_id: string | null;
+      }[]>`
+        SELECT
+          id,
+          status,
+          florist_id,
+          courier_id
         FROM orders
         WHERE shop_id = ${shop.id}
           AND id = ${params.id}
+          AND (
+            ${adminContext.role}::text
+              NOT IN (
+                'florist',
+                'courier'
+              )
+
+            OR (
+              ${adminContext.role}::text
+                = 'florist'
+              AND florist_id =
+                ${adminContext.userId}
+            )
+
+            OR (
+              ${adminContext.role}::text
+                = 'courier'
+              AND courier_id =
+                ${adminContext.userId}
+            )
+          )
         LIMIT 1
       `;
 
@@ -1826,6 +2351,76 @@ export async function adminRoutes(app: FastifyInstance) {
         allowedStatuses.add("cancelled");
       }
 
+      /*
+       * Флорист управляет только этапами
+       * сборки назначенного ему заказа.
+       *
+       * Курьер управляет только этапами
+       * доставки назначенного ему заказа.
+       *
+       * Отмена заказа остаётся действием
+       * владельца, администратора или
+       * менеджера.
+       */
+      if (
+        adminContext.role === "florist"
+      ) {
+        const floristStatuses =
+          new Set([
+            "confirmed",
+            "assembling",
+            "ready",
+            "problem"
+          ]);
+
+        for (
+          const candidate
+          of Array.from(
+            allowedStatuses
+          )
+        ) {
+          if (
+            !floristStatuses.has(
+              candidate
+            )
+          ) {
+            allowedStatuses.delete(
+              candidate
+            );
+          }
+        }
+      }
+
+      if (
+        adminContext.role === "courier"
+      ) {
+        const courierStatuses =
+          new Set([
+            "ready",
+            "assigned_courier",
+            "delivering",
+            "delivered",
+            "problem"
+          ]);
+
+        for (
+          const candidate
+          of Array.from(
+            allowedStatuses
+          )
+        ) {
+          if (
+            !courierStatuses.has(
+              candidate
+            )
+          ) {
+            allowedStatuses.delete(
+              candidate
+            );
+          }
+        }
+      }
+
       const statusLabels: Record<string, string> = {
         new: "Новый",
         confirmed: "Подтверждён",
@@ -1870,13 +2465,21 @@ export async function adminRoutes(app: FastifyInstance) {
         });
       }
 
+      const roleActorText =
+        adminContext.role === "florist"
+          ? "флористом"
+          : adminContext.role === "courier"
+            ? "курьером"
+            : "в CRM";
+
       const historyComment =
         body.status === "problem"
-          ? `Проблема в CRM: ${body.reason}`
+          ? `Проблема отмечена ${roleActorText}: ${body.reason}`
           : body.status === "cancelled"
             ? `Заказ отменён в CRM: ${body.reason}`
-            : `Статус изменён в CRM: ${
-                statusLabels[body.status] || body.status
+            : `Статус изменён ${roleActorText}: ${
+                statusLabels[body.status]
+                || body.status
               }`;
 
       const updatedRows = await client<{ id: string }[]>`
@@ -3482,6 +4085,8 @@ export async function adminRoutes(app: FastifyInstance) {
         email: string | null;
         user_status: string;
         last_login_at: string | null;
+        has_password: boolean;
+        active_sessions: number;
         linked_telegram_id: string | null;
         linked_telegram_username: string | null;
         telegram_link_code: string | null;
@@ -3499,14 +4104,51 @@ export async function adminRoutes(app: FastifyInstance) {
           u.email,
           u.status AS user_status,
           u.last_login_at,
-          ta.telegram_id AS linked_telegram_id,
-          ta.username AS linked_telegram_username,
-          elt.token AS telegram_link_code,
-          elt.expires_at AS telegram_link_expires_at
+
+          CASE
+            WHEN u.password_hash IS NULL
+              OR u.password_hash = ''
+              THEN false
+            ELSE true
+          END AS has_password,
+
+          COALESCE(
+            sessions.active_sessions,
+            0
+          )::int AS active_sessions,
+
+          ta.telegram_id
+            AS linked_telegram_id,
+
+          ta.username
+            AS linked_telegram_username,
+
+          elt.token
+            AS telegram_link_code,
+
+          elt.expires_at
+            AS telegram_link_expires_at
+
         FROM shop_users su
-        JOIN users u ON u.id = su.user_id
+
+        JOIN users u
+          ON u.id = su.user_id
+
         LEFT JOIN LATERAL (
-          SELECT telegram_id, username
+          SELECT
+            COUNT(*)::int
+              AS active_sessions
+          FROM admin_sessions s
+          WHERE s.shop_id = su.shop_id
+            AND s.user_id = su.user_id
+            AND s.revoked_at IS NULL
+            AND s.expires_at > NOW()
+        ) sessions ON true
+
+        LEFT JOIN LATERAL (
+          SELECT
+            telegram_id,
+            username
           FROM telegram_accounts
           WHERE shop_id = su.shop_id
             AND user_id = su.user_id
@@ -3514,8 +4156,11 @@ export async function adminRoutes(app: FastifyInstance) {
           ORDER BY linked_at DESC
           LIMIT 1
         ) ta ON true
+
         LEFT JOIN LATERAL (
-          SELECT token, expires_at
+          SELECT
+            token,
+            expires_at
           FROM employee_link_tokens
           WHERE shop_id = su.shop_id
             AND user_id = su.user_id
@@ -3527,7 +4172,9 @@ export async function adminRoutes(app: FastifyInstance) {
           ORDER BY created_at DESC
           LIMIT 1
         ) elt ON true
+
         WHERE su.shop_id = ${shop.id}
+
         ORDER BY
           CASE su.role
             WHEN 'owner' THEN 1
@@ -3538,6 +4185,7 @@ export async function adminRoutes(app: FastifyInstance) {
             ELSE 99
           END,
           su.created_at DESC
+
         LIMIT 100
       `;
 
@@ -3545,7 +4193,12 @@ export async function adminRoutes(app: FastifyInstance) {
         shop,
         items: items.map((item) => ({
           ...item,
-          telegram_link_code: item.telegram_link_code ? String(item.telegram_link_code) : null
+          telegram_link_code:
+            item.telegram_link_code
+              ? String(
+                  item.telegram_link_code
+                )
+              : null
         }))
       };
     } finally {
@@ -3554,7 +4207,10 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/admin/employees", async (request, reply) => {
-    const body = employeeSchema.parse(request.body ?? {});
+    const body = employeeSchema.parse(
+      request.body ?? {}
+    );
+
     const { client } = createDb();
 
     try {
@@ -3562,55 +4218,88 @@ export async function adminRoutes(app: FastifyInstance) {
 
       const name = body.name.trim();
       const phone = body.phone.trim();
-      const email = body.email.trim() || null;
-      const password = body.password.trim();
+      const phoneDigits =
+        normalizePhoneDigits(phone);
 
-      if (password && password.length < 6) {
+      const email =
+        body.email.trim()
+          ? body.email
+              .trim()
+              .toLowerCase()
+          : null;
+
+      const password =
+        body.password.trim();
+
+      if (phoneDigits.length < 10) {
         return reply.status(400).send({
           ok: false,
-          message: "Пароль сотрудника должен быть не короче 6 символов"
+          message:
+            "Укажите корректный номер телефона сотрудника"
         });
       }
 
-      const passwordHash = password ? hashPassword(password) : null;
+      if (password.length < 8) {
+        return reply.status(400).send({
+          ok: false,
+          message:
+            "Пароль сотрудника должен быть не короче 8 символов"
+        });
+      }
 
-      const existingRows = email
-        ? await client<{ id: string }[]>`
-            SELECT id
-            FROM users
-            WHERE phone = ${phone}
-               OR email = ${email}
-            LIMIT 1
-          `
-        : await client<{ id: string }[]>`
-            SELECT id
-            FROM users
-            WHERE phone = ${phone}
-            LIMIT 1
-          `;
+      const duplicateRows =
+        await client<{
+          id: string;
+          phone: string | null;
+          email: string | null;
+        }[]>`
+          SELECT
+            id,
+            phone,
+            email
+          FROM users
+          WHERE
+            regexp_replace(
+              COALESCE(phone, ''),
+              '[^0-9]',
+              '',
+              'g'
+            ) = ${phoneDigits}
 
-      let userId = existingRows[0]?.id;
+            OR (
+              ${email}::text IS NOT NULL
+              AND LOWER(
+                TRIM(
+                  COALESCE(email, '')
+                )
+              ) = ${email}
+            )
 
-      if (userId) {
-        await client`
-          UPDATE users
-          SET name = ${name},
-              phone = ${phone},
-              email = ${email},
-              password_hash = COALESCE(${passwordHash}, password_hash),
-              status = 'active',
-              updated_at = NOW()
-          WHERE id = ${userId}
+          LIMIT 1
         `;
-      } else {
-        if (!passwordHash) {
-          return reply.status(400).send({
-            ok: false,
-            message: "Укажите пароль сотрудника для входа в CRM"
-          });
-        }
 
-        const userRows = await client<{ id: string }[]>`
+      const duplicate =
+        duplicateRows[0];
+
+      if (duplicate) {
+        const duplicatePhone =
+          normalizePhoneDigits(
+            duplicate.phone || ""
+          ) === phoneDigits;
+
+        return reply.status(409).send({
+          ok: false,
+          message: duplicatePhone
+            ? "Сотрудник с таким телефоном уже существует"
+            : "Сотрудник с таким Email уже существует"
+        });
+      }
+
+      const passwordHash =
+        hashPassword(password);
+
+      const userRows =
+        await client<{ id: string }[]>`
           INSERT INTO users (
             phone,
             email,
@@ -3632,13 +4321,14 @@ export async function adminRoutes(app: FastifyInstance) {
           RETURNING id
         `;
 
-        userId = userRows[0]?.id;
-      }
+      const userId =
+        userRows[0]?.id;
 
       if (!userId) {
         return reply.status(500).send({
           ok: false,
-          message: "Не удалось создать пользователя"
+          message:
+            "Не удалось создать пользователя"
         });
       }
 
@@ -3659,66 +4349,69 @@ export async function adminRoutes(app: FastifyInstance) {
           NOW(),
           NOW()
         )
-        ON CONFLICT (shop_id, user_id)
-        DO UPDATE SET
-          role = EXCLUDED.role,
-          is_active = EXCLUDED.is_active,
-          updated_at = NOW()
         RETURNING *
       `;
 
-      await client`
-        UPDATE employee_link_tokens
-        SET status = 'cancelled',
-            updated_at = NOW()
-        WHERE shop_id = ${shop.id}
-          AND user_id = ${userId}
-          AND provider = 'telegram'
-          AND purpose = 'connect_staff'
-          AND status = 'pending'
-          AND consumed_at IS NULL
-      `;
+      let telegramToken:
+        string | null = null;
 
-      const telegramToken = createTelegramLinkCode();
-      const telegramUsername = body.telegramUsername.trim().replace(/^@/, "");
-      const employeeLinkMetadata = {
-        source: "admin_employee_create",
-        mode: "code",
-        role: body.role,
-        telegramUsername: telegramUsername || null
-      };
+      if (body.isActive) {
+        telegramToken =
+          createTelegramLinkCode();
 
-      await client`
-        INSERT INTO employee_link_tokens (
-          shop_id,
-          user_id,
-          provider,
-          purpose,
-          token,
-          status,
-          expires_at,
-          metadata,
-          created_at,
-          updated_at
-        )
-        VALUES (
-          ${shop.id},
-          ${userId},
-          'telegram',
-          'connect_staff',
-          ${telegramToken},
-          'pending',
-          NOW() + INTERVAL '30 minutes',
-          CAST(${JSON.stringify(employeeLinkMetadata)} AS jsonb),
-          NOW(),
-          NOW()
-        )
-      `;
+        const metadata = {
+          source:
+            "admin_employee_create",
+          mode:
+            "code",
+          role:
+            body.role,
+          telegramUsername:
+            body.telegramUsername
+              .trim()
+              .replace(/^@/, "")
+              || null
+        };
+
+        await client`
+          INSERT INTO employee_link_tokens (
+            shop_id,
+            user_id,
+            provider,
+            purpose,
+            token,
+            status,
+            expires_at,
+            metadata,
+            created_at,
+            updated_at
+          )
+          VALUES (
+            ${shop.id},
+            ${userId},
+            'telegram',
+            'connect_staff',
+            ${telegramToken},
+            'pending',
+            NOW() + INTERVAL '30 minutes',
+            CAST(
+              ${JSON.stringify(metadata)}
+              AS jsonb
+            ),
+            NOW(),
+            NOW()
+          )
+        `;
+      }
 
       return {
         ok: true,
-        employee: employeeRows[0] ?? null,
-        telegramLinkCode: telegramToken
+        employee:
+          employeeRows[0] ?? null,
+        telegramLinkCode:
+          telegramToken,
+        login:
+          email || phone
       };
     } finally {
       await client.end();
@@ -3726,95 +4419,371 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   app.patch("/api/admin/employees/:id", async (request, reply) => {
-    const params = z.object({ id: z.string().uuid() }).parse(request.params ?? {});
-    const body = employeeSchema.parse(request.body ?? {});
+    const params = z.object({
+      id: z.string().uuid()
+    }).parse(
+      request.params ?? {}
+    );
+
+    const body = employeeSchema.parse(
+      request.body ?? {}
+    );
+
     const { client } = createDb();
 
     try {
       const shop = await getShop(client);
 
-      const employeeRows = await client<{ user_id: string; role: string }[]>`
-        SELECT user_id, role
-        FROM shop_users
-        WHERE shop_id = ${shop.id}
-          AND id = ${params.id}
-        LIMIT 1
-      `;
+      const employeeRows =
+        await client<{
+          user_id: string;
+          role: string;
+          is_active: boolean;
+          phone: string | null;
+          email: string | null;
+        }[]>`
+          SELECT
+            su.user_id,
+            su.role,
+            su.is_active,
+            u.phone,
+            u.email
+          FROM shop_users su
+          JOIN users u
+            ON u.id = su.user_id
+          WHERE su.shop_id = ${shop.id}
+            AND su.id = ${params.id}
+          LIMIT 1
+        `;
 
-      const employee = employeeRows[0];
+      const employee =
+        employeeRows[0];
 
       if (!employee) {
         return reply.status(404).send({
           ok: false,
-          message: "Сотрудник не найден"
+          message:
+            "Сотрудник не найден"
         });
       }
 
       if (employee.role === "owner") {
         return reply.status(400).send({
           ok: false,
-          message: "Владельца нельзя редактировать через эту форму"
+          message:
+            "Владельца нельзя редактировать через эту форму"
         });
       }
 
       const name = body.name.trim();
       const phone = body.phone.trim();
-      const email = body.email.trim() || null;
-      const password = body.password.trim();
+      const phoneDigits =
+        normalizePhoneDigits(phone);
 
-      if (password && password.length < 6) {
+      const email =
+        body.email.trim()
+          ? body.email
+              .trim()
+              .toLowerCase()
+          : null;
+
+      const password =
+        body.password.trim();
+
+      if (phoneDigits.length < 10) {
         return reply.status(400).send({
           ok: false,
-          message: "Пароль сотрудника должен быть не короче 6 символов"
+          message:
+            "Укажите корректный номер телефона сотрудника"
         });
       }
 
-      const passwordHash = password ? hashPassword(password) : null;
+      if (
+        password
+        && password.length < 8
+      ) {
+        return reply.status(400).send({
+          ok: false,
+          message:
+            "Новый пароль должен быть не короче 8 символов"
+        });
+      }
+
+      const duplicateRows =
+        await client<{
+          id: string;
+          phone: string | null;
+          email: string | null;
+        }[]>`
+          SELECT
+            id,
+            phone,
+            email
+          FROM users
+          WHERE id <> ${employee.user_id}
+            AND (
+              regexp_replace(
+                COALESCE(phone, ''),
+                '[^0-9]',
+                '',
+                'g'
+              ) = ${phoneDigits}
+
+              OR (
+                ${email}::text
+                  IS NOT NULL
+                AND LOWER(
+                  TRIM(
+                    COALESCE(email, '')
+                  )
+                ) = ${email}
+              )
+            )
+          LIMIT 1
+        `;
+
+      const duplicate =
+        duplicateRows[0];
+
+      if (duplicate) {
+        const duplicatePhone =
+          normalizePhoneDigits(
+            duplicate.phone || ""
+          ) === phoneDigits;
+
+        return reply.status(409).send({
+          ok: false,
+          message: duplicatePhone
+            ? "Этот телефон уже используется другим пользователем"
+            : "Этот Email уже используется другим пользователем"
+        });
+      }
+
+      const roleChanged =
+        employee.role !== body.role;
+
+      const activeChanged =
+        employee.is_active
+          !== body.isActive;
+
+      const credentialsChanged =
+        normalizePhoneDigits(
+          employee.phone || ""
+        ) !== phoneDigits
+
+        || String(
+          employee.email || ""
+        )
+          .trim()
+          .toLowerCase()
+          !== String(email || "")
+
+        || Boolean(password);
+
+      if (
+        roleChanged
+        || !body.isActive
+      ) {
+        const assignmentRows =
+          await client<{
+            count: number;
+          }[]>`
+            SELECT
+              COUNT(*)::int
+                AS count
+            FROM orders
+            WHERE shop_id = ${shop.id}
+              AND status NOT IN (
+                'delivered',
+                'cancelled'
+              )
+              AND (
+                manager_id =
+                  ${employee.user_id}
+                OR florist_id =
+                  ${employee.user_id}
+                OR courier_id =
+                  ${employee.user_id}
+              )
+          `;
+
+        const activeAssignments =
+          Number(
+            assignmentRows[0]?.count
+            || 0
+          );
+
+        if (activeAssignments > 0) {
+          return reply.status(409).send({
+            ok: false,
+            message:
+              `У сотрудника есть незавершённые заказы: ${activeAssignments}. Сначала переназначьте их.`
+          });
+        }
+      }
+
+      const passwordHash =
+        password
+          ? hashPassword(password)
+          : null;
 
       await client`
         UPDATE users
-        SET name = ${name},
-            phone = ${phone},
-            email = ${email},
-            password_hash = COALESCE(${passwordHash}, password_hash),
-            status = 'active',
-            updated_at = NOW()
-        WHERE id = ${employee.user_id}
+        SET
+          name = ${name},
+          phone = ${phone},
+          email = ${email},
+          password_hash =
+            COALESCE(
+              ${passwordHash},
+              password_hash
+            ),
+          status = 'active',
+          updated_at = NOW()
+        WHERE id =
+          ${employee.user_id}
       `;
 
       await client`
         UPDATE shop_users
-        SET role = ${body.role}::shop_user_role,
-            is_active = ${body.isActive},
-            updated_at = NOW()
+        SET
+          role =
+            ${body.role}
+              ::shop_user_role,
+          is_active =
+            ${body.isActive},
+          updated_at = NOW()
         WHERE shop_id = ${shop.id}
           AND id = ${params.id}
       `;
 
+      const accessChanged =
+        credentialsChanged
+        || roleChanged
+        || activeChanged;
+
+      let revokedSessions = 0;
+
+      if (accessChanged) {
+        const revokedRows =
+          await client<{
+            token: string;
+          }[]>`
+            UPDATE admin_sessions
+            SET
+              revoked_at = NOW(),
+              updated_at = NOW()
+            WHERE shop_id = ${shop.id}
+              AND user_id =
+                ${employee.user_id}
+              AND revoked_at IS NULL
+            RETURNING token
+          `;
+
+        revokedSessions =
+          revokedRows.length;
+      }
+
       if (!body.isActive) {
         await client`
           UPDATE telegram_accounts
-          SET is_active = false,
-              updated_at = NOW()
+          SET
+            is_active = false,
+            updated_at = NOW()
           WHERE shop_id = ${shop.id}
-            AND user_id = ${employee.user_id}
+            AND user_id =
+              ${employee.user_id}
             AND is_active = true
         `;
 
         await client`
           UPDATE employee_link_tokens
-          SET status = 'cancelled',
-              updated_at = NOW()
+          SET
+            status = 'cancelled',
+            updated_at = NOW()
           WHERE shop_id = ${shop.id}
-            AND user_id = ${employee.user_id}
-            AND provider = 'telegram'
-            AND purpose = 'connect_staff'
+            AND user_id =
+              ${employee.user_id}
             AND status = 'pending'
             AND consumed_at IS NULL
         `;
       }
 
-      return { ok: true };
+      return {
+        ok: true,
+        accessChanged,
+        revokedSessions
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.post("/api/admin/employees/:id/revoke-sessions", async (request, reply) => {
+    const params = z.object({
+      id: z.string().uuid()
+    }).parse(
+      request.params ?? {}
+    );
+
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+
+      const employeeRows =
+        await client<{
+          user_id: string;
+          role: string;
+        }[]>`
+          SELECT
+            user_id,
+            role
+          FROM shop_users
+          WHERE shop_id = ${shop.id}
+            AND id = ${params.id}
+          LIMIT 1
+        `;
+
+      const employee =
+        employeeRows[0];
+
+      if (!employee) {
+        return reply.status(404).send({
+          ok: false,
+          message:
+            "Сотрудник не найден"
+        });
+      }
+
+      if (employee.role === "owner") {
+        return reply.status(400).send({
+          ok: false,
+          message:
+            "Сеансы владельца нельзя завершить через эту кнопку"
+        });
+      }
+
+      const revokedRows =
+        await client<{
+          token: string;
+        }[]>`
+          UPDATE admin_sessions
+          SET
+            revoked_at = NOW(),
+            updated_at = NOW()
+          WHERE shop_id = ${shop.id}
+            AND user_id =
+              ${employee.user_id}
+            AND revoked_at IS NULL
+          RETURNING token
+        `;
+
+      return {
+        ok: true,
+        revokedSessions:
+          revokedRows.length
+      };
     } finally {
       await client.end();
     }
@@ -3955,63 +4924,138 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   app.delete("/api/admin/employees/:id", async (request, reply) => {
-    const params = z.object({ id: z.string().uuid() }).parse(request.params ?? {});
+    const params = z.object({
+      id: z.string().uuid()
+    }).parse(
+      request.params ?? {}
+    );
+
     const { client } = createDb();
 
     try {
       const shop = await getShop(client);
 
-      const employeeRows = await client<{ user_id: string; role: string }[]>`
-        SELECT user_id, role
-        FROM shop_users
-        WHERE shop_id = ${shop.id}
-          AND id = ${params.id}
-        LIMIT 1
-      `;
+      const employeeRows =
+        await client<{
+          user_id: string;
+          role: string;
+        }[]>`
+          SELECT
+            user_id,
+            role
+          FROM shop_users
+          WHERE shop_id = ${shop.id}
+            AND id = ${params.id}
+          LIMIT 1
+        `;
 
-      const employee = employeeRows[0];
+      const employee =
+        employeeRows[0];
 
       if (!employee) {
         return reply.status(404).send({
           ok: false,
-          message: "Сотрудник не найден"
+          message:
+            "Сотрудник не найден"
         });
       }
 
       if (employee.role === "owner") {
         return reply.status(400).send({
           ok: false,
-          message: "Владельца нельзя удалить из команды"
+          message:
+            "Владельца нельзя удалить из команды"
+        });
+      }
+
+      const assignmentRows =
+        await client<{
+          count: number;
+        }[]>`
+          SELECT
+            COUNT(*)::int AS count
+          FROM orders
+          WHERE shop_id = ${shop.id}
+            AND status NOT IN (
+              'delivered',
+              'cancelled'
+            )
+            AND (
+              manager_id =
+                ${employee.user_id}
+              OR florist_id =
+                ${employee.user_id}
+              OR courier_id =
+                ${employee.user_id}
+            )
+        `;
+
+      const activeAssignments =
+        Number(
+          assignmentRows[0]?.count
+          || 0
+        );
+
+      if (activeAssignments > 0) {
+        return reply.status(409).send({
+          ok: false,
+          message:
+            `У сотрудника есть незавершённые заказы: ${activeAssignments}. Сначала переназначьте их.`
         });
       }
 
       await client`
         UPDATE shop_users
-        SET is_active = false,
-            updated_at = NOW()
+        SET
+          is_active = false,
+          updated_at = NOW()
         WHERE shop_id = ${shop.id}
           AND id = ${params.id}
       `;
 
+      const revokedRows =
+        await client<{
+          token: string;
+        }[]>`
+          UPDATE admin_sessions
+          SET
+            revoked_at = NOW(),
+            updated_at = NOW()
+          WHERE shop_id = ${shop.id}
+            AND user_id =
+              ${employee.user_id}
+            AND revoked_at IS NULL
+          RETURNING token
+        `;
+
       await client`
         UPDATE telegram_accounts
-        SET is_active = false,
-            updated_at = NOW()
+        SET
+          is_active = false,
+          updated_at = NOW()
         WHERE shop_id = ${shop.id}
-          AND user_id = ${employee.user_id}
+          AND user_id =
+            ${employee.user_id}
+          AND is_active = true
       `;
 
       await client`
         UPDATE employee_link_tokens
-        SET status = 'cancelled',
-            updated_at = NOW()
+        SET
+          status = 'cancelled',
+          updated_at = NOW()
         WHERE shop_id = ${shop.id}
-          AND user_id = ${employee.user_id}
+          AND user_id =
+            ${employee.user_id}
           AND status = 'pending'
           AND consumed_at IS NULL
       `;
 
-      return { ok: true };
+      return {
+        ok: true,
+        revokedSessions:
+          revokedRows.length
+      };
     } finally {
       await client.end();
     }
