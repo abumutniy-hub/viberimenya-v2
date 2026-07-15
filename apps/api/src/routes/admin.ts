@@ -2193,6 +2193,7 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/admin/orders/:id/status", async (request, reply) => {
+    // INVENTORY RESERVATION 1.0
     const params = z.object({
       id: z.string().uuid()
     }).parse(request.params ?? {});
@@ -2482,52 +2483,321 @@ export async function adminRoutes(app: FastifyInstance) {
                 || body.status
               }`;
 
-      const updatedRows = await client<{ id: string }[]>`
-        UPDATE orders
-        SET status = ${body.status}::order_status,
-            delivered_at = CASE
-              WHEN ${body.status} = 'delivered'
-              THEN NOW()
-              ELSE delivered_at
-            END,
-            cancelled_at = CASE
-              WHEN ${body.status} = 'cancelled'
-              THEN NOW()
-              ELSE cancelled_at
-            END,
-            updated_at = NOW()
-        WHERE id = ${order.id}
-          AND status = ${order.status}::order_status
-        RETURNING id
-      `;
+      const statusChangeResult =
+        await client.begin(
+          async (transaction) => {
+            const lockedOrderRows =
+              await transaction<{
+                id: string;
+                status: string;
+                reservation_state:
+                  string | null;
+                reservation_count:
+                  number;
+              }[]>`
+                SELECT
+                  id,
+                  status::text
+                    AS status,
+                  metadata #>>
+                    '{inventoryReservation,state}'
+                    AS reservation_state,
+                  CASE
+                    WHEN jsonb_typeof(
+                      metadata #>
+                        '{inventoryReservation,items}'
+                    ) = 'array'
+                    THEN jsonb_array_length(
+                      metadata #>
+                        '{inventoryReservation,items}'
+                    )
+                    ELSE 0
+                  END::int
+                    AS reservation_count
+                FROM orders
+                WHERE shop_id =
+                    ${shop.id}
+                  AND id =
+                    ${order.id}
+                LIMIT 1
+                FOR UPDATE
+              `;
 
-      if (!updatedRows[0]) {
-        return reply.status(409).send({
-          ok: false,
-          message: "Статус заказа уже изменился. Обновите страницу."
-        });
+            const lockedOrder =
+              lockedOrderRows[0];
+
+            if (
+              !lockedOrder
+              || lockedOrder.status
+                !== order.status
+            ) {
+              return {
+                changed: false,
+                releasedUnits: 0
+              };
+            }
+
+            let releasedUnits = 0;
+
+            let finalHistoryComment =
+              historyComment;
+
+            if (
+              body.status
+                === "cancelled"
+              && lockedOrder
+                .reservation_state
+                === "reserved"
+            ) {
+              if (
+                lockedOrder
+                  .reservation_count
+                < 1
+              ) {
+                throw new HttpError(
+                  500,
+                  "Повреждён журнал резервирования заказа"
+                );
+              }
+
+              const restoredRows =
+                await transaction<{
+                  product_id: string;
+                  quantity: number;
+                }[]>`
+                  WITH reservation_items
+                    AS (
+                      SELECT
+                        (
+                          item
+                          ->> 'productId'
+                        )::uuid
+                          AS product_id,
+                        (
+                          item
+                          ->> 'quantity'
+                        )::int
+                          AS quantity
+                      FROM orders
+                        source_order
+                      CROSS JOIN LATERAL
+                        jsonb_array_elements(
+                          source_order.metadata
+                          #>
+                          '{inventoryReservation,items}'
+                        ) AS item
+                      WHERE
+                        source_order.shop_id =
+                          ${shop.id}
+                        AND source_order.id =
+                          ${order.id}
+                        AND source_order.metadata
+                          #>>
+                          '{inventoryReservation,state}'
+                          = 'reserved'
+                        AND jsonb_typeof(
+                          item
+                        ) = 'object'
+                        AND item
+                          ? 'productId'
+                        AND item
+                          ? 'quantity'
+                        AND (
+                          item
+                          ->> 'productId'
+                        ) ~*
+                          '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                        AND (
+                          item
+                          ->> 'quantity'
+                        ) ~
+                          '^[1-9][0-9]*$'
+                        AND (
+                          item
+                          ->> 'quantity'
+                        )::int
+                          BETWEEN 1 AND 99
+                    ),
+                  unique_items AS (
+                    SELECT
+                      product_id,
+                      SUM(
+                        quantity
+                      )::int
+                        AS quantity
+                    FROM reservation_items
+                    GROUP BY product_id
+                  )
+                  UPDATE products
+                    product
+                  SET
+                    stock_quantity =
+                      COALESCE(
+                        product
+                          .stock_quantity,
+                        0
+                      )
+                      + unique_items
+                        .quantity,
+                    updated_at =
+                      NOW()
+                  FROM unique_items
+                  WHERE product.shop_id =
+                      ${shop.id}
+                    AND product.id =
+                      unique_items
+                        .product_id
+                  RETURNING
+                    product.id
+                      AS product_id,
+                    unique_items.quantity
+                `;
+
+              if (
+                restoredRows.length
+                !== lockedOrder
+                  .reservation_count
+              ) {
+                throw new HttpError(
+                  409,
+                  "Не удалось вернуть все товары из резерва. Проверьте каталог."
+                );
+              }
+
+              releasedUnits =
+                restoredRows.reduce(
+                  (sum, row) =>
+                    sum
+                    + Number(
+                      row.quantity
+                    ),
+                  0
+                );
+
+              const releasePatch = {
+                state: "released",
+                releasedAt:
+                  new Date()
+                    .toISOString(),
+                releasedByUserId:
+                  adminContext
+                    .userId
+              };
+
+              await transaction`
+                UPDATE orders
+                SET
+                  metadata =
+                    jsonb_set(
+                      COALESCE(
+                        metadata,
+                        '{}'::jsonb
+                      ),
+                      '{inventoryReservation}',
+                      COALESCE(
+                        metadata
+                        ->
+                        'inventoryReservation',
+                        '{}'::jsonb
+                      )
+                      || CAST(
+                        ${JSON.stringify(
+                          releasePatch
+                        )}
+                        AS jsonb
+                      ),
+                      true
+                    ),
+                  updated_at =
+                    NOW()
+                WHERE shop_id =
+                    ${shop.id}
+                  AND id =
+                    ${order.id}
+              `;
+
+              finalHistoryComment =
+                `${historyComment}. Возвращено на склад: ${releasedUnits} шт.`;
+            }
+
+            const updatedRows =
+              await transaction<{
+                id: string;
+              }[]>`
+                UPDATE orders
+                SET
+                  status =
+                    ${body.status}::order_status,
+                  delivered_at =
+                    CASE
+                      WHEN ${body.status}
+                        = 'delivered'
+                      THEN NOW()
+                      ELSE delivered_at
+                    END,
+                  cancelled_at =
+                    CASE
+                      WHEN ${body.status}
+                        = 'cancelled'
+                      THEN NOW()
+                      ELSE cancelled_at
+                    END,
+                  updated_at =
+                    NOW()
+                WHERE id =
+                    ${order.id}
+                  AND status =
+                    ${order.status}::order_status
+                RETURNING id
+              `;
+
+            if (!updatedRows[0]) {
+              return {
+                changed: false,
+                releasedUnits: 0
+              };
+            }
+
+            await transaction`
+              INSERT INTO order_status_history (
+                shop_id,
+                order_id,
+                from_status,
+                to_status,
+                changed_by_user_id,
+                comment,
+                created_at
+              )
+              VALUES (
+                ${shop.id},
+                ${order.id},
+                ${order.status}::order_status,
+                ${body.status}::order_status,
+                ${adminContext.userId},
+                ${finalHistoryComment},
+                NOW()
+              )
+            `;
+
+            return {
+              changed: true,
+              releasedUnits
+            };
+          }
+        );
+
+      if (
+        !statusChangeResult
+          .changed
+      ) {
+        return reply
+          .status(409)
+          .send({
+            ok: false,
+            message:
+              "Статус заказа уже изменился. Обновите страницу."
+          });
       }
-
-      await client`
-        INSERT INTO order_status_history (
-          shop_id,
-          order_id,
-          from_status,
-          to_status,
-          changed_by_user_id,
-          comment,
-          created_at
-        )
-        VALUES (
-          ${shop.id},
-          ${order.id},
-          ${order.status}::order_status,
-          ${body.status}::order_status,
-          ${adminContext.userId},
-          ${historyComment},
-          NOW()
-        )
-      `;
 
       const customerEventByStatus: Partial<Record<string, CustomerNotificationType>> = {
         ready: "order_ready",

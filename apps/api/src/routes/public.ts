@@ -1910,6 +1910,7 @@ export async function publicRoutes(app: FastifyInstance) {
 
   app.post("/api/public/orders", async (request, reply) => {
     // ORDER TRANSACTION CORE 1.0
+    // INVENTORY RESERVATION 1.0
     const body =
       createOrderSchema.parse(
         request.body ?? {}
@@ -1981,29 +1982,68 @@ export async function publicRoutes(app: FastifyInstance) {
         id: string;
         name: string;
         price: number;
+        stockQuantity: number;
       }>();
 
       for (const item of requestedItems) {
-        const rows = await transaction<{ id: string; name: string; price: number }[]>`
-          SELECT id, name, price
-          FROM products
-          WHERE shop_id = ${shop.id}
-            AND id = ${item.productId}
-            AND status = 'active'
-          LIMIT 1
-        `;
+        const rows =
+          await transaction<{
+            id: string;
+            name: string;
+            price: number;
+            stock_quantity: number | null;
+          }[]>`
+            SELECT
+              id,
+              name,
+              price,
+              stock_quantity
+            FROM products
+            WHERE shop_id = ${shop.id}
+              AND id = ${item.productId}
+              AND status = 'active'
+            LIMIT 1
+            FOR UPDATE
+          `;
 
         const product = rows[0];
 
         if (!product) {
-          throw new HttpError(400, "Product not found or inactive");
+          throw new HttpError(
+            400,
+            "Product not found or inactive"
+          );
         }
 
-        productsMap.set(product.id, {
-          id: product.id,
-          name: product.name,
-          price: Number(product.price)
-        });
+        const availableQuantity =
+          Number(
+            product.stock_quantity
+            ?? 0
+          );
+
+        if (
+          availableQuantity
+          < item.quantity
+        ) {
+          throw new HttpError(
+            409,
+            `Недостаточно товара «${product.name}». Доступно: ${availableQuantity}`
+          );
+        }
+
+        productsMap.set(
+          product.id,
+          {
+            id: product.id,
+            name: product.name,
+            price:
+              Number(
+                product.price
+              ),
+            stockQuantity:
+              availableQuantity
+          }
+        );
       }
 
       const subtotalAmount =
@@ -2511,7 +2551,35 @@ export async function publicRoutes(app: FastifyInstance) {
 
         const quantity = item.quantity;
         const unitPrice = Number(product.price);
-        const itemTotal = unitPrice * quantity;
+        const itemTotal =
+          unitPrice * quantity;
+
+        const reservedProductRows =
+          await transaction<{
+            stock_quantity: number;
+          }[]>`
+            UPDATE products
+            SET
+              stock_quantity =
+                stock_quantity
+                - ${quantity},
+              updated_at = NOW()
+            WHERE shop_id = ${shop.id}
+              AND id = ${product.id}
+              AND status = 'active'
+              AND stock_quantity
+                IS NOT NULL
+              AND stock_quantity
+                >= ${quantity}
+            RETURNING stock_quantity
+          `;
+
+        if (!reservedProductRows[0]) {
+          throw new HttpError(
+            409,
+            `Остаток товара «${product.name}» изменился. Обновите корзину и повторите заказ`
+          );
+        }
 
         await transaction`
           INSERT INTO order_items (
@@ -2540,6 +2608,45 @@ export async function publicRoutes(app: FastifyInstance) {
           )
         `;
       }
+
+      const inventoryReservation = {
+        version: 1,
+        state: "reserved",
+        reservedAt:
+          new Date().toISOString(),
+        items:
+          requestedItems.map(
+            (item) => ({
+              productId:
+                item.productId,
+              quantity:
+                item.quantity
+            })
+          )
+      };
+
+      await transaction`
+        UPDATE orders
+        SET
+          metadata =
+            jsonb_set(
+              COALESCE(
+                metadata,
+                '{}'::jsonb
+              ),
+              '{inventoryReservation}',
+              CAST(
+                ${JSON.stringify(
+                  inventoryReservation
+                )}
+                AS jsonb
+              ),
+              true
+            ),
+          updated_at = NOW()
+        WHERE shop_id = ${shop.id}
+          AND id = ${order.id}
+      `;
 
       if (promoId) {
         const updatedPromoRows =
