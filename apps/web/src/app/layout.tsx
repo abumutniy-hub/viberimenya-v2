@@ -9,14 +9,11 @@ import {
 } from "next/font/google";
 
 import "./globals.css";
+import "./public-shell.css";
 
 import {
-  MobileTabbar
-} from "./components/mobile-tabbar";
-
-import {
-  DesktopCartIndicator
-} from "./components/cart-indicator";
+  PublicShell
+} from "./components/public-shell";
 
 const manrope = Manrope({
   subsets: [
@@ -27,26 +24,53 @@ const manrope = Manrope({
   display: "swap"
 });
 
-const playfair = Playfair_Display({
-  subsets: [
-    "latin",
-    "cyrillic"
-  ],
-  variable: "--font-public-display",
-  display: "swap"
-});
+const playfair =
+  Playfair_Display({
+    subsets: [
+      "latin",
+      "cyrillic"
+    ],
+    variable:
+      "--font-public-display",
+    display: "swap"
+  });
 
 export const metadata: Metadata = {
-  title:
-    "ВЫБЕРИ МЕНЯ — цветы с доставкой",
+  metadataBase:
+    new URL(
+      "https://viberimenya.ru"
+    ),
+
+  title: {
+    default:
+      "Выбери Меня — "
+      + "цветы с доставкой",
+
+    template:
+      "%s | Выбери Меня"
+  },
+
   description:
-    "Стильные букеты, фото перед доставкой и бережная доставка получателю."
+    "Стильные букеты, "
+    + "фото перед доставкой "
+    + "и бережная доставка "
+    + "получателю.",
+
+  icons: {
+    icon: [
+      {
+        url: "/icon.svg",
+        type: "image/svg+xml"
+      }
+    ]
+  }
 };
 
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#fbf6ef"
+  themeColor: "#fff9f4",
+  colorScheme: "light"
 };
 
 export default function RootLayout({
@@ -58,14 +82,13 @@ export default function RootLayout({
     <html lang="ru">
       <body
         className={
-          `${manrope.variable} ${playfair.variable}`
+          `${manrope.variable} `
+          + `${playfair.variable}`
         }
       >
-        <DesktopCartIndicator />
-
-        {children}
-
-        <MobileTabbar />
+        <PublicShell>
+          {children}
+        </PublicShell>
       </body>
     </html>
   );
