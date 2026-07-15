@@ -6,6 +6,7 @@ import { z } from "zod";
 import { createDb } from "@viberimenya/db";
 import { env } from "../lib/env";
 import { HttpError } from "../lib/http-error";
+import { markOrderPaid } from "../modules/orders/order-payment.service";
 
 type ShopRow = {
   id: string;
@@ -3095,244 +3096,54 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
 
-  app.post("/api/admin/orders/:id/mark-paid", async (request, reply) => {
-    const params = z.object({
-      id: z.string().uuid()
-    }).parse(request.params ?? {});
+  app.post(
+    "/api/admin/orders/:id/mark-paid",
+    async (request) => {
+      const params = z.object({
+        id: z.string().uuid()
+      }).parse(
+        request.params ?? {}
+      );
 
-    const { client } = createDb();
+      const { client } = createDb();
 
-    try {
-      const shop = await getShop(client);
+      try {
+        const shop =
+          await getShop(client);
 
-      const orderRows = await client<{
-        id: string;
-        customer_id: string | null;
-        order_number: string;
-        status: string;
-        payment_status: string;
-        payment_method: string;
-        total: number;
-        bonus_earned: number;
-      }[]>`
-        SELECT id, customer_id, order_number, status, payment_status, payment_method, total, bonus_earned
-        FROM orders
-        WHERE shop_id = ${shop.id}
-          AND id = ${params.id}
-        LIMIT 1
-      `;
-
-      const order = orderRows[0];
-
-      if (!order) {
-        return reply.status(404).send({
-          ok: false,
-          message: "Заказ не найден"
-        });
-      }
-
-      if (order.status === "new") {
-        return reply.status(400).send({
-          ok: false,
-          message: "Сначала подтвердите заказ, затем отметьте оплату"
-        });
-      }
-
-      if (order.status === "cancelled") {
-        return reply.status(400).send({
-          ok: false,
-          message: "Отменённый заказ нельзя отметить оплаченным"
-        });
-      }
-
-      if (!order.customer_id) {
-        return reply.status(400).send({
-          ok: false,
-          message: "У заказа нет клиента для начисления бонусов"
-        });
-      }
-
-      const wasAlreadyPaid = order.payment_status === "paid";
-      const alreadyEarned = Number(order.bonus_earned || 0) > 0;
-      const bonusAmount = wasAlreadyPaid || alreadyEarned
-        ? 0
-        : Math.floor(Number(order.total || 0) * 0.05);
-
-      await client`
-        UPDATE orders
-        SET payment_status = 'paid',
-            bonus_earned = CASE
-              WHEN bonus_earned > 0 THEN bonus_earned
-              ELSE ${bonusAmount}
-            END,
-            updated_at = NOW()
-        WHERE id = ${order.id}
-      `;
-
-      const latestPaymentRows =
-        await client<{ id: string }[]>`
-          SELECT id
-          FROM payments
-          WHERE shop_id = ${shop.id}
-            AND order_id = ${order.id}
-          ORDER BY created_at DESC
-          LIMIT 1
-        `;
-
-      const latestPayment = latestPaymentRows[0];
-
-      if (latestPayment?.id) {
-        await client`
-          UPDATE payments
-          SET status = 'paid',
-              paid_at = COALESCE(paid_at, NOW()),
-              updated_at = NOW()
-          WHERE shop_id = ${shop.id}
-            AND id = ${latestPayment.id}
-        `;
-      } else {
-        await client`
-          INSERT INTO payments (
-            shop_id,
-            order_id,
-            provider,
-            method,
-            status,
-            amount,
-            currency,
-            payment_url,
-            raw_payload,
-            paid_at,
-            created_at,
-            updated_at
-          )
-          VALUES (
-            ${shop.id},
-            ${order.id},
-            'manual',
-            ${order.payment_method}::payment_method,
-            'paid',
-            ${Number(order.total || 0)},
-            'RUB',
-            NULL,
-            CAST(${JSON.stringify({
-              source: "admin_manual_paid"
-            })} AS jsonb),
-            NOW(),
-            NOW(),
-            NOW()
-          )
-        `;
-      }
-
-      let balanceAfter: number | null = null;
-
-      if (bonusAmount > 0) {
-        const customerRows = await client<{ bonus_balance: number }[]>`
-          UPDATE customers
-          SET bonus_balance = bonus_balance + ${bonusAmount},
-              updated_at = NOW()
-          WHERE id = ${order.customer_id}
-          RETURNING bonus_balance
-        `;
-
-        balanceAfter = Number(customerRows[0]?.bonus_balance ?? 0);
-
-        await client`
-          INSERT INTO bonus_transactions (
-            shop_id,
-            customer_id,
-            order_id,
-            type,
-            amount,
-            balance_after,
-            comment,
-            created_at
-          )
-          VALUES (
-            ${shop.id},
-            ${order.customer_id},
-            ${order.id},
-            'earn',
-            ${bonusAmount},
-            ${balanceAfter},
-            ${`Начисление 5% за оплаченный заказ ${order.order_number}`},
-            NOW()
-          )
-        `;
-      }
-        if (!wasAlreadyPaid) {
-          await client`
-            INSERT INTO notification_events (
-              shop_id,
-              order_id,
-              type,
-              channel,
-              recipient_type,
-              status,
-              payload,
-              created_at,
-              updated_at
-            )
-            VALUES (
-              ${shop.id},
-              ${order.id},
-              'order_paid',
-              'telegram',
-              'staff',
-              'pending',
-              ${JSON.stringify({
-                orderId: order.id,
-                orderNumber: order.order_number,
-                status: order.status,
-                paymentStatus: "paid",
-                totalAmount: order.total,
-                bonusEarned: bonusAmount,
-                balanceAfter
-              })},
-              NOW(),
-              NOW()
-            )
-          `;
-
-          await queueCustomerOrderNotification(client, {
-            shopId: shop.id,
-            orderId: order.id,
-            type: "order_paid",
-            status: order.status,
-            extraPayload: {
-              paymentStatus: "paid",
-              bonusEarned: bonusAmount,
-              balanceAfter
-            }
+        const result =
+          await markOrderPaid({
+            client,
+            shopId:
+              shop.id,
+            orderId:
+              params.id
           });
-        }
 
-
-      const updatedRows = await client`
-        SELECT
-          o.*,
-          c.phone AS customer_phone,
-          c.name AS customer_name,
-          o.total AS total_amount
-        FROM orders o
-        LEFT JOIN customers c ON c.id = o.customer_id
-        WHERE o.id = ${order.id}
-        LIMIT 1
-      `;
-
-      return {
-        ok: true,
-        order: updatedRows[0],
-        bonus: {
-          earnedNow: bonusAmount,
-          balanceAfter
-        }
-      };
-    } finally {
-      await client.end();
+        return {
+          ok: true,
+          order:
+            result.order,
+          bonus: {
+            earnedNow:
+              result.earnedNow,
+            balanceAfter:
+              result.balanceAfter
+          },
+          payment: {
+            wasAlreadyPaid:
+              result.wasAlreadyPaid,
+            created:
+              result.paymentCreated,
+            repaired:
+              result.paymentRepaired
+          }
+        };
+      } finally {
+        await client.end();
+      }
     }
-  });
+  );
 
 
   app.get("/api/admin/catalog", async () => {
