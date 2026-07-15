@@ -58,7 +58,13 @@ const createOrderSchema = z.object({
 });
 
 function createOrderNumber() {
-  return `VM-${Date.now()}`;
+  const randomSuffix =
+    Math.floor(
+      1000
+      + Math.random() * 9000
+    );
+
+  return `VM-${Date.now()}${randomSuffix}`;
 }
 
 function createTrackingToken() {
@@ -1903,11 +1909,62 @@ export async function publicRoutes(app: FastifyInstance) {
 
 
   app.post("/api/public/orders", async (request, reply) => {
-    const body = createOrderSchema.parse(request.body ?? {});
+    // ORDER TRANSACTION CORE 1.0
+    const body =
+      createOrderSchema.parse(
+        request.body ?? {}
+      );
+
+    const quantityByProductId =
+      new Map<string, number>();
+
+    for (const item of body.items) {
+      const nextQuantity =
+        (
+          quantityByProductId.get(
+            item.productId
+          )
+          ?? 0
+        )
+        + item.quantity;
+
+      if (nextQuantity > 99) {
+        throw new HttpError(
+          400,
+          "Количество одного товара не может превышать 99"
+        );
+      }
+
+      quantityByProductId.set(
+        item.productId,
+        nextQuantity
+      );
+    }
+
+    const requestedItems =
+      Array.from(
+        quantityByProductId,
+        ([productId, quantity]) => ({
+          productId,
+          quantity
+        })
+      ).sort(
+        (left, right) =>
+          left.productId.localeCompare(
+            right.productId
+          )
+      );
+
     const { client } = createDb();
 
     try {
-      const shopRows = await client<{ id: string }[]>`
+      const transactionResult =
+        await client.begin(
+          async (transaction) => {
+            const shopRows =
+              await transaction<{
+                id: string;
+              }[]>`
         SELECT id
         FROM shops
         WHERE slug = ${env.DEFAULT_SHOP_SLUG}
@@ -1926,8 +1983,8 @@ export async function publicRoutes(app: FastifyInstance) {
         price: number;
       }>();
 
-      for (const item of body.items) {
-        const rows = await client<{ id: string; name: string; price: number }[]>`
+      for (const item of requestedItems) {
+        const rows = await transaction<{ id: string; name: string; price: number }[]>`
           SELECT id, name, price
           FROM products
           WHERE shop_id = ${shop.id}
@@ -1949,10 +2006,24 @@ export async function publicRoutes(app: FastifyInstance) {
         });
       }
 
-      const subtotalAmount = body.items.reduce((sum, item) => {
-        const product = productsMap.get(item.productId);
-        return sum + Number(product?.price ?? 0) * item.quantity;
-      }, 0);
+      const subtotalAmount =
+        requestedItems.reduce(
+          (sum, item) => {
+            const product =
+              productsMap.get(
+                item.productId
+              );
+
+            return (
+              sum
+              + Number(
+                product?.price ?? 0
+              )
+              * item.quantity
+            );
+          },
+          0
+        );
 
       type DeliveryZoneSnapshot = {
         id: string;
@@ -1991,7 +2062,7 @@ export async function publicRoutes(app: FastifyInstance) {
         }
 
         const zoneRows =
-          await client<
+          await transaction<
             DeliveryZoneSnapshot[]
           >`
             SELECT
@@ -2101,7 +2172,7 @@ export async function publicRoutes(app: FastifyInstance) {
       ) {
         const intervalRows =
           body.deliveryIntervalId
-            ? await client<{
+            ? await transaction<{
                 id: string;
                 name: string;
               }[]>`
@@ -2117,7 +2188,7 @@ export async function publicRoutes(app: FastifyInstance) {
               `
             : body.deliveryIntervalText
                 .trim()
-              ? await client<{
+              ? await transaction<{
                   id: string;
                   name: string;
                 }[]>`
@@ -2154,7 +2225,7 @@ export async function publicRoutes(app: FastifyInstance) {
       const promoCode = normalizePromoCode(body.promoCode || "");
 
       if (promoCode) {
-        const promoRows = await client<{
+        const promoRows = await transaction<{
           id: string;
           discount_type: string;
           discount_value: number;
@@ -2170,6 +2241,7 @@ export async function publicRoutes(app: FastifyInstance) {
             AND (starts_at IS NULL OR starts_at <= NOW())
             AND (ends_at IS NULL OR ends_at >= NOW())
           LIMIT 1
+          FOR UPDATE
         `;
 
         const promo = promoRows[0];
@@ -2205,7 +2277,7 @@ export async function publicRoutes(app: FastifyInstance) {
         : customerPhone;
       const customerPhoneCandidates = phoneDigitCandidates(customerPhone);
 
-      const existingCustomerRows = await client<{ id: string; bonus_balance: number }[]>`
+      const existingCustomerRows = await transaction<{ id: string; bonus_balance: number }[]>`
         SELECT id, bonus_balance
         FROM customers
         WHERE shop_id = ${shop.id}
@@ -2215,19 +2287,20 @@ export async function publicRoutes(app: FastifyInstance) {
           )
         ORDER BY updated_at DESC
         LIMIT 1
+        FOR UPDATE
       `;
 
       let customer = existingCustomerRows[0];
 
       if (customer) {
-        await client`
+        await transaction`
           UPDATE customers
           SET name = COALESCE(NULLIF(${body.customerName}, ''), name),
               updated_at = NOW()
           WHERE id = ${customer.id}
         `;
       } else {
-        const customerRows = await client<{ id: string; bonus_balance: number }[]>`
+        const customerRows = await transaction<{ id: string; bonus_balance: number }[]>`
           INSERT INTO customers (
             shop_id,
             phone,
@@ -2271,7 +2344,7 @@ export async function publicRoutes(app: FastifyInstance) {
           throw new HttpError(401, "Войдите в личный кабинет, чтобы использовать бонусы");
         }
 
-        const sessionRows = await client<{ customer_id: string }[]>`
+        const sessionRows = await transaction<{ customer_id: string }[]>`
           SELECT customer_id
           FROM customer_sessions
           WHERE token = ${token}
@@ -2286,11 +2359,12 @@ export async function publicRoutes(app: FastifyInstance) {
           throw new HttpError(403, "Бонусы можно списать только со своего профиля");
         }
 
-        const freshCustomerRows = await client<{ bonus_balance: number }[]>`
+        const freshCustomerRows = await transaction<{ bonus_balance: number }[]>`
           SELECT bonus_balance
           FROM customers
           WHERE id = ${customer.id}
           LIMIT 1
+          FOR UPDATE
         `;
 
         const balance = Number(freshCustomerRows[0]?.bonus_balance || 0);
@@ -2300,7 +2374,7 @@ export async function publicRoutes(app: FastifyInstance) {
         totalAmount = Math.max(0, amountBeforeBonus - bonusSpent);
       }
 
-      const orderRows = await client<{ id: string }[]>`
+      const orderRows = await transaction<{ id: string }[]>`
         INSERT INTO orders (
           shop_id,
           customer_id,
@@ -2430,7 +2504,7 @@ export async function publicRoutes(app: FastifyInstance) {
         throw new HttpError(500, "Order was not created");
       }
 
-      for (const item of body.items) {
+      for (const item of requestedItems) {
         const product = productsMap.get(item.productId);
 
         if (!product) continue;
@@ -2439,7 +2513,7 @@ export async function publicRoutes(app: FastifyInstance) {
         const unitPrice = Number(product.price);
         const itemTotal = unitPrice * quantity;
 
-        await client`
+        await transaction`
           INSERT INTO order_items (
             shop_id,
             order_id,
@@ -2468,27 +2542,63 @@ export async function publicRoutes(app: FastifyInstance) {
       }
 
       if (promoId) {
-        await client`
-          UPDATE promocodes
-          SET used_count = used_count + 1,
+        const updatedPromoRows =
+          await transaction<{
+            used_count: number;
+          }[]>`
+            UPDATE promocodes
+            SET
+              used_count =
+                used_count + 1,
               updated_at = NOW()
-          WHERE id = ${promoId}
-        `;
+            WHERE id = ${promoId}
+              AND (
+                usage_limit IS NULL
+                OR used_count
+                  < usage_limit
+              )
+            RETURNING used_count
+          `;
+
+        if (!updatedPromoRows[0]) {
+          throw new HttpError(
+            409,
+            "Лимит использования промокода исчерпан"
+          );
+        }
       }
 
-      const updatedCustomerRows = await client<{ bonus_balance: number }[]>`
-        UPDATE customers
-        SET total_orders = total_orders + 1,
-            total_spent = total_spent + ${totalAmount},
-            bonus_balance = bonus_balance - ${bonusSpent},
+      const updatedCustomerRows =
+        await transaction<{
+          bonus_balance: number;
+        }[]>`
+          UPDATE customers
+          SET
+            total_orders =
+              total_orders + 1,
+            total_spent =
+              total_spent
+              + ${totalAmount},
+            bonus_balance =
+              bonus_balance
+              - ${bonusSpent},
             last_order_at = NOW(),
             updated_at = NOW()
-        WHERE id = ${customer.id}
-        RETURNING bonus_balance
-      `;
+          WHERE id = ${customer.id}
+            AND bonus_balance
+              >= ${bonusSpent}
+          RETURNING bonus_balance
+        `;
+
+      if (!updatedCustomerRows[0]) {
+        throw new HttpError(
+          409,
+          "Бонусный баланс изменился. Обновите страницу и повторите заказ"
+        );
+      }
 
       if (bonusSpent > 0) {
-        await client`
+        await transaction`
           INSERT INTO bonus_transactions (
             shop_id,
             customer_id,
@@ -2512,7 +2622,7 @@ export async function publicRoutes(app: FastifyInstance) {
         `;
       }
 
-        await client`
+        await transaction`
           INSERT INTO notification_events (
             shop_id,
             order_id,
@@ -2575,7 +2685,7 @@ export async function publicRoutes(app: FastifyInstance) {
           )
         `;
 
-        await client`
+        await transaction`
           INSERT INTO notification_events (
             shop_id,
             order_id,
@@ -2645,7 +2755,7 @@ export async function publicRoutes(app: FastifyInstance) {
           )
         `;
 
-      await client`
+      await transaction`
         UPDATE customer_link_tokens
         SET
           status = 'cancelled',
@@ -2661,7 +2771,7 @@ export async function publicRoutes(app: FastifyInstance) {
       `;
 
       const linkedTelegramRows =
-        await client<{
+        await transaction<{
           telegram_id: string;
         }[]>`
           SELECT telegram_id
@@ -2687,7 +2797,7 @@ export async function publicRoutes(app: FastifyInstance) {
         telegramLinkCode =
           createTelegramLinkCode();
 
-        await client`
+        await transaction`
           INSERT INTO customer_link_tokens (
             shop_id,
             customer_id,
@@ -2724,7 +2834,7 @@ export async function publicRoutes(app: FastifyInstance) {
 
       const customerSessionToken = createSessionToken();
 
-      await client`
+      await transaction`
         INSERT INTO customer_sessions (
           shop_id,
           customer_id,
@@ -2745,25 +2855,42 @@ export async function publicRoutes(app: FastifyInstance) {
         )
       `;
 
-      reply.header("Set-Cookie", buildCustomerSessionCookie(customerSessionToken));
-
-      return reply.status(201).send({
-        ok: true,
-        order: {
-          id: order.id,
-          orderNumber,
-          status: "new",
-          totalAmount,
-          discountTotal,
-          bonusSpent,
-          promoCode,
-          deliveryPrice,
-          deliveryTariffName,
-          deliveryIsExpress,
-          trackingToken,
-          telegramLinkCode
+      return {
+        customerSessionToken,
+        response: {
+          ok: true,
+          order: {
+            id: order.id,
+            orderNumber,
+            status: "new",
+            totalAmount,
+            discountTotal,
+            bonusSpent,
+            promoCode,
+            deliveryPrice,
+            deliveryTariffName,
+            deliveryIsExpress,
+            trackingToken,
+            telegramLinkCode
+          }
         }
-      });
+      };
+          }
+        );
+
+      reply.header(
+        "Set-Cookie",
+        buildCustomerSessionCookie(
+          transactionResult
+            .customerSessionToken
+        )
+      );
+
+      return reply
+        .status(201)
+        .send(
+          transactionResult.response
+        );
     } catch (error) {
       throw error;
     } finally {
