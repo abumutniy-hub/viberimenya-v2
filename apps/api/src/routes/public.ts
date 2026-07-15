@@ -192,6 +192,7 @@ async function getShopContext() {
 }
 
 export async function publicRoutes(app: FastifyInstance) {
+  // PUBLIC CATALOG SECURITY 1.0
   app.get("/api/public/shop", async () => {
     const { db, client, shop } = await getShopContext();
 
@@ -234,8 +235,19 @@ export async function publicRoutes(app: FastifyInstance) {
         .orderBy(asc(categories.sortOrder))
         .limit(12);
 
-      const featuredProducts = await db
-        .select()
+      const featuredProductRows = await db
+        .select({
+          id: products.id,
+          categoryId: products.categoryId,
+          slug: products.slug,
+          name: products.name,
+          shortDescription: products.shortDescription,
+          description: products.description,
+          price: products.price,
+          oldPrice: products.oldPrice,
+          stockQuantity: products.stockQuantity,
+          isFeatured: products.isFeatured
+        })
         .from(products)
         .where(
           and(
@@ -246,6 +258,20 @@ export async function publicRoutes(app: FastifyInstance) {
         )
         .orderBy(asc(products.sortOrder), desc(products.createdAt))
         .limit(12);
+
+      const featuredProducts = featuredProductRows.map((product) => ({
+        ...product,
+        price: Number(product.price),
+        oldPrice:
+          product.oldPrice === null
+            ? null
+            : Number(product.oldPrice),
+        stockQuantity:
+          product.stockQuantity !== null
+          && Number(product.stockQuantity) > 0
+            ? 1
+            : 0
+      }));
 
       return {
         shop,
@@ -412,7 +438,6 @@ export async function publicRoutes(app: FastifyInstance) {
 
       type PublicProductRow = {
         id: string;
-        shopId: string;
         categoryId: string | null;
         categoryName: string | null;
         categorySlug: string | null;
@@ -424,24 +449,16 @@ export async function publicRoutes(app: FastifyInstance) {
         careText: string | null;
         price: number;
         oldPrice: number | null;
-        costPrice: number | null;
-        stockQuantity: number | null;
-        isStockVisible: boolean;
-        status: string;
+        stockQuantity: 0 | 1;
         isFeatured: boolean;
-        sortOrder: number;
-        metadata: Record<string, unknown>;
-        createdAt: string;
-        updatedAt: string;
       };
 
       const rows = await client<
         PublicProductRow[]
       >`
         SELECT
-          p.id,
-          p.shop_id AS "shopId",
-          p.category_id AS "categoryId",
+          p.id::text AS id,
+          p.category_id::text AS "categoryId",
           c.name AS "categoryName",
           c.slug AS "categorySlug",
           p.slug,
@@ -453,17 +470,15 @@ export async function publicRoutes(app: FastifyInstance) {
           p.care_text AS "careText",
           p.price,
           p.old_price AS "oldPrice",
-          p.cost_price AS "costPrice",
-          p.stock_quantity
-            AS "stockQuantity",
-          p.is_stock_visible
-            AS "isStockVisible",
-          p.status::text AS status,
-          p.is_featured AS "isFeatured",
-          p.sort_order AS "sortOrder",
-          p.metadata,
-          p.created_at AS "createdAt",
-          p.updated_at AS "updatedAt"
+          CASE
+            WHEN COALESCE(
+              p.stock_quantity,
+              0
+            ) > 0
+            THEN 1
+            ELSE 0
+          END AS "stockQuantity",
+          p.is_featured AS "isFeatured"
         FROM products p
         LEFT JOIN categories c
           ON c.id = p.category_id
@@ -752,6 +767,15 @@ export async function publicRoutes(app: FastifyInstance) {
       return {
         items: rows.map((product) => ({
           ...product,
+          price: Number(product.price),
+          oldPrice:
+            product.oldPrice === null
+              ? null
+              : Number(product.oldPrice),
+          stockQuantity:
+            Number(product.stockQuantity) > 0
+              ? 1
+              : 0,
           primaryImage:
             imagesByProductId.get(
               product.id
@@ -904,12 +928,27 @@ export async function publicRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/public/products/:slug", async (request) => {
-    const params = request.params as { slug: string };
+    const params = z.object({
+      slug: z.string().trim().min(1).max(160)
+    }).parse(request.params);
+
     const { db, client, shop } = await getShopContext();
 
     try {
       const productRows = await db
-        .select()
+        .select({
+          id: products.id,
+          categoryId: products.categoryId,
+          slug: products.slug,
+          name: products.name,
+          shortDescription: products.shortDescription,
+          description: products.description,
+          composition: products.composition,
+          careText: products.careText,
+          price: products.price,
+          oldPrice: products.oldPrice,
+          stockQuantity: products.stockQuantity
+        })
         .from(products)
         .where(
           and(
@@ -927,13 +966,41 @@ export async function publicRoutes(app: FastifyInstance) {
       }
 
       const images = await db
-        .select()
+        .select({
+          id: productImages.id,
+          url: productImages.url,
+          alt: productImages.alt
+        })
         .from(productImages)
-        .where(eq(productImages.productId, product.id))
+        .where(
+          and(
+            eq(productImages.shopId, shop.id),
+            eq(productImages.productId, product.id)
+          )
+        )
         .orderBy(asc(productImages.sortOrder));
 
       return {
-        product,
+        product: {
+          id: product.id,
+          categoryId: product.categoryId,
+          slug: product.slug,
+          name: product.name,
+          shortDescription: product.shortDescription,
+          description: product.description,
+          composition: product.composition,
+          careText: product.careText,
+          price: Number(product.price),
+          oldPrice:
+            product.oldPrice === null
+              ? null
+              : Number(product.oldPrice),
+          stockQuantity:
+            product.stockQuantity !== null
+            && Number(product.stockQuantity) > 0
+              ? 1
+              : 0
+        },
         images
       };
     } finally {
@@ -1053,7 +1120,7 @@ export async function publicRoutes(app: FastifyInstance) {
         };
       }
 
-      console.log(`[account-login] phone=${phone} code=${code}`);
+      // OTP is never written to application logs.
 
       return reply.status(409).send({
         ok: false,
