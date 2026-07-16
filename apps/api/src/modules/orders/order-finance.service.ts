@@ -7,9 +7,12 @@ type RefundOrderParams = {
   client: SqlClient;
   shopId: string;
   orderId: string;
-  actorUserId: string;
+  actorUserId: string | null;
   reason: string;
   cancelOrder: boolean;
+  source?: "admin_manual_full_refund" | "yookassa_refund" | "yookassa_webhook";
+  providerRefundId?: string;
+  providerPayload?: unknown;
 };
 
 type CancellationRollbackParams = {
@@ -86,7 +89,7 @@ async function releaseReservedInventory(
     orderId: string;
     reservationState: string | null;
     reservationCount: number;
-    actorUserId: string;
+    actorUserId: string | null;
     releaseReason: string;
   }
 ) {
@@ -592,12 +595,14 @@ export async function recordFullOrderRefund(
     }
 
     const refundAudit = {
-      version: 1,
-      source: "admin_manual_full_refund",
+      version: 2,
+      source: params.source ?? "admin_manual_full_refund",
       refundedAt: new Date().toISOString(),
       refundedByUserId: params.actorUserId,
       reason: params.reason,
-      amount
+      amount,
+      providerRefundId: params.providerRefundId ?? null,
+      providerSnapshot: params.providerPayload ?? null
     };
 
     let paymentCreated = false;

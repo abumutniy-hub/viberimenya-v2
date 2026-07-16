@@ -52,7 +52,10 @@ type Payment = {
   status: string;
   amount: number;
   currency: string;
-  payment_url: string | null;
+  payment_url?: string | null;
+  paymentUrl?: string | null;
+  provider?: string;
+  providerPaymentId?: string | null;
 } | null;
 
 type TrackResponse = {
@@ -271,6 +274,9 @@ export function TrackClient({ token }: { token: string }) {
   const [approvalBusy, setApprovalBusy] = useState<"approve" | "revision" | "">("");
   const [approvalMessage, setApprovalMessage] = useState("");
   const [approvalError, setApprovalError] = useState(false);
+  const [paymentBusy, setPaymentBusy] = useState(false);
+  const [paymentMessage, setPaymentMessage] = useState("");
+  const [paymentError, setPaymentError] = useState(false);
 
   const loadOrder = useCallback(
     async (silent: boolean) => {
@@ -317,6 +323,15 @@ export function TrackClient({ token }: { token: string }) {
 
     return () => window.clearInterval(timer);
   }, [loadOrder]);
+
+  useEffect(() => {
+    const returnedFromPayment =
+      new URLSearchParams(window.location.search).get("payment") === "return";
+
+    if (returnedFromPayment) {
+      window.setTimeout(() => void preparePayment(true), 400);
+    }
+  }, []);
 
   const canRepeat = useMemo(
     () => items.some((item) => Boolean(item.productId)),
@@ -389,6 +404,49 @@ export function TrackClient({ token }: { token: string }) {
       );
     } finally {
       setRepeating(false);
+    }
+  }
+
+
+  async function preparePayment(sync = false) {
+    if (!order || paymentBusy) return;
+
+    setPaymentBusy(true);
+    setPaymentMessage("");
+    setPaymentError(false);
+
+    try {
+      const action = sync ? "sync" : "create";
+      const response = await fetch(
+        `/api/public/orders/track/${encodeURIComponent(token)}/payment/${action}`,
+        { method: "POST" },
+      );
+      const data = await readJson(response);
+
+      if (!response.ok || data.ok !== true || !data.payment) {
+        throw new Error(String(data.error || data.message || "Не удалось подготовить оплату"));
+      }
+
+      const nextPayment = data.payment as NonNullable<Payment>;
+      setPayment(nextPayment);
+      setPaymentError(false);
+
+      if (nextPayment.status === "paid") {
+        setPaymentMessage("Оплата подтверждена. Спасибо!");
+      } else if (nextPayment.paymentUrl || nextPayment.payment_url) {
+        setPaymentMessage("Ссылка на оплату готова.");
+      } else {
+        setPaymentMessage("Платёж создан. Обновите статус через несколько секунд.");
+      }
+
+      await loadOrder(true);
+    } catch (cause) {
+      setPaymentError(true);
+      setPaymentMessage(
+        cause instanceof Error ? cause.message : "Не удалось подготовить оплату",
+      );
+    } finally {
+      setPaymentBusy(false);
     }
   }
 
@@ -553,16 +611,47 @@ export function TrackClient({ token }: { token: string }) {
 
           {order.paymentStatus === "paid" ? (
             <p>Заказ оплачен. Спасибо!</p>
-          ) : payment?.payment_url ? (
+          ) : order.paymentStatus === "refunded" ? (
+            <p>По заказу выполнен возврат.</p>
+          ) : order.paymentMethod === "online_card" || order.paymentMethod === "sbp" ? (
             <>
-              <p>Заказ подтверждён. Можно перейти к оплате.</p>
-              <a
-                href={payment.payment_url}
-                className="track-dark-link"
-                rel="nofollow"
-              >
-                Оплатить заказ
-              </a>
+              {payment?.paymentUrl || payment?.payment_url ? (
+                <>
+                  <p>Безопасная ссылка на оплату готова.</p>
+                  <a
+                    href={payment.paymentUrl || payment.payment_url || "#"}
+                    className="track-dark-link"
+                    rel="nofollow"
+                  >
+                    Перейти к оплате
+                  </a>
+                  <button
+                    type="button"
+                    className="track-payment-secondary"
+                    disabled={paymentBusy}
+                    onClick={() => void preparePayment(true)}
+                  >
+                    {paymentBusy ? "Проверяем…" : "Проверить оплату"}
+                  </button>
+                </>
+              ) : (
+                <>
+                  <p>Создайте защищённую ссылку и перейдите на страницу ЮKassa.</p>
+                  <button
+                    type="button"
+                    className="track-dark-link track-payment-button"
+                    disabled={paymentBusy}
+                    onClick={() => void preparePayment(false)}
+                  >
+                    {paymentBusy ? "Подготавливаем…" : "Подготовить оплату"}
+                  </button>
+                </>
+              )}
+              {paymentMessage ? (
+                <p className={paymentError ? "track-payment-message error" : "track-payment-message"}>
+                  {paymentMessage}
+                </p>
+              ) : null}
             </>
           ) : (
             <p>

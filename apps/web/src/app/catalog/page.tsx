@@ -1,3 +1,5 @@
+import type { Metadata } from "next";
+
 import {
   AddToCartButton,
   FavoriteButton
@@ -17,6 +19,19 @@ import {
 } from "./catalog-live-search";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = {
+  title: "Каталог цветов и подарков",
+  description:
+    "Букеты и композиции с актуальными ценами, фото перед доставкой и удобным оформлением заказа.",
+  alternates: { canonical: "/catalog" },
+  openGraph: {
+    title: "Каталог цветов и подарков",
+    description:
+      "Выберите букет или композицию. Покажем готовую работу перед доставкой.",
+    url: "/catalog"
+  }
+};
 
 type Category = {
   id: string;

@@ -327,3 +327,37 @@
     width: 100%;
   }
 }
+
+.paymentProviderLink {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 74px;
+  padding: 16px 18px;
+  border: 1px solid rgba(99, 53, 45, 0.18);
+  border-radius: 18px;
+  background: rgba(255, 250, 247, 0.9);
+  color: inherit;
+  text-decoration: none;
+}
+
+.paymentProviderLink span {
+  display: grid;
+  gap: 5px;
+}
+
+.paymentProviderLink small {
+  color: var(--admin-muted, #76645f);
+  line-height: 1.35;
+}
+
+.paymentProviderLink b {
+  white-space: nowrap;
+  color: #7b2f3b;
+}
+
+.paymentProviderLink:hover {
+  border-color: rgba(123, 47, 59, 0.42);
+  transform: translateY(-1px);
+}

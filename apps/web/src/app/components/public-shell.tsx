@@ -22,27 +22,10 @@ import {
   ShellIcon
 } from "./shell-icon";
 
-export type PublicShellSettings = {
-  phone: string;
-  whatsapp: string;
-  telegram: string;
-  instagram: string;
-  address: string;
-  workHours: string;
-  site: {
-    brandName: string;
-    brandSubtitle: string;
-    footerDescription: string;
-    email: string;
-    legalName: string;
-    inn: string;
-    ogrn: string;
-    policyUrl: string;
-    offerUrl: string;
-    deliveryTermsUrl: string;
-    returnsUrl: string;
-  };
-};
+import { CookieConsent } from "./cookie-consent";
+import type { PublicSiteSettings } from "../lib/public-settings";
+
+export type PublicShellSettings = PublicSiteSettings;
 
 type PublicShellProps = {
   children: ReactNode;
@@ -138,6 +121,38 @@ export function PublicShell({
     return children;
   }
 
+  const maintenanceAllowed = (
+    pathname.startsWith("/order/track/")
+    || pathname.startsWith("/orders")
+    || pathname.startsWith("/account")
+    || pathname === "/privacy"
+    || pathname === "/consent"
+    || pathname === "/offer"
+    || pathname === "/delivery"
+    || pathname === "/returns"
+  );
+
+  if (
+    settings.launch.maintenanceMode
+    && !maintenanceAllowed
+  ) {
+    return (
+      <div className="vm-maintenance-page">
+        <section>
+          <span>Технические работы</span>
+          <h1>{settings.launch.maintenanceTitle}</h1>
+          <p>{settings.launch.maintenanceMessage}</p>
+          <div>
+            <Link href="/orders">Мои заказы</Link>
+            {settings.phone ? (
+              <a href={contactHref("phone", settings.phone)}>Связаться с магазином</a>
+            ) : null}
+          </div>
+        </section>
+      </div>
+    );
+  }
+
   const catalogActive =
     pathname.startsWith(
       "/catalog"
@@ -222,24 +237,34 @@ export function PublicShell({
   const legalLinks = [
     {
       label: "Политика конфиденциальности",
-      href: settings.site.policyUrl
+      href: settings.site.policyUrl || "/privacy"
+    },
+    {
+      label: "Согласие на обработку данных",
+      href: "/consent"
     },
     {
       label: "Публичная оферта",
-      href: settings.site.offerUrl
+      href: settings.site.offerUrl || "/offer"
     },
     {
       label: "Условия доставки",
-      href: settings.site.deliveryTermsUrl
+      href: settings.site.deliveryTermsUrl || "/delivery"
     },
     {
       label: "Возврат и претензии",
-      href: settings.site.returnsUrl
+      href: settings.site.returnsUrl || "/returns"
     }
   ].filter((item) => item.href);
 
   return (
     <div className="vm-clean-shell">
+      {!settings.launch.acceptingOrders ? (
+        <div className="vm-orders-paused" role="status">
+          {settings.launch.ordersPausedMessage}
+        </div>
+      ) : null}
+
       <a
         className="vm-clean-skip"
         href="#vm-clean-content"
@@ -484,6 +509,11 @@ export function PublicShell({
       </footer>
 
       <MobileTabbar />
+      <CookieConsent
+        enabled={settings.analytics.enabled}
+        yandexMetrikaId={settings.analytics.yandexMetrikaId}
+      />
+
     </div>
   );
 }

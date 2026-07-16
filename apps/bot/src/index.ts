@@ -1895,6 +1895,7 @@ type CreatedTelegramOrder = {
   total: number;
   deliveryPrice: number;
   deliveryTariffName: string;
+  paymentUrl: string;
   reused: boolean;
 };
 
@@ -2736,6 +2737,7 @@ async function createOrderFromTelegramCheckout(
     total: Number(order.totalAmount || 0),
     deliveryPrice: Number(order.deliveryPrice || 0),
     deliveryTariffName: order.deliveryTariffName || "Доставка",
+    paymentUrl: "",
     reused: order.reused === true,
   };
 }
@@ -2772,7 +2774,7 @@ async function handleCheckoutConfirm(chatId: number) {
     const paymentMessage = session.data.paymentMethod === "cash_on_delivery"
       ? "Оплата будет принята при получении."
       : session.data.paymentMethod === "online_card" || session.data.paymentMethod === "sbp"
-        ? "Менеджер подтвердит заказ, после чего станет доступна онлайн-оплата."
+        ? "После подтверждения заказа менеджером ссылка на безопасную оплату появится на странице отслеживания и придёт в Telegram."
         : "Менеджер проверит заказ и отправит реквизиты или ссылку на оплату.";
 
     await sendTelegramMessage(

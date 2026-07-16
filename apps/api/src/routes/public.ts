@@ -15,6 +15,7 @@ import {
 } from "@viberimenya/db";
 import { env } from "../lib/env";
 import { HttpError } from "../lib/http-error";
+import { isYooKassaConfigured } from "../modules/payments/yookassa.service";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -110,6 +111,31 @@ type ContentSettings = {
     expressLeadTimeMinutes: number;
     notice: string;
   };
+  launch: {
+    acceptingOrders: boolean;
+    maintenanceMode: boolean;
+    maintenanceTitle: string;
+    maintenanceMessage: string;
+    ordersPausedMessage: string;
+  };
+  seo: {
+    siteTitle: string;
+    siteDescription: string;
+    ogImageUrl: string;
+    yandexVerification: string;
+    indexingEnabled: boolean;
+  };
+  analytics: {
+    enabled: boolean;
+    yandexMetrikaId: string;
+  };
+  legal: {
+    privacyText: string;
+    consentText: string;
+    offerText: string;
+    deliveryText: string;
+    returnsText: string;
+  };
 };
 
 const defaultContentSettings: ContentSettings = {
@@ -165,6 +191,34 @@ const defaultContentSettings: ContentSettings = {
     orderLeadTimeMinutes: 120,
     expressLeadTimeMinutes: 60,
     notice: "",
+  },
+  launch: {
+    acceptingOrders: true,
+    maintenanceMode: false,
+    maintenanceTitle: "Магазин скоро вернётся",
+    maintenanceMessage:
+      "Мы обновляем витрину. Уже оформленные заказы и их отслеживание продолжают работать.",
+    ordersPausedMessage:
+      "Приём новых заказов временно приостановлен. Каталог доступен для просмотра.",
+  },
+  seo: {
+    siteTitle: "Выбери Меня — цветы с доставкой",
+    siteDescription:
+      "Стильные букеты, фото перед доставкой и бережная доставка получателю.",
+    ogImageUrl: "",
+    yandexVerification: "",
+    indexingEnabled: false,
+  },
+  analytics: {
+    enabled: false,
+    yandexMetrikaId: "",
+  },
+  legal: {
+    privacyText: "",
+    consentText: "",
+    offerText: "",
+    deliveryText: "",
+    returnsText: "",
   },
 };
 
@@ -256,6 +310,10 @@ function readContentSettings(value: unknown): ContentSettings {
   const site = asRecord(root.site);
   const homepage = asRecord(root.homepage);
   const delivery = asRecord(root.delivery);
+  const launch = asRecord(root.launch);
+  const seo = asRecord(root.seo);
+  const analytics = asRecord(root.analytics);
+  const legal = asRecord(root.legal);
 
   const rawOccasions = Array.isArray(homepage.occasions)
     ? homepage.occasions
@@ -386,6 +444,82 @@ function readContentSettings(value: unknown): ContentSettings {
         1440,
       ),
       notice: optionalTextSetting(delivery, "notice", 1000),
+    },
+    launch: {
+      acceptingOrders: booleanSetting(
+        launch,
+        "acceptingOrders",
+        defaultContentSettings.launch.acceptingOrders,
+      ),
+      maintenanceMode: booleanSetting(
+        launch,
+        "maintenanceMode",
+        defaultContentSettings.launch.maintenanceMode,
+      ),
+      maintenanceTitle: textSetting(
+        launch,
+        "maintenanceTitle",
+        defaultContentSettings.launch.maintenanceTitle,
+        160,
+      ),
+      maintenanceMessage: textSetting(
+        launch,
+        "maintenanceMessage",
+        defaultContentSettings.launch.maintenanceMessage,
+        1000,
+      ),
+      ordersPausedMessage: textSetting(
+        launch,
+        "ordersPausedMessage",
+        defaultContentSettings.launch.ordersPausedMessage,
+        500,
+      ),
+    },
+    seo: {
+      siteTitle: textSetting(
+        seo,
+        "siteTitle",
+        defaultContentSettings.seo.siteTitle,
+        160,
+      ),
+      siteDescription: textSetting(
+        seo,
+        "siteDescription",
+        defaultContentSettings.seo.siteDescription,
+        500,
+      ),
+      ogImageUrl: safePublicLink(
+        optionalTextSetting(seo, "ogImageUrl", 500),
+      ),
+      yandexVerification: optionalTextSetting(
+        seo,
+        "yandexVerification",
+        200,
+      ).replace(/[^a-zA-Z0-9_-]/g, ""),
+      indexingEnabled: booleanSetting(
+        seo,
+        "indexingEnabled",
+        defaultContentSettings.seo.indexingEnabled,
+      ),
+    },
+    analytics: {
+      enabled: booleanSetting(
+        analytics,
+        "enabled",
+        defaultContentSettings.analytics.enabled,
+      ),
+      yandexMetrikaId: optionalTextSetting(
+        analytics,
+        "yandexMetrikaId",
+        12,
+      ).replace(/\D/g, ""),
+    },
+    legal: {
+      privacyText: optionalTextSetting(legal, "privacyText", 30000),
+      consentText: optionalTextSetting(legal, "consentText", 30000),
+      offerText: optionalTextSetting(legal, "offerText", 30000),
+      deliveryText: optionalTextSetting(legal, "deliveryText", 30000),
+      returnsText: optionalTextSetting(legal, "returnsText", 30000),
     },
   };
 }
@@ -734,8 +868,11 @@ export async function publicRoutes(app: FastifyInstance) {
           ),
           site: content.site,
           delivery: content.delivery,
+          launch: content.launch,
+          seo: content.seo,
+          analytics: content.analytics,
           paymentMethods: {
-            online: settings?.isOnlinePaymentEnabled === true,
+            online: settings?.isOnlinePaymentEnabled === true && isYooKassaConfigured(),
             cash: settings?.isCashPaymentEnabled !== false,
             transfer: settings?.isTransferPaymentEnabled !== false,
           },
@@ -744,6 +881,33 @@ export async function publicRoutes(app: FastifyInstance) {
           domain: domain.domain,
           isPrimary: domain.isPrimary,
         })),
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.get("/api/public/legal", async () => {
+    const { db, client, shop } = await getShopContext();
+
+    try {
+      const settingsRows = await db
+        .select()
+        .from(shopSettings)
+        .where(eq(shopSettings.shopId, shop.id))
+        .limit(1);
+
+      const settings = settingsRows[0] ?? null;
+      const content = readContentSettings(settings?.settings);
+
+      return {
+        settings: {
+          phone: settings?.phone ?? "",
+          address: settings?.address ?? "",
+          workHours: settings?.workHours ?? "",
+          site: content.site,
+          legal: content.legal,
+        },
       };
     } finally {
       await client.end();
@@ -893,6 +1057,7 @@ export async function publicRoutes(app: FastifyInstance) {
           phone: settings?.phone ?? "",
           address: settings?.address ?? "",
           workHours: settings?.workHours ?? "",
+          launch: content.launch,
         },
         sections: {
           hero: {
@@ -3478,7 +3643,10 @@ export async function publicRoutes(app: FastifyInstance) {
 
         if (
           (body.paymentMethod === "online_card" || body.paymentMethod === "sbp")
-          && checkoutSettings?.is_online_payment_enabled !== true
+          && (
+            checkoutSettings?.is_online_payment_enabled !== true
+            || !isYooKassaConfigured()
+          )
         ) {
           throw new HttpError(
             400,
@@ -3505,6 +3673,7 @@ export async function publicRoutes(app: FastifyInstance) {
             bonus_spent: number;
             delivery_price: number;
             tracking_token: string;
+            payment_method: string;
             metadata: {
               promoCode?: string | null;
               delivery?: {
@@ -3524,6 +3693,7 @@ export async function publicRoutes(app: FastifyInstance) {
             bonus_spent,
             delivery_price,
             tracking_token,
+            payment_method,
             metadata
           FROM orders
           WHERE shop_id = ${shop.id}
@@ -3651,11 +3821,24 @@ export async function publicRoutes(app: FastifyInstance) {
                 deliveryIsExpress:
                   existingOrder.metadata?.delivery?.isExpress === true,
                 trackingToken: existingOrder.tracking_token,
+                paymentMethod: existingOrder.payment_method,
                 telegramLinkCode: linkRows[0]?.token ?? null,
                 reused: true,
               },
             },
           };
+        }
+
+        if (
+          checkoutContent.launch.maintenanceMode
+          || !checkoutContent.launch.acceptingOrders
+        ) {
+          throw new HttpError(
+            503,
+            checkoutContent.launch.maintenanceMode
+              ? checkoutContent.launch.maintenanceMessage
+              : checkoutContent.launch.ordersPausedMessage,
+          );
         }
 
         const productsMap = new Map<
@@ -4730,6 +4913,7 @@ export async function publicRoutes(app: FastifyInstance) {
               deliveryTariffName,
               deliveryIsExpress,
               trackingToken,
+              paymentMethod: body.paymentMethod,
               telegramLinkCode,
               reused: false,
             },
@@ -4804,8 +4988,11 @@ export async function publicRoutes(app: FastifyInstance) {
         expressLeadTimeMinutes:
           content.delivery.expressLeadTimeMinutes,
         notice: content.delivery.notice,
+        acceptingOrders: content.launch.acceptingOrders,
+        maintenanceMode: content.launch.maintenanceMode,
+        ordersPausedMessage: content.launch.ordersPausedMessage,
         paymentMethods: {
-          online: settings?.isOnlinePaymentEnabled === true,
+          online: settings?.isOnlinePaymentEnabled === true && isYooKassaConfigured(),
           cash: settings?.isCashPaymentEnabled !== false,
           transfer: settings?.isTransferPaymentEnabled !== false,
         },

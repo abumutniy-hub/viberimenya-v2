@@ -1470,3 +1470,230 @@
     text-align: left;
   }
 }
+
+/* RELEASE 14 — PAYMENT PROVIDER */
+.admin-finance-provider {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  align-items: center;
+  margin-bottom: 18px;
+  padding: 20px;
+  border: 1px solid rgba(71, 31, 43, 0.14);
+  border-radius: 20px;
+  background: #fff;
+}
+
+.admin-finance-provider.ready {
+  border-color: rgba(47, 124, 80, 0.28);
+  background: rgba(234, 248, 239, 0.72);
+}
+
+.admin-finance-provider.warning {
+  border-color: rgba(170, 115, 30, 0.25);
+  background: rgba(255, 247, 230, 0.75);
+}
+
+.admin-finance-provider h2,
+.admin-finance-provider p {
+  margin: 4px 0 0;
+}
+
+.admin-finance-provider-badges {
+  display: grid;
+  gap: 6px;
+  min-width: 210px;
+  text-align: right;
+}
+
+@media (max-width: 720px) {
+  .admin-finance-provider {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .admin-finance-provider-badges {
+    min-width: 0;
+    text-align: left;
+  }
+}
+
+.admin-yookassa-settings {
+  margin-bottom: 22px;
+}
+
+.admin-yookassa-state {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 7px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+}
+
+.admin-yookassa-state.ready {
+  background: #e7f6ed;
+  color: #20623b;
+}
+
+.admin-yookassa-state.off {
+  background: #fff1df;
+  color: #8a5314;
+}
+
+.admin-yookassa-form {
+  display: grid;
+  gap: 18px;
+}
+
+.admin-yookassa-switch {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 15px 16px;
+  border: 1px solid rgba(99, 53, 45, 0.14);
+  border-radius: 16px;
+  background: rgba(255, 251, 248, 0.8);
+}
+
+.admin-yookassa-switch.compact {
+  max-width: 520px;
+}
+
+.admin-yookassa-switch input {
+  width: 20px;
+  height: 20px;
+  margin-top: 2px;
+}
+
+.admin-yookassa-switch span {
+  display: grid;
+  gap: 5px;
+}
+
+.admin-yookassa-switch small,
+.admin-yookassa-grid small,
+.admin-yookassa-webhook small {
+  color: var(--admin-muted, #76645f);
+  line-height: 1.4;
+}
+
+.admin-yookassa-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.admin-yookassa-grid label {
+  display: grid;
+  gap: 7px;
+}
+
+.admin-yookassa-grid input {
+  width: 100%;
+  min-height: 46px;
+  padding: 10px 12px;
+  border: 1px solid rgba(99, 53, 45, 0.2);
+  border-radius: 12px;
+  background: #fff;
+  color: inherit;
+}
+
+.admin-yookassa-webhook {
+  display: grid;
+  gap: 8px;
+  padding: 15px 16px;
+  border-radius: 16px;
+  background: #f7f4f1;
+}
+
+.admin-yookassa-webhook code {
+  display: block;
+  overflow-wrap: anywhere;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #fff;
+  border: 1px solid rgba(99, 53, 45, 0.12);
+}
+
+.admin-yookassa-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.admin-yookassa-actions button {
+  min-height: 42px;
+  padding: 9px 15px;
+  border: 0;
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+.admin-yookassa-actions button:not(.secondary):not(.danger) {
+  background: #7b2f3b;
+  color: #fff;
+}
+
+.admin-yookassa-actions button.secondary {
+  background: #efe7e3;
+  color: #4c3430;
+}
+
+.admin-yookassa-actions button.danger {
+  background: #fbe7e7;
+  color: #9b2727;
+}
+
+.admin-yookassa-actions button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.admin-yookassa-message,
+.admin-yookassa-security-note,
+.admin-yookassa-notice {
+  padding: 13px 15px;
+  border-radius: 14px;
+}
+
+.admin-yookassa-message.success {
+  background: #e8f6ee;
+  color: #205f39;
+}
+
+.admin-yookassa-message.error {
+  background: #fdeaea;
+  color: #922828;
+}
+
+.admin-yookassa-security-note {
+  display: grid;
+  gap: 5px;
+  background: #eef4f7;
+  color: #294b5c;
+}
+
+.admin-yookassa-security-note code {
+  font-size: 0.92em;
+}
+
+.admin-yookassa-notice {
+  background: #fff4df;
+  color: #7a5019;
+}
+
+@media (max-width: 760px) {
+  .admin-yookassa-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-yookassa-actions {
+    display: grid;
+  }
+
+  .admin-yookassa-actions button {
+    width: 100%;
+  }
+}

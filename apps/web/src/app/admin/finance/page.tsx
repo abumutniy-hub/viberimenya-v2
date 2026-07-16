@@ -1,4 +1,5 @@
 import { fetchAdmin } from "../lib/admin-api";
+import { YooKassaSettingsCard } from "./yookassa-settings-card";
 
 export const dynamic = "force-dynamic";
 
@@ -47,6 +48,28 @@ type FinanceResponse = {
   viewer: {
     role: string;
     canRefund: boolean;
+  };
+  provider: {
+    provider: string;
+    configured: boolean;
+    enabled: boolean;
+    shopId: string;
+    secretKeyConfigured: boolean;
+    receiptsEnabled: boolean;
+    testModeHint: boolean;
+  };
+};
+
+
+type YooKassaSettingsResponse = {
+  ok: boolean;
+  settings: {
+    enabled: boolean;
+    shopId: string;
+    secretKeyConfigured: boolean;
+    testMode: boolean;
+    receiptsEnabled: boolean;
+    webhookUrl: string;
   };
 };
 
@@ -113,6 +136,10 @@ export default async function FinancePage({ searchParams }: { searchParams: Sear
 
   const apiQuery = queryString({ q, status, dateFrom, dateTo, page });
   const data = await fetchAdmin<FinanceResponse>(`/api/admin/finance${apiQuery}`);
+  const canManageProvider = data?.viewer?.role === "owner" || data?.viewer?.role === "admin";
+  const providerSettings = canManageProvider
+    ? await fetchAdmin<YooKassaSettingsResponse>("/api/admin/finance/yookassa-settings")
+    : null;
   const metrics = data?.metrics ?? {
     paid_amount: 0,
     paid_count: 0,
@@ -144,6 +171,39 @@ export default async function FinancePage({ searchParams }: { searchParams: Sear
         </div>
         <a className="admin-small-link" href="/admin/orders">К заказам</a>
       </div>
+
+      <section className={`admin-finance-provider ${data?.provider?.enabled && data?.provider?.configured ? "ready" : "warning"}`}>
+        <div>
+          <span>Платёжный провайдер</span>
+          <h2>ЮKassa</h2>
+          <p>
+            {data?.provider?.enabled && data?.provider?.configured
+              ? "Онлайн-оплата включена. Платежи, webhook и полные возвраты готовы к работе."
+              : data?.provider?.configured
+                ? "Ключи сохранены, но создание новых онлайн-платежей выключено."
+                : "Интеграция установлена. Добавьте Shop ID и секретный ключ в форме ниже."}
+          </p>
+        </div>
+        <div className="admin-finance-provider-badges">
+          <strong>
+            {data?.provider?.enabled && data?.provider?.configured
+              ? "Включена"
+              : data?.provider?.configured
+                ? "Выключена"
+                : "Ожидает ключи"}
+          </strong>
+          <small>
+            Режим: {data?.provider?.testModeHint ? "тестовый" : "боевой"}
+          </small>
+          <small>
+            Чеки: {data?.provider?.receiptsEnabled ? "передаются через API" : "выключены"}
+          </small>
+        </div>
+      </section>
+
+      {providerSettings?.settings ? (
+        <YooKassaSettingsCard initialSettings={providerSettings.settings} />
+      ) : null}
 
       <section className="admin-finance-metrics">
         <article>

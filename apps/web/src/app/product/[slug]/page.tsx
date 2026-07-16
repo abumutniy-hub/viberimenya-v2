@@ -1,3 +1,5 @@
+import type { Metadata } from "next";
+
 import {
   AddToCartButton,
   FavoriteButton
@@ -133,6 +135,45 @@ function productDescription(
   );
 }
 
+export async function generateMetadata({
+  params
+}: ProductPageProps): Promise<Metadata> {
+  const { slug } = await params;
+  const data = await fetchJson<ProductResponse>(
+    `/api/public/products/${encodeURIComponent(slug)}`
+  );
+
+  if (!data?.product) {
+    return {
+      title: "Товар не найден",
+      robots: { index: false, follow: false }
+    };
+  }
+
+  const product = data.product;
+  const description = productDescription(product).slice(0, 220);
+  const image = data.images?.find((item) => Boolean(item.url?.trim()))?.url;
+
+  return {
+    title: product.name,
+    description,
+    alternates: { canonical: `/product/${encodeURIComponent(product.slug)}` },
+    openGraph: {
+      type: "website",
+      title: product.name,
+      description,
+      url: `/product/${encodeURIComponent(product.slug)}`,
+      images: image ? [{ url: image, alt: product.name }] : undefined
+    },
+    twitter: {
+      card: image ? "summary_large_image" : "summary",
+      title: product.name,
+      description,
+      images: image ? [image] : undefined
+    }
+  };
+}
+
 export default async function ProductPage({
   params
 }: ProductPageProps) {
@@ -180,8 +221,33 @@ export default async function ProductPage({
   const description =
     productDescription(product);
 
+  const structuredData = {
+    "@context": "https://schema.org",
+    "@type": "Product",
+    name: product.name,
+    description,
+    image: primaryImage?.url ? [`https://viberimenya.ru${primaryImage.url}`] : undefined,
+    offers: {
+      "@type": "Offer",
+      priceCurrency: "RUB",
+      price: Number(product.price),
+      availability: available
+        ? "https://schema.org/InStock"
+        : "https://schema.org/OutOfStock",
+      url: `https://viberimenya.ru/product/${encodeURIComponent(product.slug)}`
+    }
+  };
+
   return (
-    <main className="product-page">
+    <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{
+          __html: JSON.stringify(structuredData).replace(/</g, "\\u003c")
+        }}
+      />
+
+      <main className="product-page">
       <nav
         className="product-breadcrumbs"
         aria-label="Навигация"
@@ -366,6 +432,7 @@ export default async function ProductPage({
           </div>
         </div>
       </section>
-    </main>
+      </main>
+    </>
   );
 }

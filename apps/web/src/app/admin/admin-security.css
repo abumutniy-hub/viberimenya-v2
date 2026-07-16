@@ -1,0 +1,336 @@
+.admin-security-page {
+  display: grid;
+  gap: 22px;
+}
+
+.admin-security-head {
+  align-items: flex-start;
+  gap: 18px;
+}
+
+.admin-security-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.admin-security-head-actions button,
+.admin-security-table button,
+.admin-security-filters button,
+.admin-security-filters a {
+  min-height: 42px;
+  border: 1px solid rgba(111, 35, 57, 0.2);
+  border-radius: 12px;
+  padding: 10px 14px;
+  background: #fff;
+  color: #6f2339;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.admin-security-head-actions button:hover,
+.admin-security-table button:hover,
+.admin-security-filters button:hover,
+.admin-security-filters a:hover {
+  border-color: #6f2339;
+}
+
+.admin-security-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.admin-security-metrics article {
+  display: grid;
+  gap: 7px;
+  min-height: 132px;
+  padding: 20px;
+  border: 1px solid rgba(111, 35, 57, 0.12);
+  border-radius: 20px;
+  background: #fff;
+  box-shadow: 0 12px 34px rgba(71, 24, 38, 0.06);
+}
+
+.admin-security-metrics article.warning {
+  border-color: rgba(176, 92, 28, 0.35);
+  background: #fffaf2;
+}
+
+.admin-security-metrics span,
+.admin-security-metrics small {
+  color: #755f66;
+}
+
+.admin-security-metrics strong {
+  color: #35171f;
+  font-size: clamp(26px, 3vw, 40px);
+  line-height: 1;
+}
+
+.admin-security-policy-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.admin-security-policy-grid span {
+  display: grid;
+  gap: 4px;
+  padding: 14px;
+  border-radius: 14px;
+  background: #f8f3f4;
+  color: #755f66;
+}
+
+.admin-security-policy-grid strong {
+  color: #35171f;
+}
+
+.admin-security-table-wrap {
+  overflow-x: auto;
+}
+
+.admin-security-table {
+  min-width: 980px;
+}
+
+.admin-security-table td {
+  vertical-align: top;
+}
+
+.admin-security-table td strong,
+.admin-security-table td small {
+  display: block;
+}
+
+.admin-security-table td small {
+  margin-top: 5px;
+  color: #806d73;
+}
+
+.admin-security-table tr.current {
+  background: #fff9fb;
+}
+
+.admin-security-current {
+  display: inline-flex;
+  border-radius: 999px;
+  padding: 7px 11px;
+  background: #e8f7ee;
+  color: #216b41;
+  font-weight: 800;
+}
+
+.admin-security-filters {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(150px, 1fr)) minmax(220px, 2fr) auto auto;
+  align-items: end;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid rgba(111, 35, 57, 0.12);
+  border-radius: 18px;
+  background: #fff;
+}
+
+.admin-security-filters label {
+  display: grid;
+  gap: 7px;
+}
+
+.admin-security-filters label > span {
+  color: #755f66;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.admin-security-filters input,
+.admin-security-filters select {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid rgba(111, 35, 57, 0.18);
+  border-radius: 12px;
+  padding: 9px 12px;
+  background: #fff;
+  color: #35171f;
+  font: inherit;
+}
+
+.admin-security-filters button {
+  background: #6f2339;
+  color: #fff;
+}
+
+.admin-security-filters a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
+.admin-security-event-list {
+  display: grid;
+  gap: 10px;
+}
+
+.admin-security-event-list article {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: start;
+  padding: 16px;
+  border: 1px solid rgba(111, 35, 57, 0.1);
+  border-radius: 16px;
+  background: #fff;
+}
+
+.admin-security-event-list article.severity-warning {
+  background: #fffaf2;
+  border-color: rgba(176, 92, 28, 0.28);
+}
+
+.admin-security-event-list article.severity-critical {
+  background: #fff4f4;
+  border-color: rgba(167, 35, 45, 0.34);
+}
+
+.admin-security-event-mark {
+  width: 8px;
+  min-height: 54px;
+  border-radius: 999px;
+  background: #b9a4aa;
+}
+
+.severity-warning .admin-security-event-mark {
+  background: #c77c28;
+}
+
+.severity-critical .admin-security-event-mark {
+  background: #b12632;
+}
+
+.admin-security-event-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 9px;
+}
+
+.admin-security-event-title span {
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: #f1e8eb;
+  color: #6f2339;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.admin-security-event-list p {
+  margin: 7px 0;
+  color: #3f252d;
+}
+
+.admin-security-event-list small,
+.admin-security-event-list time {
+  color: #806d73;
+}
+
+.admin-security-pagination {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 12px;
+}
+
+.admin-security-pagination a:last-child {
+  justify-self: end;
+}
+
+.admin-security-pagination a {
+  color: #6f2339;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+@media (max-width: 1180px) {
+  .admin-security-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-security-policy-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-security-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-security-filters .wide {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 700px) {
+  .admin-security-head-actions,
+  .admin-security-head-actions button {
+    width: 100%;
+  }
+
+  .admin-security-metrics,
+  .admin-security-policy-grid,
+  .admin-security-filters {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-security-filters .wide {
+    grid-column: auto;
+  }
+
+  .admin-security-event-list article {
+    grid-template-columns: 6px minmax(0, 1fr);
+  }
+
+  .admin-security-event-list time {
+    grid-column: 2;
+  }
+}
+
+.admin-security-role-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.admin-security-role-grid article {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  min-height: 138px;
+  padding: 16px;
+  border: 1px solid rgba(111, 35, 57, 0.12);
+  border-radius: 16px;
+  background: #fbf8f9;
+}
+
+.admin-security-role-grid strong {
+  color: #35171f;
+}
+
+.admin-security-role-grid span {
+  color: #755f66;
+  line-height: 1.5;
+}
+
+@media (max-width: 1180px) {
+  .admin-security-role-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 700px) {
+  .admin-security-role-grid {
+    grid-template-columns: 1fr;
+  }
+}

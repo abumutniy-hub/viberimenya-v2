@@ -1,4 +1,10 @@
+import type { Metadata } from "next";
 import { TrackClient } from "./track-client";
+
+export const metadata: Metadata = {
+  title: "Отслеживание заказа",
+  robots: { index: false, follow: false, noarchive: true },
+};
 
 type PageProps = {
   params: Promise<{ token: string }>;

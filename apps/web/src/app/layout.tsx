@@ -1,135 +1,68 @@
-import type {
-  Metadata,
-  Viewport
-} from "next";
+import type { Metadata, Viewport } from "next";
 
 import "./globals.css";
 import "./public-shell.css";
 
-import {
-  PublicShell,
-  type PublicShellSettings
-} from "./components/public-shell";
+import { PublicShell } from "./components/public-shell";
+import { loadPublicSettings } from "./lib/public-settings";
 
-export const metadata: Metadata = {
-  metadataBase:
-    new URL(
-      "https://viberimenya.ru"
-    ),
+export async function generateMetadata(): Promise<Metadata> {
+  const settings = await loadPublicSettings();
+  const title = settings.seo.siteTitle || "Выбери Меня — цветы с доставкой";
+  const description = settings.seo.siteDescription;
+  const image = settings.seo.ogImageUrl || settings.heroImageUrl;
 
-  title: {
-    default:
-      "Выбери Меня — "
-      + "цветы с доставкой",
-
-    template:
-      "%s | Выбери Меня"
-  },
-
-  description:
-    "Стильные букеты, "
-    + "фото перед доставкой "
-    + "и бережная доставка "
-    + "получателю.",
-
-  icons: {
-    icon: [
-      {
-        url: "/icon.svg",
-        type: "image/svg+xml"
-      }
-    ]
-  }
-};
+  return {
+    metadataBase: new URL("https://viberimenya.ru"),
+    title: {
+      default: title,
+      template: `%s | ${settings.site.brandName || "Выбери Меня"}`,
+    },
+    description,
+    alternates: { canonical: "/" },
+    icons: {
+      icon: [{ url: "/icon.svg", type: "image/svg+xml" }],
+    },
+    openGraph: {
+      type: "website",
+      locale: "ru_RU",
+      url: "https://viberimenya.ru",
+      siteName: settings.site.brandName,
+      title,
+      description,
+      images: image ? [{ url: image, alt: settings.site.brandName }] : undefined,
+    },
+    twitter: {
+      card: image ? "summary_large_image" : "summary",
+      title,
+      description,
+      images: image ? [image] : undefined,
+    },
+    verification: settings.seo.yandexVerification
+      ? { yandex: settings.seo.yandexVerification }
+      : undefined,
+    robots: settings.seo.indexingEnabled
+      ? { index: true, follow: true }
+      : { index: false, follow: false, noarchive: true },
+  };
+}
 
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   themeColor: "#fff9f4",
-  colorScheme: "light"
+  colorScheme: "light",
 };
 
-const defaultShellSettings:
-  PublicShellSettings = {
-    phone: "",
-    whatsapp: "",
-    telegram: "",
-    instagram: "",
-    address: "",
-    workHours: "",
-    site: {
-      brandName: "Выбери Меня",
-      brandSubtitle: "ЦВЕТЫ И ПОДАРКИ",
-      footerDescription:
-        "Собираем букеты под заказ, показываем готовую работу перед отправкой и бережно доставляем получателю.",
-      email: "",
-      legalName: "",
-      inn: "",
-      ogrn: "",
-      policyUrl: "",
-      offerUrl: "",
-      deliveryTermsUrl: "",
-      returnsUrl: ""
-    }
-  };
-
-async function loadShellSettings():
-  Promise<PublicShellSettings> {
-  const baseUrl =
-    process.env.API_INTERNAL_URL
-    ?? "http://127.0.0.1:4001";
-
-  try {
-    const response = await fetch(
-      `${baseUrl}/api/public/shop`,
-      {
-        cache: "no-store"
-      }
-    );
-
-    if (!response.ok) {
-      return defaultShellSettings;
-    }
-
-    const data = await response.json() as {
-      settings?: Partial<
-        PublicShellSettings
-      > & {
-        site?: Partial<
-          PublicShellSettings["site"]
-        >;
-      };
-    };
-
-    return {
-      ...defaultShellSettings,
-      ...data.settings,
-      site: {
-        ...defaultShellSettings.site,
-        ...data.settings?.site
-      }
-    };
-  } catch {
-    return defaultShellSettings;
-  }
-}
-
 export default async function RootLayout({
-  children
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
-  const shellSettings =
-    await loadShellSettings();
+  children,
+}: Readonly<{ children: React.ReactNode }>) {
+  const settings = await loadPublicSettings();
 
   return (
     <html lang="ru">
       <body>
-        <PublicShell
-          settings={shellSettings}
-        >
-          {children}
-        </PublicShell>
+        <PublicShell settings={settings}>{children}</PublicShell>
       </body>
     </html>
   );

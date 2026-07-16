@@ -28,24 +28,45 @@ async function readApiResponse(
 }
 
 function generatePassword() {
-  const alphabet =
-    "ABCDEFGHJKLMNPQRSTUVWXYZ"
-    + "abcdefghijkmnopqrstuvwxyz"
-    + "23456789"
-    + "!@#$%";
-
-  const values =
-    new Uint32Array(14);
+  const groups = [
+    "ABCDEFGHJKLMNPQRSTUVWXYZ",
+    "abcdefghijkmnopqrstuvwxyz",
+    "23456789",
+    "!@#$%"
+  ];
+  const alphabet = groups.join("");
+  const values = new Uint32Array(16);
 
   crypto.getRandomValues(values);
 
-  return Array.from(
-    values,
-    value =>
-      alphabet[
-        value % alphabet.length
-      ]
-  ).join("");
+  const characters = groups.map(
+    (group, index) =>
+      group[(values[index] ?? 0) % group.length] ?? "A"
+  );
+
+  for (let index = groups.length; index < values.length; index += 1) {
+    characters.push(
+      alphabet[(values[index] ?? 0) % alphabet.length] ?? "B"
+    );
+  }
+
+  for (let index = characters.length - 1; index > 0; index -= 1) {
+    const swapIndex = (values[index] ?? 0) % (index + 1);
+    [characters[index], characters[swapIndex]] = [
+      characters[swapIndex] ?? "A",
+      characters[index] ?? "B"
+    ];
+  }
+
+  return characters.join("");
+}
+
+function isStrongPassword(value: string) {
+  return (
+    value.length >= 10
+    && /[A-Za-zА-Яа-я]/.test(value)
+    && /\d/.test(value)
+  );
 }
 
 async function copyText(
@@ -145,10 +166,10 @@ export function EmployeeForm() {
     }
 
     if (
-      payload.password.length < 8
+      !isStrongPassword(payload.password)
     ) {
       alert(
-        "Пароль должен содержать минимум 8 символов"
+        "Пароль должен содержать минимум 10 символов, букву и цифру"
       );
 
       return;
@@ -288,7 +309,7 @@ export function EmployeeForm() {
                 event.target.value
               )
             }
-            placeholder="Минимум 8 символов"
+            placeholder="Минимум 10 символов, буква и цифра"
             autoComplete="new-password"
             required
           />
@@ -394,7 +415,7 @@ export function EmployeeForm() {
             </strong>
 
             <span>
-              Код действует 30 минут.
+              Код действует 10 минут.
             </span>
 
             <span>

@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import { pbkdf2Sync, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { pbkdf2Sync, randomBytes, randomInt, randomUUID, timingSafeEqual } from "node:crypto";
 import { mkdir, unlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { z } from "zod";
@@ -11,6 +11,28 @@ import {
   recordFullOrderRefund,
   rollbackOrderFinancialsOnCancellation
 } from "../modules/orders/order-finance.service";
+import {
+  auditEventForMutation,
+  createLoginFingerprint,
+  enforceActiveSessionLimit,
+  maskLogin,
+  persistentLoginBlockSeconds,
+  writeAdminAudit
+} from "../modules/admin/admin-security.service";
+import { registerAdminSecurityRoutes } from "./admin-security";
+import {
+  createOrReuseYooKassaPayment,
+  finalizeYooKassaRefund,
+  prepareYooKassaRefund
+} from "./payments";
+import {
+  testYooKassaCredentials,
+  yookassaPublicStatus
+} from "../modules/payments/yookassa.service";
+import {
+  currentYooKassaRuntimeSettings,
+  persistYooKassaRuntimeSettings
+} from "../modules/payments/yookassa-settings.service";
 
 type ShopRow = {
   id: string;
@@ -40,11 +62,11 @@ function createEmployeeLinkToken() {
 }
 
 function createTelegramLinkCode() {
-  return String(Math.floor(100000 + Math.random() * 900000));
+  return String(randomInt(100000, 1000000));
 }
 
 const ADMIN_SESSION_COOKIE = "vm_admin_session";
-const ADMIN_SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
+const ADMIN_SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 14;
 const ADMIN_LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const ADMIN_LOGIN_BLOCK_MS = 15 * 60 * 1000;
 const ADMIN_LOGIN_MAX_FAILURES = 5;
@@ -217,6 +239,14 @@ function getRequiredAdminRoles(
 
   if (
     path.startsWith(
+      "/api/admin/finance/yookassa-settings"
+    )
+  ) {
+    return OWNER_ADMIN_ROLES;
+  }
+
+  if (
+    path.startsWith(
       "/api/admin/finance"
     )
   ) {
@@ -333,6 +363,14 @@ function getRequiredAdminRoles(
 
   if (
     path.startsWith(
+      "/api/admin/security"
+    )
+  ) {
+    return OWNER_ADMIN_ROLES;
+  }
+
+  if (
+    path.startsWith(
       "/api/admin/employees"
     )
     || path.startsWith(
@@ -365,6 +403,14 @@ function normalizeContactPhone(value: string) {
   }
 
   return value.trim();
+}
+
+function isStrongEmployeePassword(value: string) {
+  return (
+    value.length >= 10
+    && /[A-Za-zА-Яа-я]/.test(value)
+    && /\d/.test(value)
+  );
 }
 
 const contactPhoneSchema = z.string()
@@ -434,6 +480,30 @@ const homeBenefitSchema = z.object({
   title: z.string().trim().min(2).max(100),
   text: z.string().trim().min(2).max(260)
 });
+
+const yookassaSettingsSchema = z.object({
+  enabled: z.coerce.boolean(),
+  shopId: z.union([
+    z.string().trim().regex(/^\d{3,64}$/, "Shop ID должен состоять из цифр"),
+    z.literal("")
+  ]).optional().default(""),
+  secretKey: z.string().trim().max(300).refine(
+    (value) => !/\s/.test(value),
+    "Секретный ключ не должен содержать пробелы"
+  ).optional().default(""),
+  testMode: z.coerce.boolean().optional().default(true)
+});
+
+function yookassaWebhookUrl() {
+  try {
+    return new URL(
+      "/api/public/payments/yookassa/webhook",
+      env.APP_URL
+    ).toString();
+  } catch {
+    return `${env.APP_URL.replace(/\/$/, "")}/api/public/payments/yookassa/webhook`;
+  }
+}
 
 const settingsSchema = z.object({
   phone: z.string().trim().max(32).optional().default(""),
@@ -572,6 +642,77 @@ const settingsSchema = z.object({
     path: ["isTransferPaymentEnabled"]
   }
 );
+
+
+const launchSettingsSchema = z.object({
+  launch: z.object({
+    acceptingOrders: z.coerce.boolean().default(true),
+    maintenanceMode: z.coerce.boolean().default(false),
+    maintenanceTitle: z.string().trim().min(3).max(160),
+    maintenanceMessage: z.string().trim().min(3).max(1000),
+    ordersPausedMessage: z.string().trim().min(3).max(500)
+  }),
+  seo: z.object({
+    siteTitle: z.string().trim().min(3).max(160),
+    siteDescription: z.string().trim().min(20).max(500),
+    ogImageUrl: safePublicLinkSchema.default(""),
+    yandexVerification: z.string().trim().max(200).regex(
+      /^[a-zA-Z0-9_-]*$/,
+      "Код подтверждения может содержать только буквы, цифры, дефис и подчёркивание"
+    ),
+    indexingEnabled: z.coerce.boolean().default(false)
+  }),
+  analytics: z.object({
+    enabled: z.coerce.boolean().default(false),
+    yandexMetrikaId: z.string().trim().max(12).regex(
+      /^\d{0,12}$/,
+      "Номер счётчика должен состоять из цифр"
+    )
+  }).superRefine((value, context) => {
+    if (value.enabled && !/^\d{4,12}$/.test(value.yandexMetrikaId)) {
+      context.addIssue({
+        code: "custom",
+        path: ["yandexMetrikaId"],
+        message: "Для включения аналитики укажите номер счётчика"
+      });
+    }
+  }),
+  legal: z.object({
+    privacyText: z.string().trim().max(30000).default(""),
+    consentText: z.string().trim().max(30000).default(""),
+    offerText: z.string().trim().max(30000).default(""),
+    deliveryText: z.string().trim().max(30000).default(""),
+    returnsText: z.string().trim().max(30000).default("")
+  })
+});
+
+const catalogImportRowSchema = z.object({
+  sourceRow: z.coerce.number().int().min(2).max(1000000),
+  name: z.string().trim().min(2).max(255),
+  slug: z.string().trim().max(160).default(""),
+  category: z.string().trim().max(160).default(""),
+  price: z.coerce.number().int().min(0).max(100000000),
+  oldPrice: z.union([z.coerce.number().int().min(0).max(100000000), z.null()]).default(null),
+  costPrice: z.union([z.coerce.number().int().min(0).max(100000000), z.null()]).default(null),
+  stockQuantity: z.coerce.number().int().min(0).max(1000000).default(0),
+  status: z.enum(["draft", "active", "hidden"]).default("draft"),
+  isFeatured: z.coerce.boolean().default(false),
+  sortOrder: z.coerce.number().int().min(0).max(100000).default(100),
+  shortDescription: z.string().trim().max(2000).default(""),
+  description: z.string().trim().max(20000).default(""),
+  composition: z.string().trim().max(10000).default(""),
+  careText: z.string().trim().max(10000).default(""),
+  imageUrl: z.string().trim().max(500).refine(
+    (value) => value === "" || /^\/uploads\/products\/[a-zA-Z0-9._-]+$/.test(value),
+    "Фотография должна находиться в /uploads/products/"
+  ).default("")
+});
+
+const catalogImportSchema = z.object({
+  mode: z.enum(["upsert", "create_only"]).default("upsert"),
+  createMissingCategories: z.coerce.boolean().default(true),
+  rows: z.array(catalogImportRowSchema).min(1).max(500)
+});
 
 const categoryIconKeys = [
   "bouquet",
@@ -1257,7 +1398,30 @@ export async function adminRoutes(app: FastifyInstance) {
       const role = session.role as AdminRole;
       const requiredRoles = getRequiredAdminRoles(path, request.method);
 
+      await client`
+        UPDATE admin_sessions
+        SET updated_at = NOW()
+        WHERE token = ${token}
+          AND updated_at < NOW() - INTERVAL '5 minutes'
+      `;
+
       if (!requiredRoles.includes(role)) {
+        await writeAdminAudit(client, {
+          shopId: session.shop_id,
+          actorUserId: session.user_id,
+          actorRole: role,
+          eventType: "security.access_denied",
+          entityType: "route",
+          entityId: path,
+          severity: "warning",
+          ip: request.ip || null,
+          userAgent: request.headers["user-agent"] || null,
+          summary: `Запрещён доступ к разделу: ${request.method} ${path}`,
+          metadata: {
+            requiredRoles
+          }
+        });
+
         return reply.status(403).send({
           ok: false,
           message: "Недостаточно прав для этого раздела"
@@ -1274,10 +1438,56 @@ export async function adminRoutes(app: FastifyInstance) {
     }
   });
 
+  app.addHook("onResponse", async (request, reply) => {
+    const path = request.url.split("?")[0] || request.url;
+    const adminContext = (request as AdminRequest).adminContext;
+    const auditEvent = auditEventForMutation(path, request.method);
+
+    if (
+      !adminContext
+      || !auditEvent
+      || reply.statusCode < 200
+      || reply.statusCode >= 400
+    ) {
+      return;
+    }
+
+    const { client } = createDb();
+
+    try {
+      await writeAdminAudit(client, {
+        shopId: adminContext.shopId,
+        actorUserId: adminContext.userId,
+        actorRole: adminContext.role,
+        eventType: auditEvent.eventType,
+        entityType: auditEvent.entityType,
+        entityId: auditEvent.entityId,
+        severity: auditEvent.severity,
+        ip: request.ip || null,
+        userAgent: request.headers["user-agent"] || null,
+        summary: auditEvent.summary,
+        metadata: {
+          method: request.method,
+          path,
+          statusCode: reply.statusCode
+        }
+      });
+    } catch (error) {
+      request.log.error(error, "Не удалось записать аудит CRM");
+    } finally {
+      await client.end();
+    }
+  });
+
+  registerAdminSecurityRoutes(app);
+
   app.post("/api/admin/auth/login", async (request, reply) => {
     const body = adminLoginSchema.parse(request.body ?? {});
     const login = body.login.trim();
     const loginDigits = normalizePhoneDigits(login);
+    const loginFingerprint = createLoginFingerprint(login);
+    const loginHint = maskLogin(login);
+    const requestIp = request.ip || "unknown";
     const attemptKey = adminLoginAttemptKey(request, login);
     const blockedSeconds = adminLoginBlockSeconds(attemptKey);
 
@@ -1294,6 +1504,37 @@ export async function adminRoutes(app: FastifyInstance) {
 
     try {
       const shop = await getShop(client);
+      const persistentBlockedSeconds = await persistentLoginBlockSeconds(
+        client,
+        {
+          shopId: shop.id,
+          ip: requestIp,
+          loginFingerprint
+        }
+      );
+
+      if (persistentBlockedSeconds > 0) {
+        await writeAdminAudit(client, {
+          shopId: shop.id,
+          eventType: "auth.login_blocked",
+          entityType: "authentication",
+          severity: "critical",
+          ip: requestIp,
+          userAgent: request.headers["user-agent"] || null,
+          summary: `Заблокирована попытка входа: ${loginHint}`,
+          metadata: {
+            loginFingerprint,
+            retryAfterSeconds: persistentBlockedSeconds
+          }
+        });
+
+        reply.header("Retry-After", String(persistentBlockedSeconds));
+
+        return reply.status(429).send({
+          ok: false,
+          message: "Слишком много попыток входа. Повторите через 15 минут"
+        });
+      }
 
       const rows = await client<{
         id: string;
@@ -1302,6 +1543,7 @@ export async function adminRoutes(app: FastifyInstance) {
         email: string | null;
         name: string | null;
         password_hash: string | null;
+        last_login_at: string | null;
         role: string;
       }[]>`
         SELECT
@@ -1311,6 +1553,7 @@ export async function adminRoutes(app: FastifyInstance) {
           u.email,
           u.name,
           u.password_hash,
+          u.last_login_at,
           su.role
         FROM users u
         JOIN shop_users su ON su.user_id = u.id
@@ -1341,14 +1584,57 @@ export async function adminRoutes(app: FastifyInstance) {
       if (!user || !verifyPassword(body.password, user.password_hash)) {
         registerAdminLoginFailure(attemptKey);
 
-        const retryAfter = adminLoginBlockSeconds(attemptKey);
+        await writeAdminAudit(client, {
+          shopId: shop.id,
+          actorUserId: user?.id ?? null,
+          actorRole: user?.role ?? null,
+          eventType: "auth.login_failed",
+          entityType: "authentication",
+          entityId: user?.id ?? null,
+          severity: "warning",
+          ip: requestIp,
+          userAgent: request.headers["user-agent"] || null,
+          summary: `Неудачная попытка входа: ${loginHint}`,
+          metadata: {
+            loginFingerprint,
+            knownUser: Boolean(user)
+          }
+        });
+
+        const memoryRetryAfter = adminLoginBlockSeconds(attemptKey);
+        const databaseRetryAfter = await persistentLoginBlockSeconds(
+          client,
+          {
+            shopId: shop.id,
+            ip: requestIp,
+            loginFingerprint
+          }
+        );
+        const retryAfter = Math.max(memoryRetryAfter, databaseRetryAfter);
 
         if (retryAfter > 0) {
+          await writeAdminAudit(client, {
+            shopId: shop.id,
+            actorUserId: user?.id ?? null,
+            actorRole: user?.role ?? null,
+            eventType: "auth.login_blocked",
+            entityType: "authentication",
+            entityId: user?.id ?? null,
+            severity: "critical",
+            ip: requestIp,
+            userAgent: request.headers["user-agent"] || null,
+            summary: `Вход временно заблокирован: ${loginHint}`,
+            metadata: {
+              loginFingerprint,
+              retryAfterSeconds: retryAfter
+            }
+          });
+
           reply.header("Retry-After", String(retryAfter));
 
           return reply.status(429).send({
             ok: false,
-            message: "Слишком много попыток входа. Повторите через 15 минут",
+            message: "Слишком много попыток входа. Повторите через 15 минут"
           });
         }
 
@@ -1379,11 +1665,32 @@ export async function adminRoutes(app: FastifyInstance) {
           ${user.id},
           ${request.ip || null},
           ${request.headers["user-agent"] || null},
-          NOW() + INTERVAL '30 days',
+          NOW() + INTERVAL '14 days',
           NOW(),
           NOW()
         )
       `;
+
+      const revokedOldSessions = await enforceActiveSessionLimit(
+        client,
+        {
+          shopId: shop.id,
+          userId: user.id,
+          keepToken: sessionToken
+        }
+      );
+
+      const knownIpRows = await client<{ known_ip: boolean }[]>`
+        SELECT EXISTS (
+          SELECT 1
+          FROM admin_audit_log
+          WHERE shop_id = ${shop.id}
+            AND actor_user_id = ${user.id}
+            AND event_type = 'auth.login_success'
+            AND COALESCE(ip, '') = ${requestIp}
+        ) AS known_ip
+      `;
+      const isNewIp = Boolean(user.last_login_at) && !Boolean(knownIpRows[0]?.known_ip);
 
       await client`
         UPDATE users
@@ -1391,6 +1698,25 @@ export async function adminRoutes(app: FastifyInstance) {
             updated_at = NOW()
         WHERE id = ${user.id}
       `;
+
+      await writeAdminAudit(client, {
+        shopId: shop.id,
+        actorUserId: user.id,
+        actorRole: user.role,
+        eventType: "auth.login_success",
+        entityType: "authentication",
+        entityId: user.id,
+        severity: isNewIp ? "warning" : "info",
+        ip: requestIp,
+        userAgent: request.headers["user-agent"] || null,
+        summary: isNewIp
+          ? `Успешный вход с нового IP: ${user.name || loginHint}`
+          : `Успешный вход: ${user.name || loginHint}`,
+        metadata: {
+          revokedOldSessions,
+          newIp: isNewIp
+        }
+      });
 
       reply.header("Set-Cookie", buildAdminSessionCookie(sessionToken));
 
@@ -1489,6 +1815,26 @@ export async function adminRoutes(app: FastifyInstance) {
       const { client } = createDb();
 
       try {
+        const sessionRows = await client<{
+          shop_id: string;
+          user_id: string;
+          role: string;
+          name: string | null;
+        }[]>`
+          SELECT
+            s.shop_id,
+            s.user_id,
+            su.role::text AS role,
+            u.name
+          FROM admin_sessions s
+          JOIN users u ON u.id = s.user_id
+          JOIN shop_users su
+            ON su.shop_id = s.shop_id
+           AND su.user_id = s.user_id
+          WHERE s.token = ${token}
+          LIMIT 1
+        `;
+
         await client`
           UPDATE admin_sessions
           SET revoked_at = NOW(),
@@ -1496,6 +1842,23 @@ export async function adminRoutes(app: FastifyInstance) {
           WHERE token = ${token}
             AND revoked_at IS NULL
         `;
+
+        const session = sessionRows[0];
+
+        if (session) {
+          await writeAdminAudit(client, {
+            shopId: session.shop_id,
+            actorUserId: session.user_id,
+            actorRole: session.role,
+            eventType: "auth.logout",
+            entityType: "authentication",
+            entityId: session.user_id,
+            severity: "info",
+            ip: request.ip || null,
+            userAgent: request.headers["user-agent"] || null,
+            summary: `Выход из CRM: ${session.name || session.user_id}`
+          });
+        }
       } finally {
         await client.end();
       }
@@ -1806,6 +2169,194 @@ export async function adminRoutes(app: FastifyInstance) {
     }
   });
 
+  app.get("/api/admin/finance/yookassa-settings", async (request, reply) => {
+    const adminContext = (request as AdminRequest).adminContext;
+
+    if (!adminContext?.userId) {
+      return reply.status(401).send({
+        ok: false,
+        message: "Требуется вход в CRM"
+      });
+    }
+
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+      const rows = await client<{ is_online_payment_enabled: boolean }[]>`
+        SELECT is_online_payment_enabled
+        FROM shop_settings
+        WHERE shop_id = ${shop.id}
+        LIMIT 1
+      `;
+      const runtime = currentYooKassaRuntimeSettings();
+
+      return {
+        ok: true,
+        settings: {
+          enabled: rows[0]?.is_online_payment_enabled === true,
+          shopId: runtime.shopId,
+          secretKeyConfigured: Boolean(runtime.secretKey),
+          testMode: runtime.testMode,
+          receiptsEnabled: env.YOOKASSA_RECEIPTS_ENABLED,
+          webhookUrl: yookassaWebhookUrl()
+        }
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.post("/api/admin/finance/yookassa-settings/test", async (request) => {
+    const body = yookassaSettingsSchema.partial().parse(request.body ?? {});
+    const current = currentYooKassaRuntimeSettings();
+    const shopId = body.shopId || current.shopId;
+    const secretKey = body.secretKey || current.secretKey;
+
+    if (!shopId || !secretKey) {
+      throw new HttpError(400, "Введите Shop ID и секретный ключ");
+    }
+
+    await testYooKassaCredentials({ shopId, secretKey });
+
+    return {
+      ok: true,
+      message: "Подключение к ЮKassa подтверждено. Платежи не создавались."
+    };
+  });
+
+  app.post("/api/admin/finance/yookassa-settings", async (request) => {
+    const body = yookassaSettingsSchema.parse(request.body ?? {});
+    const previous = currentYooKassaRuntimeSettings();
+    const shopId = body.shopId || previous.shopId;
+    const secretKey = body.secretKey || previous.secretKey;
+    const credentialsChanged = (
+      shopId !== previous.shopId
+      || Boolean(body.secretKey)
+      || body.testMode !== previous.testMode
+    );
+
+    if (body.shopId && body.shopId !== previous.shopId && !body.secretKey) {
+      throw new HttpError(400, "При изменении Shop ID введите новый секретный ключ");
+    }
+
+    if (body.enabled && (!shopId || !secretKey)) {
+      throw new HttpError(400, "Для включения ЮKassa нужны Shop ID и секретный ключ");
+    }
+
+    if (credentialsChanged || body.enabled) {
+      if (!shopId || !secretKey) {
+        throw new HttpError(400, "Введите Shop ID и секретный ключ");
+      }
+
+      await testYooKassaCredentials({ shopId, secretKey });
+    }
+
+    const nextRuntime = {
+      shopId,
+      secretKey,
+      testMode: body.testMode
+    };
+
+    await persistYooKassaRuntimeSettings(nextRuntime);
+
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+
+      await client`
+        INSERT INTO shop_settings (
+          shop_id,
+          is_online_payment_enabled,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          ${shop.id},
+          ${body.enabled},
+          NOW(),
+          NOW()
+        )
+        ON CONFLICT (shop_id)
+        DO UPDATE SET
+          is_online_payment_enabled = EXCLUDED.is_online_payment_enabled,
+          updated_at = NOW()
+      `;
+
+      return {
+        ok: true,
+        message: body.enabled
+          ? "ЮKassa подключена и включена"
+          : "Настройки сохранены. Новые онлайн-платежи выключены",
+        settings: {
+          enabled: body.enabled,
+          shopId,
+          secretKeyConfigured: Boolean(secretKey),
+          testMode: body.testMode,
+          webhookUrl: yookassaWebhookUrl()
+        }
+      };
+    } catch (error) {
+      await persistYooKassaRuntimeSettings(previous).catch(() => undefined);
+      throw error;
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.post("/api/admin/finance/yookassa-settings/clear", async () => {
+    const previous = currentYooKassaRuntimeSettings();
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+      const pendingRows = await client<{ total: number }[]>`
+        SELECT COUNT(*)::int AS total
+        FROM payments
+        WHERE shop_id = ${shop.id}
+          AND provider = 'yookassa'
+          AND status = 'pending'
+      `;
+
+      if (Number(pendingRows[0]?.total ?? 0) > 0) {
+        throw new HttpError(409, "Сначала завершите или отмените ожидающие платежи ЮKassa");
+      }
+
+      await persistYooKassaRuntimeSettings({
+        shopId: "",
+        secretKey: "",
+        testMode: true
+      });
+
+      try {
+        await client`
+          INSERT INTO shop_settings (
+            shop_id,
+            is_online_payment_enabled,
+            created_at,
+            updated_at
+          )
+          VALUES (${shop.id}, false, NOW(), NOW())
+          ON CONFLICT (shop_id)
+          DO UPDATE SET
+            is_online_payment_enabled = false,
+            updated_at = NOW()
+        `;
+      } catch (error) {
+        await persistYooKassaRuntimeSettings(previous).catch(() => undefined);
+        throw error;
+      }
+
+      return {
+        ok: true,
+        message: "Ключи ЮKassa удалены, онлайн-оплата выключена"
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
   /* ASSIGNED ORDER ACCESS 7.2.2A */
   app.get("/api/admin/finance", async (request, reply) => {
     const query = z.object({
@@ -1843,7 +2394,7 @@ export async function adminRoutes(app: FastifyInstance) {
       const dateFrom = query.dateFrom || null;
       const dateTo = query.dateTo || null;
 
-      const [metricsRows, countRows, paymentRows, debtRows] = await Promise.all([
+      const [metricsRows, countRows, paymentRows, debtRows, providerSettingRows] = await Promise.all([
         client<{
           paid_amount: number;
           paid_count: number;
@@ -1929,6 +2480,12 @@ export async function adminRoutes(app: FastifyInstance) {
             COALESCE(SUM(ABS(bonus_balance)) FILTER (WHERE bonus_balance < 0), 0)::bigint AS total_bonus_debt
           FROM customers
           WHERE shop_id = ${shop.id}
+        `,
+        client<{ is_online_payment_enabled: boolean }[]>`
+          SELECT is_online_payment_enabled
+          FROM shop_settings
+          WHERE shop_id = ${shop.id}
+          LIMIT 1
         `
       ]);
 
@@ -1961,6 +2518,10 @@ export async function adminRoutes(app: FastifyInstance) {
         viewer: {
           role: adminContext.role,
           canRefund: OWNER_ADMIN_ROLES.includes(adminContext.role)
+        },
+        provider: {
+          ...yookassaPublicStatus(),
+          enabled: providerSettingRows[0]?.is_online_payment_enabled === true
         }
       };
     } finally {
@@ -5238,8 +5799,17 @@ export async function adminRoutes(app: FastifyInstance) {
           id: string;
           order_number: string;
           status: string;
+          payment_method: string;
+          tracking_token: string;
+          total: number;
         }[]>`
-          SELECT id, order_number, status::text AS status
+          SELECT
+            id,
+            order_number,
+            status::text AS status,
+            payment_method::text AS payment_method,
+            tracking_token,
+            total
           FROM orders
           WHERE shop_id = ${shop.id}
             AND id = ${params.id}
@@ -5258,7 +5828,13 @@ export async function adminRoutes(app: FastifyInstance) {
         }
 
         if (order.status !== "new") {
-          return { changed: false, orderId: order.id };
+          return {
+            changed: false,
+            orderId: order.id,
+            paymentMethod: order.payment_method,
+            trackingToken: order.tracking_token,
+            total: Number(order.total || 0)
+          };
         }
 
         await transaction`
@@ -5287,8 +5863,46 @@ export async function adminRoutes(app: FastifyInstance) {
           status: "confirmed"
         });
 
-        return { changed: true, orderId: order.id };
+        return {
+          changed: true,
+          orderId: order.id,
+          paymentMethod: order.payment_method,
+          trackingToken: order.tracking_token,
+          total: Number(order.total || 0)
+        };
       });
+
+      let paymentWarning = "";
+      let paymentUrl = "";
+
+      if (
+        result.changed
+        && (result.paymentMethod === "online_card" || result.paymentMethod === "sbp")
+        && result.trackingToken
+      ) {
+        try {
+          const payment = await createOrReuseYooKassaPayment(client, result.trackingToken);
+          paymentUrl = String(payment.paymentUrl || "");
+
+          if (paymentUrl) {
+            await queueCustomerOrderNotification(client, {
+              shopId: shop.id,
+              orderId: result.orderId,
+              type: "payment_link_added",
+              status: "confirmed",
+              extraPayload: {
+                paymentUrl,
+                amount: result.total,
+                provider: "yookassa"
+              }
+            });
+          }
+        } catch (error) {
+          paymentWarning = error instanceof Error
+            ? error.message
+            : "Не удалось автоматически подготовить ссылку оплаты";
+        }
+      }
 
       const updatedRows = await client`
         SELECT
@@ -5305,6 +5919,8 @@ export async function adminRoutes(app: FastifyInstance) {
       return {
         ok: true,
         changed: result.changed,
+        paymentUrl: paymentUrl || null,
+        paymentWarning: paymentWarning || null,
         order: updatedRows[0] ?? null
       };
     } finally {
@@ -5565,6 +6181,43 @@ export async function adminRoutes(app: FastifyInstance) {
       try {
         const shop = await getShop(client);
 
+        const providerRefund = await prepareYooKassaRefund({
+          client,
+          shopId: shop.id,
+          orderId: params.id,
+          actorUserId: adminContext.userId,
+          reason: body.reason,
+          cancelOrder: body.cancelOrder
+        });
+
+        if (providerRefund) {
+          const finalized = await finalizeYooKassaRefund({
+            client,
+            shopId: shop.id,
+            orderId: params.id,
+            actorUserId: adminContext.userId,
+            reason: body.reason,
+            cancelOrder: body.cancelOrder,
+            refund: providerRefund.refund
+          });
+
+          if (!finalized) {
+            return reply.status(202).send({
+              ok: true,
+              pending: true,
+              message: "ЮKassa приняла возврат. CRM завершит его после подтверждения webhook.",
+              providerRefund: providerRefund.refund
+            });
+          }
+
+          return {
+            ok: true,
+            provider: "yookassa",
+            providerRefund: providerRefund.refund,
+            refund: finalized
+          };
+        }
+
         const result = await recordFullOrderRefund({
           client,
           shopId: shop.id,
@@ -5576,6 +6229,7 @@ export async function adminRoutes(app: FastifyInstance) {
 
         return {
           ok: true,
+          provider: "manual",
           refund: result
         };
       } finally {
@@ -5656,6 +6310,392 @@ export async function adminRoutes(app: FastifyInstance) {
       ]);
 
       return { shop, categories, products };
+    } finally {
+      await client.end();
+    }
+  });
+
+
+  app.get("/api/admin/catalog/export.csv", async (_request, reply) => {
+    const { client } = createDb();
+
+    function csvValue(value: unknown) {
+      let text = String(value ?? "");
+
+      if (/^[=+\-@]/.test(text)) {
+        text = `'${text}`;
+      }
+
+      return /[";\r\n]/.test(text)
+        ? `"${text.replace(/"/g, '""')}"`
+        : text;
+    }
+
+    try {
+      const shop = await getShop(client);
+      const rows = await client<{
+        name: string;
+        slug: string;
+        category_name: string | null;
+        price: number;
+        old_price: number | null;
+        cost_price: number | null;
+        stock_quantity: number | null;
+        status: string;
+        is_featured: boolean;
+        sort_order: number;
+        short_description: string | null;
+        description: string | null;
+        composition: string | null;
+        care_text: string | null;
+        image_url: string | null;
+      }[]>`
+        SELECT
+          p.name,
+          p.slug,
+          c.name AS category_name,
+          p.price,
+          p.old_price,
+          p.cost_price,
+          p.stock_quantity,
+          p.status::text AS status,
+          p.is_featured,
+          p.sort_order,
+          p.short_description,
+          p.description,
+          p.composition,
+          p.care_text,
+          image.url AS image_url
+        FROM products p
+        LEFT JOIN categories c
+          ON c.id = p.category_id
+        LEFT JOIN LATERAL (
+          SELECT pi.url
+          FROM product_images pi
+          WHERE pi.shop_id = p.shop_id
+            AND pi.product_id = p.id
+          ORDER BY pi.is_main DESC, pi.sort_order ASC, pi.created_at ASC
+          LIMIT 1
+        ) image ON true
+        WHERE p.shop_id = ${shop.id}
+        ORDER BY p.sort_order ASC, p.name ASC
+      `;
+
+      const header = [
+        "Название",
+        "Slug",
+        "Категория",
+        "Цена",
+        "Старая цена",
+        "Себестоимость",
+        "Остаток",
+        "Статус",
+        "Хит",
+        "Порядок",
+        "Короткое описание",
+        "Описание",
+        "Состав",
+        "Уход",
+        "Фото URL"
+      ];
+
+      const lines = [header.map(csvValue).join(";")];
+
+      for (const row of rows) {
+        lines.push([
+          row.name,
+          row.slug,
+          row.category_name ?? "",
+          row.price,
+          row.old_price ?? "",
+          row.cost_price ?? "",
+          row.stock_quantity ?? 0,
+          row.status,
+          row.is_featured ? "да" : "нет",
+          row.sort_order,
+          row.short_description ?? "",
+          row.description ?? "",
+          row.composition ?? "",
+          row.care_text ?? "",
+          row.image_url ?? ""
+        ].map(csvValue).join(";"));
+      }
+
+      reply
+        .header("Content-Type", "text/csv; charset=utf-8")
+        .header(
+          "Content-Disposition",
+          `attachment; filename="viberimenya-catalog-${new Date().toISOString().slice(0, 10)}.csv"`
+        );
+
+      return reply.send(`\uFEFF${lines.join("\r\n")}\r\n`);
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.post("/api/admin/catalog/import", async (request) => {
+    const body = catalogImportSchema.parse(request.body ?? {});
+    const normalizedSlugs = new Set<string>();
+
+    for (const row of body.rows) {
+      const slug = (row.slug || slugify(row.name)).trim();
+
+      if (!slug) {
+        throw new HttpError(400, `Строка ${row.sourceRow}: не удалось сформировать slug`);
+      }
+
+      if (normalizedSlugs.has(slug)) {
+        throw new HttpError(400, `Slug «${slug}» повторяется внутри CSV`);
+      }
+
+      normalizedSlugs.add(slug);
+    }
+
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+
+      const result = await client.begin(async (transaction) => {
+        const categoryRows = await transaction<{
+          id: string;
+          name: string;
+          slug: string;
+        }[]>`
+          SELECT id, name, slug
+          FROM categories
+          WHERE shop_id = ${shop.id}
+          FOR UPDATE
+        `;
+
+        const categoriesByKey = new Map<string, {
+          id: string;
+          name: string;
+          slug: string;
+        }>();
+
+        for (const category of categoryRows) {
+          categoriesByKey.set(category.slug.toLowerCase(), category);
+          categoriesByKey.set(category.name.trim().toLowerCase(), category);
+        }
+
+        let created = 0;
+        let updated = 0;
+        let skipped = 0;
+        let categoriesCreated = 0;
+
+        for (const row of body.rows) {
+          const productSlug = row.slug || slugify(row.name);
+          const categoryKey = row.category.trim().toLowerCase();
+          let categoryId: string | null = null;
+
+          if (categoryKey) {
+            let category = categoriesByKey.get(categoryKey) ?? null;
+
+            if (!category && body.createMissingCategories) {
+              const categorySlug = slugify(row.category) || `category-${randomUUID().slice(0, 8)}`;
+              const inserted = await transaction<{
+                id: string;
+                name: string;
+                slug: string;
+              }[]>`
+                INSERT INTO categories (
+                  shop_id,
+                  slug,
+                  name,
+                  description,
+                  image_url,
+                  sort_order,
+                  is_active,
+                  created_at,
+                  updated_at
+                )
+                VALUES (
+                  ${shop.id},
+                  ${categorySlug},
+                  ${row.category},
+                  NULL,
+                  ${categoryImageUrl(defaultCategoryIconKeyForSlug(categorySlug))},
+                  100,
+                  true,
+                  NOW(),
+                  NOW()
+                )
+                ON CONFLICT (shop_id, slug)
+                DO UPDATE SET updated_at = NOW()
+                RETURNING id, name, slug
+              `;
+
+              category = inserted[0] ?? null;
+
+              if (category) {
+                categoriesCreated += categoryRows.some((item) => item.id === category?.id) ? 0 : 1;
+                categoriesByKey.set(category.slug.toLowerCase(), category);
+                categoriesByKey.set(category.name.trim().toLowerCase(), category);
+                categoriesByKey.set(categoryKey, category);
+              }
+            }
+
+            if (!category) {
+              throw new HttpError(
+                400,
+                `Строка ${row.sourceRow}: категория «${row.category}» не найдена`
+              );
+            }
+
+            categoryId = category.id;
+          }
+
+          const existingRows = await transaction<{
+            id: string;
+            category_id: string | null;
+          }[]>`
+            SELECT id, category_id
+            FROM products
+            WHERE shop_id = ${shop.id}
+              AND slug = ${productSlug}
+            LIMIT 1
+            FOR UPDATE
+          `;
+
+          const existing = existingRows[0] ?? null;
+
+          if (existing && body.mode === "create_only") {
+            skipped += 1;
+            continue;
+          }
+
+          let productId = existing?.id ?? "";
+
+          if (existing) {
+            const rows = await transaction<{ id: string }[]>`
+              UPDATE products
+              SET
+                category_id = ${categoryKey ? categoryId : existing.category_id},
+                name = ${row.name},
+                short_description = ${row.shortDescription || null},
+                description = ${row.description || null},
+                composition = ${row.composition || null},
+                care_text = ${row.careText || null},
+                price = ${row.price},
+                old_price = ${row.oldPrice && row.oldPrice > row.price ? row.oldPrice : null},
+                cost_price = ${row.costPrice},
+                stock_quantity = ${row.stockQuantity},
+                status = ${row.status}::product_status,
+                is_featured = ${row.isFeatured},
+                sort_order = ${row.sortOrder},
+                metadata = COALESCE(metadata, '{}'::jsonb)
+                  || ${JSON.stringify({ importSource: "csv" })}::jsonb,
+                updated_at = NOW()
+              WHERE shop_id = ${shop.id}
+                AND id = ${existing.id}
+              RETURNING id
+            `;
+
+            productId = rows[0]?.id ?? existing.id;
+            updated += 1;
+          } else {
+            const rows = await transaction<{ id: string }[]>`
+              INSERT INTO products (
+                shop_id,
+                category_id,
+                slug,
+                name,
+                short_description,
+                description,
+                composition,
+                care_text,
+                price,
+                old_price,
+                cost_price,
+                stock_quantity,
+                is_stock_visible,
+                status,
+                is_featured,
+                sort_order,
+                metadata,
+                created_at,
+                updated_at
+              )
+              VALUES (
+                ${shop.id},
+                ${categoryId},
+                ${productSlug},
+                ${row.name},
+                ${row.shortDescription || null},
+                ${row.description || null},
+                ${row.composition || null},
+                ${row.careText || null},
+                ${row.price},
+                ${row.oldPrice && row.oldPrice > row.price ? row.oldPrice : null},
+                ${row.costPrice},
+                ${row.stockQuantity},
+                false,
+                ${row.status}::product_status,
+                ${row.isFeatured},
+                ${row.sortOrder},
+                ${JSON.stringify({ importSource: "csv" })}::jsonb,
+                NOW(),
+                NOW()
+              )
+              RETURNING id
+            `;
+
+            productId = rows[0]?.id ?? "";
+            created += 1;
+          }
+
+          if (row.imageUrl && productId) {
+            await transaction`
+              INSERT INTO product_images (
+                shop_id,
+                product_id,
+                url,
+                alt,
+                sort_order,
+                is_main,
+                created_at,
+                updated_at
+              )
+              SELECT
+                ${shop.id},
+                ${productId},
+                ${row.imageUrl},
+                ${row.name},
+                10,
+                NOT EXISTS (
+                  SELECT 1
+                  FROM product_images existing_image
+                  WHERE existing_image.shop_id = ${shop.id}
+                    AND existing_image.product_id = ${productId}
+                    AND existing_image.is_main = true
+                ),
+                NOW(),
+                NOW()
+              WHERE NOT EXISTS (
+                SELECT 1
+                FROM product_images duplicate_image
+                WHERE duplicate_image.shop_id = ${shop.id}
+                  AND duplicate_image.product_id = ${productId}
+                  AND duplicate_image.url = ${row.imageUrl}
+              )
+            `;
+          }
+        }
+
+        return {
+          created,
+          updated,
+          skipped,
+          categoriesCreated
+        };
+      });
+
+      return {
+        ok: true,
+        result
+      };
     } finally {
       await client.end();
     }
@@ -7563,11 +8603,11 @@ export async function adminRoutes(app: FastifyInstance) {
         });
       }
 
-      if (password.length < 8) {
+      if (!isStrongEmployeePassword(password)) {
         return reply.status(400).send({
           ok: false,
           message:
-            "Пароль сотрудника должен быть не короче 8 символов"
+            "Пароль должен содержать минимум 10 символов, букву и цифру"
         });
       }
 
@@ -7717,7 +8757,7 @@ export async function adminRoutes(app: FastifyInstance) {
             'connect_staff',
             ${telegramToken},
             'pending',
-            NOW() + INTERVAL '30 minutes',
+            NOW() + INTERVAL '10 minutes',
             CAST(
               ${JSON.stringify(metadata)}
               AS jsonb
@@ -7824,12 +8864,12 @@ export async function adminRoutes(app: FastifyInstance) {
 
       if (
         password
-        && password.length < 8
+        && !isStrongEmployeePassword(password)
       ) {
         return reply.status(400).send({
           ok: false,
           message:
-            "Новый пароль должен быть не короче 8 символов"
+            "Новый пароль должен содержать минимум 10 символов, букву и цифру"
         });
       }
 
@@ -8173,7 +9213,7 @@ export async function adminRoutes(app: FastifyInstance) {
           'connect_staff',
           ${telegramToken},
           'pending',
-          NOW() + INTERVAL '30 minutes',
+          NOW() + INTERVAL '10 minutes',
           CAST(${JSON.stringify({ source: "admin_employee_link_regenerate", mode: "code" })} AS jsonb),
           NOW(),
           NOW()
@@ -8385,6 +9425,240 @@ export async function adminRoutes(app: FastifyInstance) {
     }
   });
 
+
+  app.get("/api/admin/launch", async () => {
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+
+      const [settingsRows, readinessRows] = await Promise.all([
+        client<{
+          settings: unknown;
+          phone: string | null;
+          address: string | null;
+        }[]>`
+          SELECT settings, phone, address
+          FROM shop_settings
+          WHERE shop_id = ${shop.id}
+          LIMIT 1
+        `,
+        client<{
+          active_products: number;
+          products_without_photo: number;
+          active_categories: number;
+          active_zones: number;
+          active_intervals: number;
+          legal_name: string | null;
+          inn: string | null;
+          email: string | null;
+        }[]>`
+          SELECT
+            (
+              SELECT COUNT(*)::int
+              FROM products p
+              WHERE p.shop_id = ${shop.id}
+                AND p.status = 'active'
+            ) AS active_products,
+            (
+              SELECT COUNT(*)::int
+              FROM products p
+              WHERE p.shop_id = ${shop.id}
+                AND p.status = 'active'
+                AND NOT EXISTS (
+                  SELECT 1
+                  FROM product_images image
+                  WHERE image.shop_id = p.shop_id
+                    AND image.product_id = p.id
+                )
+            ) AS products_without_photo,
+            (
+              SELECT COUNT(*)::int
+              FROM categories c
+              WHERE c.shop_id = ${shop.id}
+                AND c.is_active = true
+            ) AS active_categories,
+            (
+              SELECT COUNT(*)::int
+              FROM delivery_zones zone
+              WHERE zone.shop_id = ${shop.id}
+                AND zone.is_active = true
+                AND LOWER(BTRIM(zone.name)) <> 'самовывоз'
+            ) AS active_zones,
+            (
+              SELECT COUNT(*)::int
+              FROM delivery_intervals interval
+              WHERE interval.shop_id = ${shop.id}
+                AND interval.is_active = true
+            ) AS active_intervals,
+            COALESCE(
+              NULLIF(settings.settings #>> '{site,legalName}', ''),
+              sh.legal_name
+            ) AS legal_name,
+            settings.settings #>> '{site,inn}' AS inn,
+            settings.settings #>> '{site,email}' AS email
+          FROM shops sh
+          LEFT JOIN shop_settings settings
+            ON settings.shop_id = sh.id
+          WHERE sh.id = ${shop.id}
+          LIMIT 1
+        `
+      ]);
+
+      const settingsRow = settingsRows[0] ?? null;
+      const readiness = readinessRows[0] ?? {
+        active_products: 0,
+        products_without_photo: 0,
+        active_categories: 0,
+        active_zones: 0,
+        active_intervals: 0,
+        legal_name: null,
+        inn: null,
+        email: null
+      };
+
+      const items = [
+        {
+          key: "products",
+          label: "Опубликованные товары",
+          ok: Number(readiness.active_products) > 0,
+          value: String(Number(readiness.active_products) || 0),
+          critical: true
+        },
+        {
+          key: "photos",
+          label: "Товары без фотографии",
+          ok: Number(readiness.products_without_photo) === 0,
+          value: String(Number(readiness.products_without_photo) || 0),
+          critical: true
+        },
+        {
+          key: "categories",
+          label: "Активные категории",
+          ok: Number(readiness.active_categories) > 0,
+          value: String(Number(readiness.active_categories) || 0),
+          critical: true
+        },
+        {
+          key: "zones",
+          label: "Зоны доставки",
+          ok: Number(readiness.active_zones) > 0,
+          value: String(Number(readiness.active_zones) || 0),
+          critical: true
+        },
+        {
+          key: "intervals",
+          label: "Интервалы доставки",
+          ok: Number(readiness.active_intervals) > 0,
+          value: String(Number(readiness.active_intervals) || 0),
+          critical: true
+        },
+        {
+          key: "legal",
+          label: "Юридическое наименование",
+          ok: Boolean(String(readiness.legal_name ?? "").trim()),
+          value: String(readiness.legal_name ?? "").trim() || "Не заполнено",
+          critical: true
+        },
+        {
+          key: "inn",
+          label: "ИНН",
+          ok: Boolean(String(readiness.inn ?? "").trim()),
+          value: String(readiness.inn ?? "").trim() || "Не заполнено",
+          critical: true
+        },
+        {
+          key: "email",
+          label: "Email магазина",
+          ok: Boolean(String(readiness.email ?? "").trim()),
+          value: String(readiness.email ?? "").trim() || "Не заполнено",
+          critical: false
+        },
+        {
+          key: "phone",
+          label: "Телефон магазина",
+          ok: Boolean(String(settingsRow?.phone ?? "").trim()),
+          value: String(settingsRow?.phone ?? "").trim() || "Не заполнено",
+          critical: true
+        },
+        {
+          key: "address",
+          label: "Адрес магазина",
+          ok: Boolean(String(settingsRow?.address ?? "").trim()),
+          value: String(settingsRow?.address ?? "").trim() || "Не заполнено",
+          critical: false
+        }
+      ];
+
+      return {
+        ok: true,
+        settings: settingsRow,
+        readiness: items
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.post("/api/admin/launch", async (request) => {
+    const body = launchSettingsSchema.parse(request.body ?? {});
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+
+      const rows = await client<{ settings: unknown }[]>`
+        SELECT settings
+        FROM shop_settings
+        WHERE shop_id = ${shop.id}
+        LIMIT 1
+      `;
+
+      const current = (
+        rows[0]?.settings
+        && typeof rows[0].settings === "object"
+        && !Array.isArray(rows[0].settings)
+      )
+        ? rows[0].settings as Record<string, unknown>
+        : {};
+
+      const nextSettings = {
+        ...current,
+        launch: body.launch,
+        seo: body.seo,
+        analytics: body.analytics,
+        legal: body.legal
+      };
+
+      const savedRows = await client`
+        INSERT INTO shop_settings (
+          shop_id,
+          settings,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          ${shop.id},
+          ${JSON.stringify(nextSettings)}::jsonb,
+          NOW(),
+          NOW()
+        )
+        ON CONFLICT (shop_id)
+        DO UPDATE SET
+          settings = EXCLUDED.settings,
+          updated_at = NOW()
+        RETURNING settings
+      `;
+
+      return {
+        ok: true,
+        settings: savedRows[0]?.settings ?? nextSettings
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
   app.post("/api/admin/settings", async (request) => {
     const body = settingsSchema.parse(request.body ?? {});
     const { client } = createDb();
@@ -8428,7 +9702,7 @@ export async function adminRoutes(app: FastifyInstance) {
           ${body.heroTitle},
           ${body.heroSubtitle},
           ${body.heroImageUrl || null},
-          ${body.isOnlinePaymentEnabled},
+          false,
           ${body.isCashPaymentEnabled},
           ${body.isTransferPaymentEnabled},
           ${JSON.stringify(contentSettings)}::jsonb,
@@ -8446,10 +9720,9 @@ export async function adminRoutes(app: FastifyInstance) {
           hero_title = EXCLUDED.hero_title,
           hero_subtitle = EXCLUDED.hero_subtitle,
           hero_image_url = EXCLUDED.hero_image_url,
-          is_online_payment_enabled = EXCLUDED.is_online_payment_enabled,
           is_cash_payment_enabled = EXCLUDED.is_cash_payment_enabled,
           is_transfer_payment_enabled = EXCLUDED.is_transfer_payment_enabled,
-          settings = EXCLUDED.settings,
+          settings = shop_settings.settings || EXCLUDED.settings,
           updated_at = NOW()
         RETURNING *
       `;

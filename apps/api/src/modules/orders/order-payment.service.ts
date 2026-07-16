@@ -10,6 +10,11 @@ type MarkOrderPaidParams = {
   client: SqlClient;
   shopId: string;
   orderId: string;
+  source?: "admin_manual_paid" | "yookassa_webhook" | "yookassa_sync";
+  providerPaymentId?: string;
+  providerPayload?: unknown;
+  paidAt?: string | null;
+  allowNewOrder?: boolean;
 };
 
 type LockedOrderRow = {
@@ -105,7 +110,7 @@ export async function markOrderPaid(
         );
       }
 
-      if (order.status === "new") {
+      if (order.status === "new" && params.allowNewOrder !== true) {
         throw new HttpError(
           400,
           "Сначала подтвердите заказ, затем отметьте оплату"
@@ -326,13 +331,17 @@ export async function markOrderPaid(
           || 0
         );
 
+      const paymentAuditKey =
+        (params.source ?? "").startsWith("yookassa")
+          ? "providerPayment"
+          : "manualPayment";
+
       const paymentAudit = {
-        version: 1,
-        source:
-          "admin_manual_paid",
-        markedAt:
-          new Date()
-            .toISOString()
+        version: 2,
+        source: params.source ?? "admin_manual_paid",
+        markedAt: new Date().toISOString(),
+        providerPaymentId: params.providerPaymentId ?? null,
+        providerSnapshot: params.providerPayload ?? null
       };
 
       if (!wasAlreadyPaid) {
@@ -363,7 +372,7 @@ export async function markOrderPaid(
                   '{}'::jsonb
                 )
                 || jsonb_build_object(
-                  'manualPayment',
+                  ${paymentAuditKey},
                   CAST(
                     ${JSON.stringify(
                       paymentAudit
@@ -396,11 +405,15 @@ export async function markOrderPaid(
           UPDATE payments
           SET
             status = 'paid',
-            paid_at =
-              COALESCE(
-                paid_at,
-                NOW()
-              ),
+            provider_payment_id = COALESCE(
+              ${params.providerPaymentId ?? null},
+              provider_payment_id
+            ),
+            paid_at = COALESCE(
+              ${params.paidAt ?? null}::timestamptz,
+              paid_at,
+              NOW()
+            ),
             raw_payload =
               COALESCE(
                 raw_payload,
@@ -425,6 +438,7 @@ export async function markOrderPaid(
             shop_id,
             order_id,
             provider,
+            provider_payment_id,
             method,
             status,
             amount,
@@ -438,7 +452,12 @@ export async function markOrderPaid(
           VALUES (
             ${params.shopId},
             ${order.id},
-            'manual',
+            ${
+              (params.source ?? "").startsWith("yookassa")
+                ? "yookassa"
+                : "manual"
+            },
+            ${params.providerPaymentId ?? null},
             ${order.payment_method}
               ::payment_method,
             'paid',
@@ -451,7 +470,7 @@ export async function markOrderPaid(
               )}
               AS jsonb
             ),
-            NOW(),
+            COALESCE(${params.paidAt ?? null}::timestamptz, NOW()),
             NOW(),
             NOW()
           )

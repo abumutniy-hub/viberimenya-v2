@@ -187,8 +187,7 @@ export function SettingsForm({
       ),
       heroImageUrl,
       isOnlinePaymentEnabled:
-        form.get("isOnlinePaymentEnabled")
-        === "on",
+        initialSettings.isOnlinePaymentEnabled,
       isCashPaymentEnabled:
         form.get("isCashPaymentEnabled")
         === "on",
@@ -812,24 +811,18 @@ export function SettingsForm({
             </span>
           </label>
 
-          <label>
-            <input
-              name="isOnlinePaymentEnabled"
-              type="checkbox"
-              defaultChecked={
-                initialSettings
-                  .isOnlinePaymentEnabled
-              }
-              disabled
-            />
+          <a
+            className={styles.paymentProviderLink}
+            href="/admin/finance"
+          >
             <span>
-              <strong>Онлайн-оплата</strong>
+              <strong>ЮKassa и онлайн-оплата</strong>
               <small>
-                Включайте после подключения
-                платёжного провайдера
+                Shop ID, секретный ключ и включение настраиваются в разделе «Финансы»
               </small>
             </span>
-          </label>
+            <b>Открыть →</b>
+          </a>
         </div>
       </section>
 

@@ -41,6 +41,9 @@ type DeliveryData = {
   orderLeadTimeMinutes: number;
   expressLeadTimeMinutes: number;
   notice: string;
+  acceptingOrders: boolean;
+  maintenanceMode: boolean;
+  ordersPausedMessage: string;
 
   paymentMethods: {
     online: boolean;
@@ -334,6 +337,10 @@ export function CartClient() {
     orderLeadTimeMinutes: 120,
     expressLeadTimeMinutes: 60,
     notice: "",
+    acceptingOrders: true,
+    maintenanceMode: false,
+    ordersPausedMessage:
+      "Приём новых заказов временно приостановлен.",
     paymentMethods: {
       online: false,
       cash: true,
@@ -375,6 +382,7 @@ export function CartClient() {
     orderNumber: string;
     totalAmount: number;
     trackingToken?: string;
+    paymentMethod?: string;
     telegramLinkCode?: string;
     reused?: boolean;
   } | null>(null);
@@ -574,6 +582,10 @@ export function CartClient() {
     minimumOrderAmount <= 0
     || subtotal >= minimumOrderAmount;
 
+  const ordersEnabled =
+    delivery.acceptingOrders
+    && !delivery.maintenanceMode;
+
   const defaultPaymentMethod =
     delivery.paymentMethods.transfer
       ? "transfer_after_confirm"
@@ -726,6 +738,14 @@ export function CartClient() {
     }
 
     setFormError("");
+
+    if (!ordersEnabled) {
+      setFormError(
+        delivery.ordersPausedMessage
+        || "Приём новых заказов временно приостановлен.",
+      );
+      return;
+    }
 
     if (items.length === 0) {
       setFormError("Корзина пуста. Добавьте хотя бы один товар.");
@@ -921,7 +941,9 @@ export function CartClient() {
               href={`/order/track/${success.trackingToken}`}
               className="dark-button"
             >
-              Отследить заказ
+              {success.paymentMethod === "online_card" || success.paymentMethod === "sbp"
+                ? "Перейти к оплате"
+                : "Отследить заказ"}
             </a>
           ) : (
             <a href="/account" className="dark-button">
@@ -1738,12 +1760,19 @@ export function CartClient() {
           </div>
         </section>
 
+        {!ordersEnabled ? (
+          <div className="checkout-orders-paused" role="status">
+            <strong>Новые заказы временно не принимаются</strong>
+            <p>{delivery.ordersPausedMessage}</p>
+          </div>
+        ) : null}
+
         <label className="checkout-consent">
           <input type="checkbox" name="privacyAccepted" required />
 
           <span>
-            Я согласен на обработку данных и подтверждаю корректность указанных
-            контактов и адреса.
+            Я согласен с <a href="/consent" target="_blank" rel="noopener noreferrer">условиями обработки данных</a>
+            {" "}и подтверждаю корректность указанных контактов и адреса.
           </span>
         </label>
 
@@ -1752,6 +1781,7 @@ export function CartClient() {
           className="checkout-submit-button"
           disabled={
             loading ||
+            !ordersEnabled ||
             items.length === 0 ||
             hasUnavailableItems ||
             !clientRequestId ||
@@ -1760,7 +1790,11 @@ export function CartClient() {
             (isDelivery && Boolean(deliveryError))
           }
         >
-          {loading ? "Оформляем заказ..." : "Оформить заказ"}
+          {loading
+            ? "Оформляем заказ..."
+            : ordersEnabled
+              ? "Оформить заказ"
+              : "Приём заказов приостановлен"}
         </button>
 
         <p className="checkout-submit-note">

@@ -11,6 +11,7 @@ import {
   type ProductCatalogCategory,
   type ProductCatalogItem
 } from "./product-catalog-manager";
+import { CatalogImport } from "./catalog-import";
 import {
   fetchAdmin,
   type AdminRow
@@ -260,6 +261,8 @@ export default async function AdminCatalogPage() {
           </p>
         </div>
       </div>
+
+      <CatalogImport />
 
       <section className="admin-catalog-metrics">
         <article className="admin-catalog-metric">

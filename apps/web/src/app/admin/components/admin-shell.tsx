@@ -109,6 +109,14 @@ const navItems: NavItem[] = [
     ]
   },
   {
+    href: "/admin/security",
+    label: "Безопасность",
+    roles: [
+      "owner",
+      "admin"
+    ]
+  },
+  {
     href: "/admin/notifications",
     label: "Уведомления",
     roles: [
@@ -124,6 +132,14 @@ const navItems: NavItem[] = [
       "owner",
       "admin",
       "manager"
+    ]
+  },
+  {
+    href: "/admin/launch",
+    label: "Запуск",
+    roles: [
+      "owner",
+      "admin"
     ]
   },
   {

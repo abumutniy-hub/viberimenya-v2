@@ -55,24 +55,45 @@ const roleOptions = [
 ];
 
 function generatePassword() {
-  const alphabet =
-    "ABCDEFGHJKLMNPQRSTUVWXYZ"
-    + "abcdefghijkmnopqrstuvwxyz"
-    + "23456789"
-    + "!@#$%";
-
-  const values =
-    new Uint32Array(14);
+  const groups = [
+    "ABCDEFGHJKLMNPQRSTUVWXYZ",
+    "abcdefghijkmnopqrstuvwxyz",
+    "23456789",
+    "!@#$%"
+  ];
+  const alphabet = groups.join("");
+  const values = new Uint32Array(16);
 
   crypto.getRandomValues(values);
 
-  return Array.from(
-    values,
-    value =>
-      alphabet[
-        value % alphabet.length
-      ]
-  ).join("");
+  const characters = groups.map(
+    (group, index) =>
+      group[(values[index] ?? 0) % group.length] ?? "A"
+  );
+
+  for (let index = groups.length; index < values.length; index += 1) {
+    characters.push(
+      alphabet[(values[index] ?? 0) % alphabet.length] ?? "B"
+    );
+  }
+
+  for (let index = characters.length - 1; index > 0; index -= 1) {
+    const swapIndex = (values[index] ?? 0) % (index + 1);
+    [characters[index], characters[swapIndex]] = [
+      characters[swapIndex] ?? "A",
+      characters[index] ?? "B"
+    ];
+  }
+
+  return characters.join("");
+}
+
+function isStrongPassword(value: string) {
+  return (
+    value.length >= 10
+    && /[A-Za-zА-Яа-я]/.test(value)
+    && /\d/.test(value)
+  );
 }
 
 function lastLoginText(value: string) {
@@ -317,10 +338,10 @@ export function EmployeeActions(
 
     if (
       password.trim()
-      && password.trim().length < 8
+      && !isStrongPassword(password.trim())
     ) {
       alert(
-        "Новый пароль должен быть не короче 8 символов"
+        "Новый пароль должен содержать минимум 10 символов, букву и цифру"
       );
 
       return;
