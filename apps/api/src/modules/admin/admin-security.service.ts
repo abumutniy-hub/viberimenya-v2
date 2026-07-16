@@ -237,6 +237,10 @@ export function auditEventForMutation(path: string, method: string) {
     eventType = "notification.changed";
     entityType = "notification";
     label = "Действие с уведомлением";
+  } else if (path.startsWith("/api/admin/system")) {
+    eventType = "system.changed";
+    entityType = "system";
+    label = "Системная операция";
   }
 
   const severity: AdminAuditSeverity = (

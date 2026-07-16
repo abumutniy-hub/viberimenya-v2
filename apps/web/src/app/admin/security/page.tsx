@@ -68,6 +68,8 @@ const eventLabels: Record<string, string> = {
   "promocode.changed": "Промокоды",
   "customer.changed": "Клиенты и бонусы",
   "notification.changed": "Уведомления",
+  "system.changed": "Системная операция",
+  "system.settings_changed": "Настройки мониторинга",
   "admin.mutation": "Изменение CRM"
 };
 

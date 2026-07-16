@@ -20,6 +20,7 @@ import {
   writeAdminAudit
 } from "../modules/admin/admin-security.service";
 import { registerAdminSecurityRoutes } from "./admin-security";
+import { registerAdminSystemRoutes } from "./admin-system";
 import {
   createOrReuseYooKassaPayment,
   finalizeYooKassaRefund,
@@ -364,6 +365,14 @@ function getRequiredAdminRoles(
   if (
     path.startsWith(
       "/api/admin/security"
+    )
+  ) {
+    return OWNER_ADMIN_ROLES;
+  }
+
+  if (
+    path.startsWith(
+      "/api/admin/system"
     )
   ) {
     return OWNER_ADMIN_ROLES;
@@ -1480,6 +1489,7 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   registerAdminSecurityRoutes(app);
+  registerAdminSystemRoutes(app);
 
   app.post("/api/admin/auth/login", async (request, reply) => {
     const body = adminLoginSchema.parse(request.body ?? {});

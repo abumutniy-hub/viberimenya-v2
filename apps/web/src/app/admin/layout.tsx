@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import "./admin-operations.css";
 import "./admin-growth.css";
 import "./admin-security.css";
+import "./admin-system.css";
 import { AdminShell } from "./components/admin-shell";
 
 export const metadata: Metadata = {
