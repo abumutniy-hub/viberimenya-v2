@@ -84,6 +84,23 @@ const navItems: NavItem[] = [
     ]
   },
   {
+    href: "/admin/promocodes",
+    label: "Промокоды",
+    roles: [
+      "owner",
+      "admin"
+    ]
+  },
+  {
+    href: "/admin/reports",
+    label: "Отчёты",
+    roles: [
+      "owner",
+      "admin",
+      "manager"
+    ]
+  },
+  {
     href: "/admin/employees",
     label: "Сотрудники",
     roles: [
@@ -149,6 +166,9 @@ function isAllowedPath(
       )
       || pathname.startsWith(
         "/admin/customers"
+      )
+      || pathname.startsWith(
+        "/admin/reports"
       )
       || pathname.startsWith(
         "/admin/notifications"

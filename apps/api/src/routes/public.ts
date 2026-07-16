@@ -1,4 +1,5 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { and, eq, asc, desc } from "drizzle-orm";
 import {
@@ -16,6 +17,65 @@ import { env } from "../lib/env";
 import { HttpError } from "../lib/http-error";
 
 type UnknownRecord = Record<string, unknown>;
+
+const LOCAL_TELEGRAM_ORDER_SOURCE = "telegram-bot";
+const TELEGRAM_ORDER_TOKEN_CONTEXT = "viberimenya:telegram-order-create:v1";
+
+function telegramOrderInternalToken() {
+  const botToken = process.env.TELEGRAM_BOT_TOKEN || "";
+
+  if (!botToken) return "";
+
+  return createHash("sha256")
+    .update(`${TELEGRAM_ORDER_TOKEN_CONTEXT}:${botToken}`)
+    .digest("hex");
+}
+
+function safeTokenEqual(left: string, right: string) {
+  if (!left || !right) return false;
+
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+
+  return leftBuffer.length === rightBuffer.length
+    && timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function telegramOrderSourceRequested(request: FastifyRequest) {
+  const sourceHeader = request.headers["x-vm-order-source"];
+  const source = Array.isArray(sourceHeader) ? sourceHeader[0] : sourceHeader;
+
+  return source === LOCAL_TELEGRAM_ORDER_SOURCE;
+}
+
+function localTelegramChatId(request: FastifyRequest): string | null {
+  const sourceHeader = request.headers["x-vm-order-source"];
+  const chatHeader = request.headers["x-vm-telegram-chat-id"];
+  const tokenHeader = request.headers["x-vm-internal-token"];
+  const source = Array.isArray(sourceHeader) ? sourceHeader[0] : sourceHeader;
+  const rawChatId = Array.isArray(chatHeader) ? chatHeader[0] : chatHeader;
+  const suppliedToken = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
+  const expectedToken = telegramOrderInternalToken();
+  const remoteAddress = request.socket.remoteAddress || "";
+  const isLoopback = [
+    "127.0.0.1",
+    "::1",
+    "::ffff:127.0.0.1",
+  ].includes(remoteAddress);
+
+  if (
+    !isLoopback
+    || source !== LOCAL_TELEGRAM_ORDER_SOURCE
+    || typeof rawChatId !== "string"
+    || !/^\d{1,20}$/.test(rawChatId)
+    || typeof suppliedToken !== "string"
+    || !safeTokenEqual(suppliedToken, expectedToken)
+  ) {
+    return null;
+  }
+
+  return rawChatId;
+}
 
 type ContentSettings = {
   site: {
@@ -3308,6 +3368,13 @@ export async function publicRoutes(app: FastifyInstance) {
     // ORDER TRANSACTION CORE 1.0
     // INVENTORY RESERVATION 1.0
     const body = createOrderSchema.parse(request.body ?? {});
+    const telegramChatId = localTelegramChatId(request);
+
+    if (telegramOrderSourceRequested(request) && !telegramChatId) {
+      throw new HttpError(401, "Недействительный внутренний запрос Telegram-бота");
+    }
+
+    const orderSource = telegramChatId ? "telegram" : "site";
 
     validateCreateOrderBody(body);
 
@@ -3469,6 +3536,62 @@ export async function publicRoutes(app: FastifyInstance) {
         const existingOrder = existingOrderRows[0];
 
         if (existingOrder) {
+          if (telegramChatId) {
+            const telegramRows = await transaction<
+              {
+                customer_id: string | null;
+              }[]
+            >`
+              SELECT customer_id
+              FROM telegram_accounts
+              WHERE shop_id = ${shop.id}
+                AND telegram_id = ${telegramChatId}
+              LIMIT 1
+              FOR UPDATE
+            `;
+
+            const linkedCustomerId = telegramRows[0]?.customer_id ?? null;
+
+            if (
+              linkedCustomerId
+              && linkedCustomerId !== existingOrder.customer_id
+            ) {
+              throw new HttpError(
+                409,
+                "Этот Telegram уже связан с другим профилем. Используйте телефон связанного профиля или обратитесь к менеджеру",
+              );
+            }
+
+            await transaction`
+              INSERT INTO telegram_accounts (
+                shop_id,
+                telegram_id,
+                customer_id,
+                notifications_enabled,
+                is_active,
+                linked_at,
+                created_at,
+                updated_at
+              )
+              VALUES (
+                ${shop.id},
+                ${telegramChatId},
+                ${existingOrder.customer_id},
+                true,
+                true,
+                NOW(),
+                NOW(),
+                NOW()
+              )
+              ON CONFLICT (shop_id, telegram_id)
+              DO UPDATE SET
+                customer_id = EXCLUDED.customer_id,
+                is_active = true,
+                linked_at = COALESCE(telegram_accounts.linked_at, NOW()),
+                updated_at = NOW()
+            `;
+          }
+
           const linkRows = await transaction<
             {
               token: string;
@@ -4043,6 +4166,10 @@ export async function publicRoutes(app: FastifyInstance) {
           ${JSON.stringify({
             clientRequestId: body.clientRequestId,
 
+            source: orderSource,
+
+            telegramChatId: telegramChatId || null,
+
             promoCode: promoCode || null,
 
             customer: {
@@ -4130,6 +4257,59 @@ export async function publicRoutes(app: FastifyInstance) {
 
         if (!order?.id) {
           throw new HttpError(500, "Order was not created");
+        }
+
+        if (telegramChatId) {
+          const telegramRows = await transaction<
+            {
+              customer_id: string | null;
+            }[]
+          >`
+            SELECT customer_id
+            FROM telegram_accounts
+            WHERE shop_id = ${shop.id}
+              AND telegram_id = ${telegramChatId}
+            LIMIT 1
+            FOR UPDATE
+          `;
+
+          const linkedCustomerId = telegramRows[0]?.customer_id ?? null;
+
+          if (linkedCustomerId && linkedCustomerId !== customer.id) {
+            throw new HttpError(
+              409,
+              "Этот Telegram уже связан с другим профилем. Используйте телефон связанного профиля или обратитесь к менеджеру",
+            );
+          }
+
+          await transaction`
+            INSERT INTO telegram_accounts (
+              shop_id,
+              telegram_id,
+              customer_id,
+              notifications_enabled,
+              is_active,
+              linked_at,
+              created_at,
+              updated_at
+            )
+            VALUES (
+              ${shop.id},
+              ${telegramChatId},
+              ${customer.id},
+              true,
+              true,
+              NOW(),
+              NOW(),
+              NOW()
+            )
+            ON CONFLICT (shop_id, telegram_id)
+            DO UPDATE SET
+              customer_id = EXCLUDED.customer_id,
+              is_active = true,
+              linked_at = COALESCE(telegram_accounts.linked_at, NOW()),
+              updated_at = NOW()
+          `;
         }
 
         for (const item of requestedItems) {
@@ -4362,6 +4542,7 @@ export async function publicRoutes(app: FastifyInstance) {
               deliveryDate: body.deliveryDate || null,
               trackingToken,
               trackingUrl: `/order/track/${trackingToken}`,
+              source: orderSource,
             })},
             NOW(),
             NOW()
@@ -4422,10 +4603,12 @@ export async function publicRoutes(app: FastifyInstance) {
               deliveryDate: body.deliveryDate || null,
               trackingToken,
               trackingUrl: `/order/track/${trackingToken}`,
+              source: orderSource,
             })} AS jsonb),
             NOW(),
             NOW()
-          WHERE EXISTS (
+          WHERE ${orderSource}::text <> 'telegram'
+            AND EXISTS (
             SELECT 1
             FROM telegram_accounts ta
             WHERE ta.shop_id = ${shop.id}

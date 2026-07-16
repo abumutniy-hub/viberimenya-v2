@@ -45,6 +45,65 @@ function createTelegramLinkCode() {
 
 const ADMIN_SESSION_COOKIE = "vm_admin_session";
 const ADMIN_SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
+const ADMIN_LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const ADMIN_LOGIN_BLOCK_MS = 15 * 60 * 1000;
+const ADMIN_LOGIN_MAX_FAILURES = 5;
+
+type AdminLoginAttempt = {
+  failures: number;
+  windowStartedAt: number;
+  blockedUntil: number;
+};
+
+const adminLoginAttempts = new Map<string, AdminLoginAttempt>();
+
+function adminLoginAttemptKey(request: FastifyRequest, login: string) {
+  return `${request.ip || "unknown"}:${login.trim().toLowerCase()}`;
+}
+
+function adminLoginBlockSeconds(key: string) {
+  const now = Date.now();
+  const attempt = adminLoginAttempts.get(key);
+
+  if (!attempt) return 0;
+
+  if (attempt.blockedUntil > now) {
+    return Math.max(1, Math.ceil((attempt.blockedUntil - now) / 1000));
+  }
+
+  if (now - attempt.windowStartedAt > ADMIN_LOGIN_WINDOW_MS) {
+    adminLoginAttempts.delete(key);
+  }
+
+  return 0;
+}
+
+function registerAdminLoginFailure(key: string) {
+  const now = Date.now();
+  const previous = adminLoginAttempts.get(key);
+  const withinWindow = previous && now - previous.windowStartedAt <= ADMIN_LOGIN_WINDOW_MS;
+  const failures = withinWindow ? previous.failures + 1 : 1;
+  const blockedUntil = failures >= ADMIN_LOGIN_MAX_FAILURES
+    ? now + ADMIN_LOGIN_BLOCK_MS
+    : 0;
+
+  adminLoginAttempts.set(key, {
+    failures,
+    windowStartedAt: withinWindow ? previous.windowStartedAt : now,
+    blockedUntil,
+  });
+
+  if (adminLoginAttempts.size > 2000) {
+    for (const [attemptKey, attempt] of adminLoginAttempts) {
+      if (
+        attempt.blockedUntil <= now
+        && now - attempt.windowStartedAt > ADMIN_LOGIN_WINDOW_MS
+      ) {
+        adminLoginAttempts.delete(attemptKey);
+      }
+    }
+  }
+}
 
 function createAdminSessionToken() {
   return randomUUID().replace(/-/g, "") + randomUUID().replace(/-/g, "");
@@ -74,12 +133,16 @@ function getCookieValue(cookieHeader: string | undefined, name: string) {
   return "";
 }
 
+function adminCookieSecuritySuffix() {
+  return env.NODE_ENV === "production" ? "; Secure" : "";
+}
+
 function buildAdminSessionCookie(token: string) {
-  return `${ADMIN_SESSION_COOKIE}=${encodeURIComponent(token)}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${ADMIN_SESSION_MAX_AGE_SECONDS}`;
+  return `${ADMIN_SESSION_COOKIE}=${encodeURIComponent(token)}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${ADMIN_SESSION_MAX_AGE_SECONDS}${adminCookieSecuritySuffix()}`;
 }
 
 function clearAdminSessionCookie() {
-  return `${ADMIN_SESSION_COOKIE}=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0`;
+  return `${ADMIN_SESSION_COOKIE}=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0${adminCookieSecuritySuffix()}`;
 }
 
 /* ROLE ACCESS 7.2.1 */
@@ -204,9 +267,34 @@ function getRequiredAdminRoles(
 
   if (
     path.startsWith(
+      "/api/admin/reports"
+    )
+  ) {
+    return MANAGEMENT_ROLES;
+  }
+
+  if (
+    path.startsWith(
+      "/api/admin/promocodes"
+    )
+  ) {
+    return OWNER_ADMIN_ROLES;
+  }
+
+  if (
+    path.startsWith(
       "/api/admin/customers"
     )
   ) {
+    if (
+      path.endsWith(
+        "/bonus-adjust"
+      )
+      && normalizedMethod !== "GET"
+    ) {
+      return OWNER_ADMIN_ROLES;
+    }
+
     return MANAGEMENT_ROLES;
   }
 
@@ -828,6 +916,65 @@ const bouquetApprovalAdminSchema = z.object({
   note: z.string().trim().max(500).optional().default(""),
 });
 
+const customerListQuerySchema = z.object({
+  q: z.string().trim().max(120).optional().default(""),
+  segment: z.enum(["all", "new", "regular", "vip", "inactive"]).optional().default("all"),
+  page: z.coerce.number().int().min(1).max(100000).optional().default(1),
+  pageSize: z.coerce.number().int().min(10).max(100).optional().default(40)
+});
+
+const customerBonusAdjustmentSchema = z.object({
+  direction: z.enum(["add", "remove"]),
+  amount: z.coerce.number().int().min(1).max(1000000),
+  reason: z.string().trim().min(3).max(500),
+  idempotencyKey: z.string().uuid()
+});
+
+const promocodePayloadSchema = z.object({
+  code: z.string().trim().min(3).max(80).regex(/^[A-Za-zА-Яа-я0-9_-]+$/, "Используйте буквы, цифры, дефис или подчёркивание"),
+  description: z.string().trim().max(500).optional().default(""),
+  discountType: z.enum(["percent", "fixed"]),
+  discountValue: z.coerce.number().int().min(1).max(10000000),
+  minOrderAmount: z.union([z.coerce.number().int().min(0).max(100000000), z.literal("")]).optional().default(""),
+  usageLimit: z.union([z.coerce.number().int().min(1).max(1000000), z.literal("")]).optional().default(""),
+  startsAt: z.string().trim().max(40).optional().default(""),
+  endsAt: z.string().trim().max(40).optional().default(""),
+  isActive: z.coerce.boolean().optional().default(true)
+}).superRefine((value, context) => {
+  if (value.discountType === "percent" && value.discountValue > 100) {
+    context.addIssue({
+      code: "custom",
+      path: ["discountValue"],
+      message: "Процент скидки не может быть больше 100"
+    });
+  }
+
+  if (value.startsAt && Number.isNaN(new Date(value.startsAt).getTime())) {
+    context.addIssue({ code: "custom", path: ["startsAt"], message: "Некорректная дата начала" });
+  }
+
+  if (value.endsAt && Number.isNaN(new Date(value.endsAt).getTime())) {
+    context.addIssue({ code: "custom", path: ["endsAt"], message: "Некорректная дата окончания" });
+  }
+
+  if (value.startsAt && value.endsAt && new Date(value.endsAt) <= new Date(value.startsAt)) {
+    context.addIssue({ code: "custom", path: ["endsAt"], message: "Дата окончания должна быть позже даты начала" });
+  }
+});
+
+const promocodeListQuerySchema = z.object({
+  q: z.string().trim().max(120).optional().default(""),
+  status: z.enum(["all", "active", "scheduled", "expired", "exhausted", "disabled"]).optional().default("all"),
+  page: z.coerce.number().int().min(1).max(100000).optional().default(1),
+  pageSize: z.coerce.number().int().min(10).max(100).optional().default(40)
+});
+
+const reportQuerySchema = z.object({
+  period: z.enum(["7", "30", "90", "365", "custom"]).optional().default("30"),
+  dateFrom: z.string().trim().max(10).optional().default(""),
+  dateTo: z.string().trim().max(10).optional().default("")
+});
+
 const orderOperationsSchema = z.object({
   customerName: z.string().trim().min(2).max(160),
   customerPhone: contactPhoneSchema,
@@ -873,6 +1020,54 @@ function slugify(value: string) {
     .slice(0, 80);
 }
 
+
+function isoDate(value: Date) {
+  return value.toISOString().slice(0, 10);
+}
+
+function resolveReportRange(input: z.infer<typeof reportQuerySchema>) {
+  const today = new Date();
+  const to = input.period === "custom" && input.dateTo
+    ? new Date(`${input.dateTo}T23:59:59.999Z`)
+    : today;
+
+  const from = input.period === "custom" && input.dateFrom
+    ? new Date(`${input.dateFrom}T00:00:00.000Z`)
+    : new Date(Date.UTC(
+        to.getUTCFullYear(),
+        to.getUTCMonth(),
+        to.getUTCDate() - (Number(input.period === "custom" ? "30" : input.period) - 1)
+      ));
+
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
+    throw new HttpError(400, "Укажите корректный период отчёта");
+  }
+
+  const dateFrom = isoDate(from);
+  const dateTo = isoDate(to);
+
+  if (dateFrom > dateTo) {
+    throw new HttpError(400, "Начальная дата не может быть позже конечной");
+  }
+
+  const days = Math.floor((new Date(`${dateTo}T00:00:00.000Z`).getTime() - new Date(`${dateFrom}T00:00:00.000Z`).getTime()) / 86400000) + 1;
+
+  if (days > 366) {
+    throw new HttpError(400, "Максимальный период отчёта — 366 дней");
+  }
+
+  return { dateFrom, dateTo, days };
+}
+
+function csvCell(value: unknown) {
+  let text = value === null || value === undefined ? "" : String(value);
+
+  if (/^[=+@-]/.test(text)) {
+    text = `'${text}`;
+  }
+
+  return `"${text.replace(/"/g, '""')}"`;
+}
 
 async function getShop(client: ReturnType<typeof createDb>["client"]) {
   const rows = await client<ShopRow[]>`
@@ -1083,6 +1278,18 @@ export async function adminRoutes(app: FastifyInstance) {
     const body = adminLoginSchema.parse(request.body ?? {});
     const login = body.login.trim();
     const loginDigits = normalizePhoneDigits(login);
+    const attemptKey = adminLoginAttemptKey(request, login);
+    const blockedSeconds = adminLoginBlockSeconds(attemptKey);
+
+    if (blockedSeconds > 0) {
+      reply.header("Retry-After", String(blockedSeconds));
+
+      return reply.status(429).send({
+        ok: false,
+        message: "Слишком много попыток входа. Повторите позже",
+      });
+    }
+
     const { client } = createDb();
 
     try {
@@ -1132,11 +1339,26 @@ export async function adminRoutes(app: FastifyInstance) {
       const user = rows[0];
 
       if (!user || !verifyPassword(body.password, user.password_hash)) {
+        registerAdminLoginFailure(attemptKey);
+
+        const retryAfter = adminLoginBlockSeconds(attemptKey);
+
+        if (retryAfter > 0) {
+          reply.header("Retry-After", String(retryAfter));
+
+          return reply.status(429).send({
+            ok: false,
+            message: "Слишком много попыток входа. Повторите через 15 минут",
+          });
+        }
+
         return reply.status(401).send({
           ok: false,
           message: "Неверный логин или пароль"
         });
       }
+
+      adminLoginAttempts.delete(attemptKey);
 
       const sessionToken = createAdminSessionToken();
 
@@ -6344,21 +6566,826 @@ export async function adminRoutes(app: FastifyInstance) {
     }
   );
 
-  app.get("/api/admin/customers", async () => {
+  app.get("/api/admin/customers", async (request) => {
+    const query = customerListQuerySchema.parse(request.query ?? {});
+    const offset = (query.page - 1) * query.pageSize;
+    const search = `%${query.q}%`;
     const { client } = createDb();
 
     try {
       const shop = await getShop(client);
+      const [items, totalRows, metricsRows] = await Promise.all([
+        client`
+          WITH customer_base AS (
+            SELECT
+              c.id,
+              c.phone,
+              c.name,
+              c.email,
+              c.telegram_username,
+              c.bonus_balance,
+              GREATEST(c.bonus_balance, 0) AS visible_bonus_balance,
+              GREATEST(-c.bonus_balance, 0) AS bonus_debt,
+              c.total_orders,
+              c.total_spent,
+              c.last_order_at,
+              c.created_at,
+              c.updated_at,
+              telegram.telegram_id,
+              telegram.username AS linked_telegram_username,
+              telegram.notifications_enabled,
+              telegram.is_active AS telegram_is_active,
+              CASE
+                WHEN c.total_orders > 0
+                  AND (c.last_order_at IS NULL OR c.last_order_at < NOW() - INTERVAL '90 days')
+                  THEN 'inactive'
+                WHEN c.total_orders >= 5 OR c.total_spent >= 50000 THEN 'vip'
+                WHEN c.total_orders >= 2 THEN 'regular'
+                ELSE 'new'
+              END AS segment
+            FROM customers c
+            LEFT JOIN LATERAL (
+              SELECT telegram_id, username, notifications_enabled, is_active
+              FROM telegram_accounts ta
+              WHERE ta.shop_id = c.shop_id
+                AND ta.customer_id = c.id
+              ORDER BY ta.is_active DESC, ta.linked_at DESC
+              LIMIT 1
+            ) telegram ON true
+            WHERE c.shop_id = ${shop.id}
+          ), filtered AS (
+            SELECT *
+            FROM customer_base
+            WHERE (
+              ${query.q} = ''
+              OR COALESCE(name, '') ILIKE ${search}
+              OR phone ILIKE ${search}
+              OR regexp_replace(phone, '[^0-9]', '', 'g') ILIKE ${search}
+              OR COALESCE(email, '') ILIKE ${search}
+              OR COALESCE(linked_telegram_username, '') ILIKE ${search}
+            )
+              AND (${query.segment} = 'all' OR segment = ${query.segment})
+          )
+          SELECT *
+          FROM filtered
+          ORDER BY
+            CASE segment
+              WHEN 'vip' THEN 1
+              WHEN 'regular' THEN 2
+              WHEN 'new' THEN 3
+              ELSE 4
+            END,
+            last_order_at DESC NULLS LAST,
+            created_at DESC
+          LIMIT ${query.pageSize}
+          OFFSET ${offset}
+        `,
+        client<{ count: number }[]>`
+          WITH customer_base AS (
+            SELECT
+              c.*,
+              telegram.username AS linked_telegram_username,
+              CASE
+                WHEN c.total_orders > 0
+                  AND (c.last_order_at IS NULL OR c.last_order_at < NOW() - INTERVAL '90 days')
+                  THEN 'inactive'
+                WHEN c.total_orders >= 5 OR c.total_spent >= 50000 THEN 'vip'
+                WHEN c.total_orders >= 2 THEN 'regular'
+                ELSE 'new'
+              END AS segment
+            FROM customers c
+            LEFT JOIN LATERAL (
+              SELECT username
+              FROM telegram_accounts ta
+              WHERE ta.shop_id = c.shop_id
+                AND ta.customer_id = c.id
+              ORDER BY ta.is_active DESC, ta.linked_at DESC
+              LIMIT 1
+            ) telegram ON true
+            WHERE c.shop_id = ${shop.id}
+          )
+          SELECT COUNT(*)::int AS count
+          FROM customer_base
+          WHERE (
+            ${query.q} = ''
+            OR COALESCE(name, '') ILIKE ${search}
+            OR phone ILIKE ${search}
+            OR regexp_replace(phone, '[^0-9]', '', 'g') ILIKE ${search}
+            OR COALESCE(email, '') ILIKE ${search}
+            OR COALESCE(linked_telegram_username, '') ILIKE ${search}
+          )
+            AND (${query.segment} = 'all' OR segment = ${query.segment})
+        `,
+        client`
+          WITH segmented AS (
+            SELECT
+              c.*,
+              CASE
+                WHEN c.total_orders > 0
+                  AND (c.last_order_at IS NULL OR c.last_order_at < NOW() - INTERVAL '90 days')
+                  THEN 'inactive'
+                WHEN c.total_orders >= 5 OR c.total_spent >= 50000 THEN 'vip'
+                WHEN c.total_orders >= 2 THEN 'regular'
+                ELSE 'new'
+              END AS segment
+            FROM customers c
+            WHERE c.shop_id = ${shop.id}
+          )
+          SELECT
+            COUNT(*)::int AS total,
+            COUNT(*) FILTER (WHERE segment = 'new')::int AS new_count,
+            COUNT(*) FILTER (WHERE segment = 'regular')::int AS regular_count,
+            COUNT(*) FILTER (WHERE segment = 'vip')::int AS vip_count,
+            COUNT(*) FILTER (WHERE segment = 'inactive')::int AS inactive_count,
+            COALESCE(SUM(GREATEST(bonus_balance, 0)), 0)::bigint AS bonus_balance_total,
+            COALESCE(SUM(GREATEST(-bonus_balance, 0)), 0)::bigint AS bonus_debt_total,
+            COALESCE(SUM(total_spent), 0)::bigint AS lifetime_revenue
+          FROM segmented
+        `
+      ]);
 
-      const items = await client`
-        SELECT *
-        FROM customers
-        WHERE shop_id = ${shop.id}
-        ORDER BY created_at DESC
-        LIMIT 100
+      const total = Number(totalRows[0]?.count ?? 0);
+
+      return {
+        shop,
+        items,
+        metrics: metricsRows[0] ?? {
+          total: 0,
+          new_count: 0,
+          regular_count: 0,
+          vip_count: 0,
+          inactive_count: 0,
+          bonus_balance_total: 0,
+          bonus_debt_total: 0,
+          lifetime_revenue: 0
+        },
+        segmentation: {
+          new: "0–1 заказ",
+          regular: "2–4 заказа",
+          vip: "5+ заказов или покупки от 50 000 ₽",
+          inactive: "нет заказа более 90 дней"
+        },
+        pagination: {
+          page: query.page,
+          pageSize: query.pageSize,
+          total,
+          pages: Math.max(1, Math.ceil(total / query.pageSize))
+        }
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.get("/api/admin/customers/:id", async (request, reply) => {
+    const params = z.object({ id: z.string().uuid() }).parse(request.params ?? {});
+    const adminContext = (request as AdminRequest).adminContext;
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+      const customerRows = await client`
+        SELECT
+          c.*,
+          GREATEST(c.bonus_balance, 0) AS visible_bonus_balance,
+          GREATEST(-c.bonus_balance, 0) AS bonus_debt,
+          CASE
+            WHEN c.total_orders > 0
+              AND (c.last_order_at IS NULL OR c.last_order_at < NOW() - INTERVAL '90 days')
+              THEN 'inactive'
+            WHEN c.total_orders >= 5 OR c.total_spent >= 50000 THEN 'vip'
+            WHEN c.total_orders >= 2 THEN 'regular'
+            ELSE 'new'
+          END AS segment,
+          telegram.telegram_id,
+          telegram.username AS linked_telegram_username,
+          telegram.first_name AS telegram_first_name,
+          telegram.last_name AS telegram_last_name,
+          telegram.notifications_enabled,
+          telegram.is_active AS telegram_is_active,
+          telegram.linked_at
+        FROM customers c
+        LEFT JOIN LATERAL (
+          SELECT *
+          FROM telegram_accounts ta
+          WHERE ta.shop_id = c.shop_id
+            AND ta.customer_id = c.id
+          ORDER BY ta.is_active DESC, ta.linked_at DESC
+          LIMIT 1
+        ) telegram ON true
+        WHERE c.shop_id = ${shop.id}
+          AND c.id = ${params.id}
+        LIMIT 1
       `;
 
-      return { shop, items };
+      const customer = customerRows[0];
+
+      if (!customer) {
+        return reply.status(404).send({ ok: false, message: "Клиент не найден" });
+      }
+
+      const [orders, addresses, bonuses, topProducts, statsRows] = await Promise.all([
+        client`
+          SELECT
+            o.id,
+            o.order_number,
+            o.status::text AS status,
+            o.payment_status::text AS payment_status,
+            o.delivery_type::text AS delivery_type,
+            o.total,
+            o.bonus_spent,
+            o.bonus_earned,
+            o.created_at,
+            o.delivery_date,
+            o.delivered_at,
+            items.item_count,
+            items.item_names
+          FROM orders o
+          LEFT JOIN LATERAL (
+            SELECT
+              COALESCE(SUM(oi.quantity), 0)::int AS item_count,
+              STRING_AGG(oi.product_name || ' × ' || oi.quantity, ', ' ORDER BY oi.created_at) AS item_names
+            FROM order_items oi
+            WHERE oi.order_id = o.id
+          ) items ON true
+          WHERE o.shop_id = ${shop.id}
+            AND o.customer_id = ${params.id}
+          ORDER BY o.created_at DESC
+          LIMIT 100
+        `,
+        client`
+          SELECT *
+          FROM customer_addresses
+          WHERE shop_id = ${shop.id}
+            AND customer_id = ${params.id}
+          ORDER BY is_default DESC, updated_at DESC
+          LIMIT 50
+        `,
+        client`
+          SELECT
+            bt.id,
+            bt.type::text AS type,
+            bt.amount,
+            bt.balance_after,
+            bt.comment,
+            bt.created_at,
+            o.order_number
+          FROM bonus_transactions bt
+          LEFT JOIN orders o ON o.id = bt.order_id
+          WHERE bt.shop_id = ${shop.id}
+            AND bt.customer_id = ${params.id}
+          ORDER BY bt.created_at DESC
+          LIMIT 100
+        `,
+        client`
+          SELECT
+            oi.product_name,
+            SUM(oi.quantity)::int AS quantity,
+            SUM(oi.total)::bigint AS revenue
+          FROM order_items oi
+          JOIN orders o ON o.id = oi.order_id
+          WHERE oi.shop_id = ${shop.id}
+            AND o.customer_id = ${params.id}
+            AND o.status <> 'cancelled'
+          GROUP BY oi.product_name
+          ORDER BY quantity DESC, revenue DESC
+          LIMIT 8
+        `,
+        client`
+          SELECT
+            COUNT(*) FILTER (WHERE status = 'delivered')::int AS delivered_orders,
+            COUNT(*) FILTER (WHERE status = 'cancelled')::int AS cancelled_orders,
+            COUNT(*) FILTER (WHERE status = 'problem')::int AS problem_orders,
+            COALESCE(AVG(total) FILTER (WHERE payment_status = 'paid'), 0)::bigint AS average_check,
+            COALESCE(SUM(discount_total), 0)::bigint AS discounts_total
+          FROM orders
+          WHERE shop_id = ${shop.id}
+            AND customer_id = ${params.id}
+        `
+      ]);
+
+      return {
+        shop,
+        customer,
+        stats: statsRows[0] ?? {},
+        orders,
+        addresses,
+        bonuses,
+        topProducts,
+        permissions: {
+          canAdjustBonus: Boolean(adminContext && OWNER_ADMIN_ROLES.includes(adminContext.role))
+        }
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.post("/api/admin/customers/:id/bonus-adjust", async (request, reply) => {
+    const params = z.object({ id: z.string().uuid() }).parse(request.params ?? {});
+    const body = customerBonusAdjustmentSchema.parse(request.body ?? {});
+    const adminContext = (request as AdminRequest).adminContext;
+
+    if (!adminContext?.userId) {
+      return reply.status(401).send({ ok: false, message: "Требуется вход в CRM" });
+    }
+
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+      const result = await client.begin(async (transaction) => {
+        const existingRows = await transaction`
+          SELECT id, balance_after
+          FROM bonus_transactions
+          WHERE shop_id = ${shop.id}
+            AND customer_id = ${params.id}
+            AND comment LIKE ${`%[operation:${body.idempotencyKey}]%`}
+          LIMIT 1
+        `;
+
+        if (existingRows[0]) {
+          return {
+            changed: false,
+            balanceAfter: Number(existingRows[0].balance_after ?? 0)
+          };
+        }
+
+        const customerRows = await transaction`
+          SELECT id, name, phone, bonus_balance
+          FROM customers
+          WHERE shop_id = ${shop.id}
+            AND id = ${params.id}
+          LIMIT 1
+          FOR UPDATE
+        `;
+        const customer = customerRows[0];
+
+        if (!customer) {
+          throw new HttpError(404, "Клиент не найден");
+        }
+
+        const currentBalance = Number(customer.bonus_balance ?? 0);
+
+        if (body.direction === "remove" && Math.max(0, currentBalance) < body.amount) {
+          throw new HttpError(409, "Нельзя списать больше доступного бонусного баланса");
+        }
+
+        const signedAmount = body.direction === "add" ? body.amount : -body.amount;
+        const nextBalance = currentBalance + signedAmount;
+        const comment = `${body.reason} · сотрудник ${adminContext.userId} [operation:${body.idempotencyKey}]`;
+
+        await transaction`
+          UPDATE customers
+          SET bonus_balance = ${nextBalance}, updated_at = NOW()
+          WHERE shop_id = ${shop.id}
+            AND id = ${params.id}
+        `;
+
+        await transaction`
+          INSERT INTO bonus_transactions (
+            shop_id,
+            customer_id,
+            order_id,
+            type,
+            amount,
+            balance_after,
+            comment,
+            created_at
+          ) VALUES (
+            ${shop.id},
+            ${params.id},
+            NULL,
+            ${body.direction === "add" ? "manual_add" : "manual_remove"}::bonus_transaction_type,
+            ${signedAmount},
+            ${nextBalance},
+            ${comment},
+            NOW()
+          )
+        `;
+
+        return { changed: true, balanceAfter: nextBalance };
+      });
+
+      return { ok: true, ...result };
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.get("/api/admin/promocodes", async (request) => {
+    const query = promocodeListQuerySchema.parse(request.query ?? {});
+    const offset = (query.page - 1) * query.pageSize;
+    const search = `%${query.q}%`;
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+      const statusSql = query.status;
+      const [items, totals, metricsRows] = await Promise.all([
+        client`
+          WITH promo_base AS (
+            SELECT
+              p.*,
+              CASE
+                WHEN p.is_active = false THEN 'disabled'
+                WHEN p.usage_limit IS NOT NULL AND p.used_count >= p.usage_limit THEN 'exhausted'
+                WHEN p.ends_at IS NOT NULL AND p.ends_at < NOW() THEN 'expired'
+                WHEN p.starts_at IS NOT NULL AND p.starts_at > NOW() THEN 'scheduled'
+                ELSE 'active'
+              END AS runtime_status
+            FROM promocodes p
+            WHERE p.shop_id = ${shop.id}
+          )
+          SELECT *
+          FROM promo_base
+          WHERE (${query.q} = '' OR code ILIKE ${search} OR COALESCE(description, '') ILIKE ${search})
+            AND (${statusSql} = 'all' OR runtime_status = ${statusSql})
+          ORDER BY
+            CASE runtime_status
+              WHEN 'active' THEN 1
+              WHEN 'scheduled' THEN 2
+              WHEN 'exhausted' THEN 3
+              WHEN 'expired' THEN 4
+              ELSE 5
+            END,
+            created_at DESC
+          LIMIT ${query.pageSize}
+          OFFSET ${offset}
+        `,
+        client<{ count: number }[]>`
+          WITH promo_base AS (
+            SELECT
+              p.*,
+              CASE
+                WHEN p.is_active = false THEN 'disabled'
+                WHEN p.usage_limit IS NOT NULL AND p.used_count >= p.usage_limit THEN 'exhausted'
+                WHEN p.ends_at IS NOT NULL AND p.ends_at < NOW() THEN 'expired'
+                WHEN p.starts_at IS NOT NULL AND p.starts_at > NOW() THEN 'scheduled'
+                ELSE 'active'
+              END AS runtime_status
+            FROM promocodes p
+            WHERE p.shop_id = ${shop.id}
+          )
+          SELECT COUNT(*)::int AS count
+          FROM promo_base
+          WHERE (${query.q} = '' OR code ILIKE ${search} OR COALESCE(description, '') ILIKE ${search})
+            AND (${statusSql} = 'all' OR runtime_status = ${statusSql})
+        `,
+        client`
+          SELECT
+            COUNT(*)::int AS total,
+            COUNT(*) FILTER (
+              WHERE is_active = true
+                AND (starts_at IS NULL OR starts_at <= NOW())
+                AND (ends_at IS NULL OR ends_at >= NOW())
+                AND (usage_limit IS NULL OR used_count < usage_limit)
+            )::int AS active_count,
+            COUNT(*) FILTER (WHERE is_active = false)::int AS disabled_count,
+            COALESCE(SUM(used_count), 0)::bigint AS uses_total,
+            COALESCE(SUM(discount_total), 0)::bigint AS discounts_total
+          FROM promocodes p
+          LEFT JOIN LATERAL (
+            SELECT COALESCE(SUM(o.discount_total), 0)::bigint AS discount_total
+            FROM orders o
+            WHERE o.shop_id = p.shop_id
+              AND UPPER(o.metadata ->> 'promoCode') = UPPER(p.code)
+              AND o.status <> 'cancelled'
+          ) usage ON true
+          WHERE p.shop_id = ${shop.id}
+        `
+      ]);
+
+      const total = Number(totals[0]?.count ?? 0);
+
+      return {
+        shop,
+        items,
+        metrics: metricsRows[0] ?? {},
+        pagination: {
+          page: query.page,
+          pageSize: query.pageSize,
+          total,
+          pages: Math.max(1, Math.ceil(total / query.pageSize))
+        }
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.post("/api/admin/promocodes", async (request, reply) => {
+    const body = promocodePayloadSchema.parse(request.body ?? {});
+    const code = body.code.toUpperCase();
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+      const duplicateRows = await client<{ id: string }[]>`
+        SELECT id
+        FROM promocodes
+        WHERE shop_id = ${shop.id}
+          AND UPPER(code) = ${code}
+        LIMIT 1
+      `;
+
+      if (duplicateRows[0]) {
+        return reply.status(409).send({ ok: false, message: "Промокод с таким кодом уже существует" });
+      }
+
+      const rows = await client`
+        INSERT INTO promocodes (
+          shop_id, code, description, discount_type, discount_value,
+          min_order_amount, usage_limit, used_count, starts_at, ends_at,
+          is_active, created_at, updated_at
+        ) VALUES (
+          ${shop.id}, ${code}, ${body.description || null}, ${body.discountType}, ${body.discountValue},
+          ${body.minOrderAmount === "" ? null : body.minOrderAmount},
+          ${body.usageLimit === "" ? null : body.usageLimit},
+          0,
+          ${body.startsAt ? new Date(body.startsAt).toISOString() : null},
+          ${body.endsAt ? new Date(body.endsAt).toISOString() : null},
+          ${body.isActive}, NOW(), NOW()
+        )
+        RETURNING *
+      `;
+
+      return reply.status(201).send({ ok: true, promocode: rows[0] });
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.patch("/api/admin/promocodes/:id", async (request, reply) => {
+    const params = z.object({ id: z.string().uuid() }).parse(request.params ?? {});
+    const body = promocodePayloadSchema.parse(request.body ?? {});
+    const code = body.code.toUpperCase();
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+      const result = await client.begin(async (transaction) => {
+        const existingRows = await transaction`
+          SELECT *
+          FROM promocodes
+          WHERE shop_id = ${shop.id}
+            AND id = ${params.id}
+          LIMIT 1
+          FOR UPDATE
+        `;
+        const existing = existingRows[0];
+
+        if (!existing) {
+          throw new HttpError(404, "Промокод не найден");
+        }
+
+        if (Number(existing.used_count ?? 0) > 0 && String(existing.code).toUpperCase() !== code) {
+          throw new HttpError(409, "Код уже использован и не может быть переименован. Создайте новый промокод.");
+        }
+
+        if (body.usageLimit !== "" && Number(body.usageLimit) < Number(existing.used_count ?? 0)) {
+          throw new HttpError(409, "Лимит не может быть меньше уже выполненных применений");
+        }
+
+        const duplicates = await transaction<{ id: string }[]>`
+          SELECT id
+          FROM promocodes
+          WHERE shop_id = ${shop.id}
+            AND UPPER(code) = ${code}
+            AND id <> ${params.id}
+          LIMIT 1
+        `;
+
+        if (duplicates[0]) {
+          throw new HttpError(409, "Промокод с таким кодом уже существует");
+        }
+
+        const rows = await transaction`
+          UPDATE promocodes
+          SET
+            code = ${code},
+            description = ${body.description || null},
+            discount_type = ${body.discountType},
+            discount_value = ${body.discountValue},
+            min_order_amount = ${body.minOrderAmount === "" ? null : body.minOrderAmount},
+            usage_limit = ${body.usageLimit === "" ? null : body.usageLimit},
+            starts_at = ${body.startsAt ? new Date(body.startsAt).toISOString() : null},
+            ends_at = ${body.endsAt ? new Date(body.endsAt).toISOString() : null},
+            is_active = ${body.isActive},
+            updated_at = NOW()
+          WHERE shop_id = ${shop.id}
+            AND id = ${params.id}
+          RETURNING *
+        `;
+
+        return rows[0];
+      });
+
+      return { ok: true, promocode: result };
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.get("/api/admin/reports/export.csv", async (request, reply) => {
+    const query = reportQuerySchema.parse(request.query ?? {});
+    const range = resolveReportRange(query);
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+      const rows = await client`
+        SELECT
+          o.order_number,
+          (o.created_at AT TIME ZONE 'Europe/Moscow')::date::text AS order_date,
+          o.status::text AS status,
+          o.payment_status::text AS payment_status,
+          o.payment_method::text AS payment_method,
+          o.subtotal,
+          o.discount_total,
+          o.delivery_price,
+          o.bonus_spent,
+          o.total,
+          COALESCE(NULLIF(o.metadata #>> '{customer,name}', ''), c.name, '') AS customer_name,
+          COALESCE(NULLIF(o.metadata #>> '{customer,phone}', ''), c.phone, '') AS customer_phone,
+          COALESCE(o.recipient_name, '') AS recipient_name,
+          COALESCE(o.delivery_address_text, '') AS delivery_address
+        FROM orders o
+        LEFT JOIN customers c ON c.id = o.customer_id
+        WHERE o.shop_id = ${shop.id}
+          AND (o.created_at AT TIME ZONE 'Europe/Moscow')::date BETWEEN ${range.dateFrom}::date AND ${range.dateTo}::date
+        ORDER BY o.created_at DESC
+        LIMIT 20000
+      `;
+
+      const header = [
+        "Номер заказа", "Дата", "Статус", "Оплата", "Способ оплаты", "Товары",
+        "Скидка", "Доставка", "Бонусы", "Итого", "Покупатель", "Телефон", "Получатель", "Адрес"
+      ];
+      const lines = [header.map(csvCell).join(";")];
+
+      for (const row of rows) {
+        lines.push([
+          row.order_number, row.order_date, row.status, row.payment_status, row.payment_method,
+          row.subtotal, row.discount_total, row.delivery_price, row.bonus_spent, row.total,
+          row.customer_name, row.customer_phone, row.recipient_name, row.delivery_address
+        ].map(csvCell).join(";"));
+      }
+
+      return reply
+        .header("Content-Disposition", `attachment; filename=orders-${range.dateFrom}-${range.dateTo}.csv`)
+        .type("text/csv; charset=utf-8")
+        .send(`\uFEFF${lines.join("\n")}`);
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.get("/api/admin/reports", async (request) => {
+    const query = reportQuerySchema.parse(request.query ?? {});
+    const range = resolveReportRange(query);
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+      const [summaryRows, daily, topProducts, paymentMethods, promoUsage, bonusRows, customerSegmentRows] = await Promise.all([
+        client`
+          SELECT
+            COUNT(*)::int AS orders_total,
+            COUNT(*) FILTER (WHERE status = 'delivered')::int AS delivered_orders,
+            COUNT(*) FILTER (WHERE status = 'cancelled')::int AS cancelled_orders,
+            COUNT(*) FILTER (WHERE status = 'problem')::int AS problem_orders,
+            COUNT(*) FILTER (WHERE payment_status = 'paid')::int AS paid_orders,
+            COALESCE(SUM(total) FILTER (WHERE payment_status = 'paid'), 0)::bigint AS paid_revenue,
+            COALESCE(AVG(total) FILTER (WHERE payment_status = 'paid'), 0)::bigint AS average_check,
+            COALESCE(SUM(discount_total), 0)::bigint AS discounts_total,
+            COALESCE(SUM(delivery_price), 0)::bigint AS delivery_revenue,
+            COUNT(DISTINCT customer_id) FILTER (WHERE customer_id IS NOT NULL)::int AS unique_customers
+          FROM orders
+          WHERE shop_id = ${shop.id}
+            AND (created_at AT TIME ZONE 'Europe/Moscow')::date BETWEEN ${range.dateFrom}::date AND ${range.dateTo}::date
+        `,
+        client`
+          WITH days AS (
+            SELECT generate_series(${range.dateFrom}::date, ${range.dateTo}::date, INTERVAL '1 day')::date AS day
+          )
+          SELECT
+            days.day::text AS date,
+            COUNT(o.id)::int AS orders,
+            COUNT(o.id) FILTER (WHERE o.payment_status = 'paid')::int AS paid_orders,
+            COALESCE(SUM(o.total) FILTER (WHERE o.payment_status = 'paid'), 0)::bigint AS revenue
+          FROM days
+          LEFT JOIN orders o
+            ON o.shop_id = ${shop.id}
+           AND (o.created_at AT TIME ZONE 'Europe/Moscow')::date = days.day
+          GROUP BY days.day
+          ORDER BY days.day
+        `,
+        client`
+          SELECT
+            oi.product_name,
+            SUM(oi.quantity)::int AS quantity,
+            COALESCE(SUM(oi.total) FILTER (WHERE o.payment_status = 'paid'), 0)::bigint AS revenue,
+            COUNT(DISTINCT o.id)::int AS orders
+          FROM order_items oi
+          JOIN orders o ON o.id = oi.order_id
+          WHERE oi.shop_id = ${shop.id}
+            AND (o.created_at AT TIME ZONE 'Europe/Moscow')::date BETWEEN ${range.dateFrom}::date AND ${range.dateTo}::date
+            AND o.status <> 'cancelled'
+          GROUP BY oi.product_name
+          ORDER BY quantity DESC, revenue DESC NULLS LAST
+          LIMIT 10
+        `,
+        client`
+          SELECT
+            payment_method::text AS method,
+            COUNT(*)::int AS orders,
+            COALESCE(SUM(total) FILTER (WHERE payment_status = 'paid'), 0)::bigint AS revenue
+          FROM orders
+          WHERE shop_id = ${shop.id}
+            AND (created_at AT TIME ZONE 'Europe/Moscow')::date BETWEEN ${range.dateFrom}::date AND ${range.dateTo}::date
+          GROUP BY payment_method
+          ORDER BY orders DESC
+        `,
+        client`
+          SELECT
+            UPPER(metadata ->> 'promoCode') AS code,
+            COUNT(*)::int AS uses,
+            COALESCE(SUM(discount_total), 0)::bigint AS discount_total,
+            COALESCE(SUM(total) FILTER (WHERE payment_status = 'paid'), 0)::bigint AS paid_revenue
+          FROM orders
+          WHERE shop_id = ${shop.id}
+            AND (created_at AT TIME ZONE 'Europe/Moscow')::date BETWEEN ${range.dateFrom}::date AND ${range.dateTo}::date
+            AND COALESCE(metadata ->> 'promoCode', '') <> ''
+            AND status <> 'cancelled'
+          GROUP BY UPPER(metadata ->> 'promoCode')
+          ORDER BY uses DESC, discount_total DESC
+          LIMIT 10
+        `,
+        client`
+          SELECT
+            COALESCE(SUM(amount) FILTER (WHERE amount > 0), 0)::bigint AS added,
+            COALESCE(SUM(ABS(amount)) FILTER (WHERE amount < 0), 0)::bigint AS removed,
+            COUNT(*)::int AS operations
+          FROM bonus_transactions
+          WHERE shop_id = ${shop.id}
+            AND (created_at AT TIME ZONE 'Europe/Moscow')::date BETWEEN ${range.dateFrom}::date AND ${range.dateTo}::date
+        `,
+        client`
+          WITH segmented AS (
+            SELECT CASE
+              WHEN total_orders > 0 AND (last_order_at IS NULL OR last_order_at < NOW() - INTERVAL '90 days') THEN 'inactive'
+              WHEN total_orders >= 5 OR total_spent >= 50000 THEN 'vip'
+              WHEN total_orders >= 2 THEN 'regular'
+              ELSE 'new'
+            END AS segment
+            FROM customers
+            WHERE shop_id = ${shop.id}
+          )
+          SELECT segment, COUNT(*)::int AS customers
+          FROM segmented
+          GROUP BY segment
+          ORDER BY customers DESC
+        `
+      ]);
+
+      const repeatRows = await client`
+        SELECT
+          COUNT(*) FILTER (WHERE order_count > 1)::int AS repeat_customers,
+          COUNT(*) FILTER (WHERE order_count = 1)::int AS single_order_customers
+        FROM (
+          SELECT customer_id, COUNT(*)::int AS order_count
+          FROM orders
+          WHERE shop_id = ${shop.id}
+            AND customer_id IS NOT NULL
+            AND status <> 'cancelled'
+            AND (created_at AT TIME ZONE 'Europe/Moscow')::date BETWEEN ${range.dateFrom}::date AND ${range.dateTo}::date
+          GROUP BY customer_id
+        ) customer_orders
+      `;
+
+      const newCustomerRows = await client`
+        SELECT COUNT(*)::int AS new_customers
+        FROM customers
+        WHERE shop_id = ${shop.id}
+          AND (created_at AT TIME ZONE 'Europe/Moscow')::date BETWEEN ${range.dateFrom}::date AND ${range.dateTo}::date
+      `;
+
+      return {
+        shop,
+        range,
+        summary: {
+          ...(summaryRows[0] ?? {}),
+          ...(repeatRows[0] ?? {}),
+          ...(newCustomerRows[0] ?? {}),
+          ...(bonusRows[0] ?? {})
+        },
+        daily,
+        topProducts,
+        paymentMethods,
+        promoUsage,
+        customerSegments: customerSegmentRows
+      };
     } finally {
       await client.end();
     }
