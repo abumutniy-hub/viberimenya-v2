@@ -7,6 +7,10 @@ import { createDb } from "@viberimenya/db";
 import { env } from "../lib/env";
 import { HttpError } from "../lib/http-error";
 import { markOrderPaid } from "../modules/orders/order-payment.service";
+import {
+  recordFullOrderRefund,
+  rollbackOrderFinancialsOnCancellation
+} from "../modules/orders/order-finance.service";
 
 type ShopRow = {
   id: string;
@@ -150,9 +154,26 @@ function getRequiredAdminRoles(
 
   if (
     path.startsWith(
+      "/api/admin/finance"
+    )
+  ) {
+    return normalizedMethod === "GET"
+      ? MANAGEMENT_ROLES
+      : OWNER_ADMIN_ROLES;
+  }
+
+  if (
+    path.startsWith(
       "/api/admin/orders"
     )
   ) {
+    if (
+      path.endsWith(
+        "/refund"
+      )
+    ) {
+      return OWNER_ADMIN_ROLES;
+    }
     if (
       normalizedMethod === "GET"
     ) {
@@ -184,6 +205,14 @@ function getRequiredAdminRoles(
   if (
     path.startsWith(
       "/api/admin/customers"
+    )
+  ) {
+    return MANAGEMENT_ROLES;
+  }
+
+  if (
+    path.startsWith(
+      "/api/admin/notifications"
     )
   ) {
     return MANAGEMENT_ROLES;
@@ -232,6 +261,35 @@ function normalizePhoneDigits(value: string) {
   return value.replace(/\D/g, "");
 }
 
+function normalizeContactPhone(value: string) {
+  const digits = normalizePhoneDigits(value);
+
+  if (digits.length === 11 && digits.startsWith("8")) {
+    return `+7${digits.slice(1)}`;
+  }
+
+  if (digits.length === 11 && digits.startsWith("7")) {
+    return `+${digits}`;
+  }
+
+  if (digits.length === 10) {
+    return `+7${digits}`;
+  }
+
+  return value.trim();
+}
+
+const contactPhoneSchema = z.string()
+  .trim()
+  .max(32)
+  .refine(
+    (value) => {
+      const digits = normalizePhoneDigits(value);
+      return digits.length >= 10 && digits.length <= 15;
+    },
+    "Укажите корректный номер телефона"
+  );
+
 function verifyPassword(password: string, storedHash: string | null | undefined) {
   if (!storedHash) return false;
 
@@ -261,16 +319,171 @@ function verifyPassword(password: string, storedHash: string | null | undefined)
 
 
 
-const settingsSchema = z.object({
-  phone: z.string().optional().default(""),
-  whatsapp: z.string().optional().default(""),
-  telegram: z.string().optional().default(""),
-  instagram: z.string().optional().default(""),
-  address: z.string().optional().default(""),
-  workHours: z.string().optional().default(""),
-  heroTitle: z.string().optional().default("Цветы, которые говорят за вас"),
-  heroSubtitle: z.string().optional().default("Собираем стильные букеты, отправляем фото перед доставкой и бережно доставляем получателю.")
+const safePublicLinkSchema = z.string()
+  .trim()
+  .max(500)
+  .refine(
+    (value) => (
+      value === ""
+      || value.startsWith("/")
+      || /^https:\/\/[a-z0-9.-]+(?:[/:?#].*)?$/i.test(value)
+    ),
+    "Используйте внутреннюю ссылку /... или безопасную ссылку https://..."
+  );
+
+const safeHeroImageSchema = z.string()
+  .trim()
+  .max(500)
+  .refine(
+    (value) => (
+      value === ""
+      || /^\/uploads\/products\/[a-zA-Z0-9._-]+$/.test(value)
+    ),
+    "Главное изображение должно быть выбрано из фотографий товаров"
+  );
+
+const homeBenefitSchema = z.object({
+  title: z.string().trim().min(2).max(100),
+  text: z.string().trim().min(2).max(260)
 });
+
+const settingsSchema = z.object({
+  phone: z.string().trim().max(32).optional().default(""),
+  whatsapp: z.string().trim().max(120).optional().default(""),
+  telegram: z.string().trim().max(120).optional().default(""),
+  instagram: z.string().trim().max(500).optional().default(""),
+  address: z.string().trim().max(1000).optional().default(""),
+  workHours: z.string().trim().max(160).optional().default(""),
+  heroTitle: z.string().trim().min(3).max(255)
+    .optional()
+    .default("Цветы, которые говорят за вас"),
+  heroSubtitle: z.string().trim().min(3).max(1200)
+    .optional()
+    .default("Собираем стильные букеты, отправляем фото перед доставкой и бережно доставляем получателю."),
+  heroImageUrl: safeHeroImageSchema.optional().default(""),
+  isOnlinePaymentEnabled: z.coerce.boolean().optional().default(false),
+  isCashPaymentEnabled: z.coerce.boolean().optional().default(true),
+  isTransferPaymentEnabled: z.coerce.boolean().optional().default(true),
+  site: z.object({
+    brandName: z.string().trim().min(2).max(120)
+      .optional()
+      .default("Выбери Меня"),
+    brandSubtitle: z.string().trim().max(120)
+      .optional()
+      .default("ЦВЕТЫ И ПОДАРКИ"),
+    footerDescription: z.string().trim().max(1000)
+      .optional()
+      .default("Собираем букеты под заказ, показываем готовую работу перед отправкой и бережно доставляем получателю."),
+    email: z.union([
+      z.string().trim().email().max(255),
+      z.literal("")
+    ]).optional().default(""),
+    legalName: z.string().trim().max(255).optional().default(""),
+    inn: z.string().trim().max(20).optional().default(""),
+    ogrn: z.string().trim().max(20).optional().default(""),
+    policyUrl: safePublicLinkSchema.optional().default(""),
+    offerUrl: safePublicLinkSchema.optional().default(""),
+    deliveryTermsUrl: safePublicLinkSchema.optional().default(""),
+    returnsUrl: safePublicLinkSchema.optional().default("")
+  }).optional().default({
+    brandName: "Выбери Меня",
+    brandSubtitle: "ЦВЕТЫ И ПОДАРКИ",
+    footerDescription: "Собираем букеты под заказ, показываем готовую работу перед отправкой и бережно доставляем получателю.",
+    email: "",
+    legalName: "",
+    inn: "",
+    ogrn: "",
+    policyUrl: "",
+    offerUrl: "",
+    deliveryTermsUrl: "",
+    returnsUrl: ""
+  }),
+  homepage: z.object({
+    eyebrow: z.string().trim().max(120)
+      .optional()
+      .default("Цветочная мастерская"),
+    primaryCtaLabel: z.string().trim().min(2).max(80)
+      .optional()
+      .default("Выбрать букет"),
+    secondaryCtaLabel: z.string().trim().min(2).max(80)
+      .optional()
+      .default("Условия доставки"),
+    occasions: z.array(
+      z.string().trim().min(2).max(80)
+    ).max(12).optional().default([]),
+    benefits: z.array(homeBenefitSchema)
+      .length(3)
+      .optional()
+      .default([
+        {
+          title: "Стильные букеты",
+          text: "Авторские композиции из свежих цветов на любой случай."
+        },
+        {
+          title: "Фото перед доставкой",
+          text: "Покажем готовый букет, чтобы вы были уверены в результате."
+        },
+        {
+          title: "Бережная доставка",
+          text: "Аккуратно упакуем и доставим в выбранный интервал."
+        }
+      ])
+  }).optional().default({
+    eyebrow: "Цветочная мастерская",
+    primaryCtaLabel: "Выбрать букет",
+    secondaryCtaLabel: "Условия доставки",
+    occasions: [],
+    benefits: [
+      {
+        title: "Стильные букеты",
+        text: "Авторские композиции из свежих цветов на любой случай."
+      },
+      {
+        title: "Фото перед доставкой",
+        text: "Покажем готовый букет, чтобы вы были уверены в результате."
+      },
+      {
+        title: "Бережная доставка",
+        text: "Аккуратно упакуем и доставим в выбранный интервал."
+      }
+    ]
+  }),
+  delivery: z.object({
+    pickupEnabled: z.coerce.boolean().optional().default(true),
+    pickupAddress: z.string().trim().max(1000).optional().default(""),
+    pickupNote: z.string().trim().max(1000)
+      .optional()
+      .default("После оформления менеджер подтвердит время готовности заказа."),
+    minimumOrderAmount: z.coerce.number().int().min(0).max(10000000)
+      .optional()
+      .default(0),
+    orderLeadTimeMinutes: z.coerce.number().int().min(0).max(10080)
+      .optional()
+      .default(120),
+    expressLeadTimeMinutes: z.coerce.number().int().min(0).max(1440)
+      .optional()
+      .default(60),
+    notice: z.string().trim().max(1000).optional().default("")
+  }).optional().default({
+    pickupEnabled: true,
+    pickupAddress: "",
+    pickupNote: "После оформления менеджер подтвердит время готовности заказа.",
+    minimumOrderAmount: 0,
+    orderLeadTimeMinutes: 120,
+    expressLeadTimeMinutes: 60,
+    notice: ""
+  })
+}).refine(
+  (value) => (
+    value.isOnlinePaymentEnabled
+    || value.isCashPaymentEnabled
+    || value.isTransferPaymentEnabled
+  ),
+  {
+    message: "Оставьте включённым хотя бы один способ оплаты",
+    path: ["isTransferPaymentEnabled"]
+  }
+);
 
 const categoryIconKeys = [
   "bouquet",
@@ -428,15 +641,25 @@ const productImageUpdateSchema = z.object({
 
 const productSchema = z.object({
   categoryId: z.string().uuid().optional().or(z.literal("")).default(""),
-  name: z.string().min(2),
-  slug: z.string().optional().default(""),
-  shortDescription: z.string().optional().default(""),
-  description: z.string().optional().default(""),
+  name: z.string().trim().min(2).max(255),
+  slug: z.string().trim().max(160).optional().default(""),
+  shortDescription: z.string().trim().max(2000).optional().default(""),
+  description: z.string().trim().max(20000).optional().default(""),
+  composition: z.string().trim().max(10000).optional().default(""),
+  careText: z.string().trim().max(10000).optional().default(""),
   price: z.coerce.number().int().min(0),
+  oldPrice: z.union([
+    z.coerce.number().int().min(0),
+    z.null()
+  ]).optional().default(null),
+  costPrice: z.union([
+    z.coerce.number().int().min(0),
+    z.null()
+  ]).optional().default(null),
   stockQuantity: z.coerce.number().int().min(0).optional().default(0),
   status: z.enum(["draft", "active", "hidden", "archived"]).optional().default("active"),
   isFeatured: z.coerce.boolean().optional().default(false),
-  sortOrder: z.coerce.number().int().optional().default(100)
+  sortOrder: z.coerce.number().int().min(0).max(100000).optional().default(100)
 });
 
 const productUpdateSchema = z.object({
@@ -600,6 +823,38 @@ const orderInternalCommentSchema = z.object({
   internalComment: z.string().max(3000).optional().default("")
 });
 
+const bouquetApprovalAdminSchema = z.object({
+  action: z.enum(["approve", "waive", "revision", "resend"]),
+  note: z.string().trim().max(500).optional().default(""),
+});
+
+const orderOperationsSchema = z.object({
+  customerName: z.string().trim().min(2).max(160),
+  customerPhone: contactPhoneSchema,
+  customerEmail: z.union([
+    z.string().trim().email().max(255),
+    z.literal("")
+  ]).optional().default(""),
+  recipientName: z.string().trim().min(2).max(160),
+  recipientPhone: contactPhoneSchema,
+  contactPreference: z.enum([
+    "call_or_message",
+    "phone_call",
+    "messenger_only"
+  ]).optional().default("call_or_message"),
+  isSurprise: z.coerce.boolean().optional().default(false),
+  doNotCallRecipient: z.coerce.boolean().optional().default(false),
+  cardText: z.string().trim().max(500).optional().default(""),
+  customerComment: z.string().trim().max(2000).optional().default(""),
+  deliveryType: z.enum(["delivery", "pickup"]),
+  deliveryService: z.enum(["standard", "express"]).optional().default("standard"),
+  deliveryZoneId: z.string().uuid().optional().or(z.literal("")).default(""),
+  deliveryIntervalId: z.string().uuid().optional().or(z.literal("")).default(""),
+  deliveryDate: z.string().trim().max(10).optional().default(""),
+  deliveryAddress: z.string().trim().max(1000).optional().default(""),
+  deliveryComment: z.string().trim().max(1000).optional().default("")
+});
+
 function slugify(value: string) {
   const map: Record<string, string> = {
     а: "a", б: "b", в: "v", г: "g", д: "d", е: "e", ё: "e", ж: "zh", з: "z",
@@ -641,11 +896,15 @@ type CustomerNotificationType =
   | "payment_link_added"
   | "order_paid"
   | "order_ready"
+  | "order_courier_assigned"
   | "order_delivering"
-  | "order_delivered";
+  | "order_delivered"
+  | "order_problem"
+  | "order_cancelled"
+  | "order_refunded";
 
 async function queueCustomerOrderNotification(
-  client: ReturnType<typeof createDb>["client"],
+  client: any,
   params: {
     shopId: string;
     orderId: string;
@@ -686,6 +945,7 @@ async function queueCustomerOrderNotification(
         'deliveryAddressText', o.delivery_address_text,
         'deliveryComment', o.delivery_comment,
         'bouquetPhotoUrl', o.bouquet_photo_url,
+        'deliveryProofPhotoUrl', o.metadata #>> '{delivery,proofPhotoUrl}',
         'trackingToken', o.tracking_token,
         'trackingUrl', CASE
           WHEN o.tracking_token IS NULL OR o.tracking_token = '' THEN NULL
@@ -699,6 +959,48 @@ async function queueCustomerOrderNotification(
     WHERE o.id = ${params.orderId}
       AND o.shop_id = ${params.shopId}
       AND o.customer_id IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1
+        FROM notification_events existing
+        WHERE existing.shop_id = o.shop_id
+          AND existing.order_id = o.id
+          AND existing.type = ${params.type}
+          AND existing.channel = 'telegram'
+          AND existing.recipient_type = 'customer'
+          AND existing.status IN ('pending', 'processing', 'sent')
+      )
+  `;
+}
+
+async function addOrderOperationalHistory(
+  client: any,
+  params: {
+    shopId: string;
+    orderId: string;
+    status: string;
+    userId: string;
+    comment: string;
+  }
+) {
+  await client`
+    INSERT INTO order_status_history (
+      shop_id,
+      order_id,
+      from_status,
+      to_status,
+      changed_by_user_id,
+      comment,
+      created_at
+    )
+    VALUES (
+      ${params.shopId},
+      ${params.orderId},
+      ${params.status}::order_status,
+      ${params.status}::order_status,
+      ${params.userId},
+      ${params.comment.slice(0, 1000)},
+      NOW()
+    )
   `;
 }
 
@@ -989,37 +1291,239 @@ export async function adminRoutes(app: FastifyInstance) {
       const shop = await getShop(client);
 
       const [
-        ordersCount,
-        productsCount,
-        customersCount,
-        categoriesCount,
-        deliveryZonesCount,
-        latestOrders
+        orderMetricsRows,
+        catalogMetricsRows,
+        customerMetricsRows,
+        statusRows,
+        latestOrders,
+        lowStockProducts,
+        notificationMetricsRows
       ] = await Promise.all([
-        client`SELECT COUNT(*)::int AS count FROM orders WHERE shop_id = ${shop.id}`,
-        client`SELECT COUNT(*)::int AS count FROM products WHERE shop_id = ${shop.id}`,
-        client`SELECT COUNT(*)::int AS count FROM customers WHERE shop_id = ${shop.id}`,
-        client`SELECT COUNT(*)::int AS count FROM categories WHERE shop_id = ${shop.id}`,
-        client`SELECT COUNT(*)::int AS count FROM delivery_zones WHERE shop_id = ${shop.id}`,
-        client`
-          SELECT *
+        client<{
+          orders_total: number;
+          orders_today: number;
+          active_orders: number;
+          problem_orders: number;
+          pending_payments: number;
+          paid_revenue: number;
+          paid_revenue_today: number;
+          average_check: number;
+        }[]>`
+          SELECT
+            COUNT(*)::int AS orders_total,
+            COUNT(*) FILTER (
+              WHERE (created_at AT TIME ZONE 'Europe/Moscow')::date
+                = (NOW() AT TIME ZONE 'Europe/Moscow')::date
+            )::int AS orders_today,
+            COUNT(*) FILTER (
+              WHERE status NOT IN ('delivered', 'cancelled')
+            )::int AS active_orders,
+            COUNT(*) FILTER (
+              WHERE status = 'problem'
+            )::int AS problem_orders,
+            COUNT(*) FILTER (
+              WHERE payment_status = 'pending'
+                AND status <> 'cancelled'
+            )::int AS pending_payments,
+            COALESCE(
+              (
+                SELECT SUM(payment.amount)
+                FROM payments payment
+                WHERE payment.shop_id = ${shop.id}
+                  AND payment.status = 'paid'
+              ),
+              0
+            )::bigint AS paid_revenue,
+            COALESCE(
+              (
+                SELECT SUM(payment.amount)
+                FROM payments payment
+                WHERE payment.shop_id = ${shop.id}
+                  AND payment.status = 'paid'
+                  AND (payment.paid_at AT TIME ZONE 'Europe/Moscow')::date
+                    = (NOW() AT TIME ZONE 'Europe/Moscow')::date
+              ),
+              0
+            )::bigint AS paid_revenue_today,
+            COALESCE(
+              ROUND(
+                AVG(total) FILTER (
+                  WHERE payment_status = 'paid'
+                )
+              ),
+              0
+            )::bigint AS average_check
           FROM orders
           WHERE shop_id = ${shop.id}
-          ORDER BY created_at DESC
+        `,
+        client<{
+          products_total: number;
+          active_products: number;
+          low_stock_products: number;
+          out_of_stock_products: number;
+          categories_total: number;
+          delivery_zones_total: number;
+        }[]>`
+          SELECT
+            (
+              SELECT COUNT(*)::int
+              FROM products
+              WHERE shop_id = ${shop.id}
+            ) AS products_total,
+            (
+              SELECT COUNT(*)::int
+              FROM products
+              WHERE shop_id = ${shop.id}
+                AND status = 'active'
+            ) AS active_products,
+            (
+              SELECT COUNT(*)::int
+              FROM products
+              WHERE shop_id = ${shop.id}
+                AND status = 'active'
+                AND COALESCE(stock_quantity, 0) BETWEEN 1 AND 3
+            ) AS low_stock_products,
+            (
+              SELECT COUNT(*)::int
+              FROM products
+              WHERE shop_id = ${shop.id}
+                AND status = 'active'
+                AND COALESCE(stock_quantity, 0) <= 0
+            ) AS out_of_stock_products,
+            (
+              SELECT COUNT(*)::int
+              FROM categories
+              WHERE shop_id = ${shop.id}
+            ) AS categories_total,
+            (
+              SELECT COUNT(*)::int
+              FROM delivery_zones
+              WHERE shop_id = ${shop.id}
+                AND is_active = true
+            ) AS delivery_zones_total
+        `,
+        client<{ customers_total: number }[]>`
+          SELECT COUNT(*)::int AS customers_total
+          FROM customers
+          WHERE shop_id = ${shop.id}
+        `,
+        client<{
+          status: string;
+          count: number;
+        }[]>`
+          SELECT
+            status::text AS status,
+            COUNT(*)::int AS count
+          FROM orders
+          WHERE shop_id = ${shop.id}
+          GROUP BY status
+          ORDER BY status
+        `,
+        client`
+          SELECT
+            o.id,
+            o.order_number,
+            o.status,
+            o.payment_status,
+            o.payment_method,
+            o.delivery_type,
+            o.delivery_date,
+            o.total AS total_amount,
+            o.created_at,
+            o.metadata,
+            COALESCE(NULLIF(o.metadata #>> '{customer,name}', ''), c.name) AS customer_name,
+            COALESCE(NULLIF(o.metadata #>> '{customer,phone}', ''), c.phone) AS customer_phone
+          FROM orders o
+          LEFT JOIN customers c ON c.id = o.customer_id
+          WHERE o.shop_id = ${shop.id}
+          ORDER BY
+            CASE WHEN o.status = 'problem' THEN 0 ELSE 1 END,
+            o.created_at DESC
           LIMIT 10
+        `,
+        client`
+          SELECT
+            p.id,
+            p.name,
+            p.slug,
+            p.stock_quantity,
+            p.status,
+            p.updated_at,
+            c.name AS category_name
+          FROM products p
+          LEFT JOIN categories c ON c.id = p.category_id
+          WHERE p.shop_id = ${shop.id}
+            AND p.status = 'active'
+            AND COALESCE(p.stock_quantity, 0) <= 3
+          ORDER BY
+            COALESCE(p.stock_quantity, 0) ASC,
+            p.updated_at DESC
+          LIMIT 8
+        `,
+        client<{
+          pending: number;
+          processing: number;
+          failed: number;
+        }[]>`
+          SELECT
+            COUNT(*) FILTER (WHERE status = 'pending')::int AS pending,
+            COUNT(*) FILTER (WHERE status = 'processing')::int AS processing,
+            COUNT(*) FILTER (WHERE status = 'failed')::int AS failed
+          FROM notification_events
+          WHERE shop_id = ${shop.id}
+            AND created_at > NOW() - INTERVAL '30 days'
         `
       ]);
+
+      const orderMetrics = orderMetricsRows[0] ?? {
+        orders_total: 0,
+        orders_today: 0,
+        active_orders: 0,
+        problem_orders: 0,
+        pending_payments: 0,
+        paid_revenue: 0,
+        paid_revenue_today: 0,
+        average_check: 0
+      };
+
+      const catalogMetrics = catalogMetricsRows[0] ?? {
+        products_total: 0,
+        active_products: 0,
+        low_stock_products: 0,
+        out_of_stock_products: 0,
+        categories_total: 0,
+        delivery_zones_total: 0
+      };
+
+      const customerMetrics = customerMetricsRows[0] ?? {
+        customers_total: 0
+      };
 
       return {
         shop,
         metrics: {
-          orders: numberFromCount(ordersCount[0]?.count),
-          products: numberFromCount(productsCount[0]?.count),
-          customers: numberFromCount(customersCount[0]?.count),
-          categories: numberFromCount(categoriesCount[0]?.count),
-          deliveryZones: numberFromCount(deliveryZonesCount[0]?.count)
+          orders: numberFromCount(orderMetrics.orders_total),
+          ordersToday: numberFromCount(orderMetrics.orders_today),
+          activeOrders: numberFromCount(orderMetrics.active_orders),
+          problemOrders: numberFromCount(orderMetrics.problem_orders),
+          pendingPayments: numberFromCount(orderMetrics.pending_payments),
+          paidRevenue: numberFromCount(orderMetrics.paid_revenue),
+          paidRevenueToday: numberFromCount(orderMetrics.paid_revenue_today),
+          averageCheck: numberFromCount(orderMetrics.average_check),
+          products: numberFromCount(catalogMetrics.products_total),
+          activeProducts: numberFromCount(catalogMetrics.active_products),
+          lowStockProducts: numberFromCount(catalogMetrics.low_stock_products),
+          outOfStockProducts: numberFromCount(catalogMetrics.out_of_stock_products),
+          customers: numberFromCount(customerMetrics.customers_total),
+          categories: numberFromCount(catalogMetrics.categories_total),
+          deliveryZones: numberFromCount(catalogMetrics.delivery_zones_total),
+          pendingNotifications: numberFromCount(notificationMetricsRows[0]?.pending),
+          processingNotifications: numberFromCount(notificationMetricsRows[0]?.processing),
+          failedNotifications: numberFromCount(notificationMetricsRows[0]?.failed)
         },
-        latestOrders
+        statusBreakdown: statusRows,
+        latestOrders,
+        lowStockProducts
       };
     } finally {
       await client.end();
@@ -1081,7 +1585,214 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   /* ASSIGNED ORDER ACCESS 7.2.2A */
+  app.get("/api/admin/finance", async (request, reply) => {
+    const query = z.object({
+      q: z.string().trim().max(120).optional().default(""),
+      status: z.enum([
+        "all",
+        "pending",
+        "paid",
+        "failed",
+        "refunded",
+        "cancelled"
+      ]).optional().default("all"),
+      dateFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+      dateTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+      page: z.coerce.number().int().min(1).max(10000).optional().default(1)
+    }).parse(request.query ?? {});
+
+    const adminContext = (request as AdminRequest).adminContext;
+
+    if (!adminContext?.userId) {
+      return reply.status(401).send({
+        ok: false,
+        message: "Требуется вход в CRM"
+      });
+    }
+
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+      const pageSize = 50;
+      const offset = (query.page - 1) * pageSize;
+      const statusFilter = query.status === "all" ? null : query.status;
+      const search = query.q ? `%${query.q}%` : null;
+      const dateFrom = query.dateFrom || null;
+      const dateTo = query.dateTo || null;
+
+      const [metricsRows, countRows, paymentRows, debtRows] = await Promise.all([
+        client<{
+          paid_amount: number;
+          paid_count: number;
+          refunded_amount: number;
+          refunded_count: number;
+          pending_amount: number;
+          pending_count: number;
+          failed_count: number;
+        }[]>`
+          SELECT
+            COALESCE(SUM(amount) FILTER (WHERE status = 'paid'), 0)::bigint AS paid_amount,
+            COUNT(*) FILTER (WHERE status = 'paid')::int AS paid_count,
+            COALESCE(SUM(amount) FILTER (WHERE status = 'refunded'), 0)::bigint AS refunded_amount,
+            COUNT(*) FILTER (WHERE status = 'refunded')::int AS refunded_count,
+            COALESCE(SUM(amount) FILTER (WHERE status = 'pending'), 0)::bigint AS pending_amount,
+            COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_count,
+            COUNT(*) FILTER (WHERE status = 'failed')::int AS failed_count
+          FROM payments
+          WHERE shop_id = ${shop.id}
+        `,
+        client<{ total: number }[]>`
+          SELECT COUNT(*)::int AS total
+          FROM payments p
+          JOIN orders o ON o.id = p.order_id AND o.shop_id = p.shop_id
+          LEFT JOIN customers c ON c.id = o.customer_id
+          WHERE p.shop_id = ${shop.id}
+            AND (${statusFilter}::text IS NULL OR p.status::text = ${statusFilter})
+            AND (${dateFrom}::text IS NULL OR p.created_at >= ${dateFrom}::date)
+            AND (${dateTo}::text IS NULL OR p.created_at < (${dateTo}::date + INTERVAL '1 day'))
+            AND (
+              ${search}::text IS NULL
+              OR o.order_number ILIKE ${search}
+              OR COALESCE(c.name, '') ILIKE ${search}
+              OR COALESCE(c.phone, '') ILIKE ${search}
+              OR COALESCE(p.provider_payment_id, '') ILIKE ${search}
+            )
+        `,
+        client`
+          SELECT
+            p.id,
+            p.order_id,
+            p.provider,
+            p.provider_payment_id,
+            p.method,
+            p.status,
+            p.amount,
+            p.currency,
+            p.payment_url,
+            p.paid_at,
+            p.created_at,
+            p.updated_at,
+            o.order_number,
+            o.status AS order_status,
+            o.payment_status AS order_payment_status,
+            c.name AS customer_name,
+            c.phone AS customer_phone,
+            p.raw_payload #>> '{reason}' AS refund_reason,
+            p.raw_payload #>> '{refundedAt}' AS refunded_at
+          FROM payments p
+          JOIN orders o ON o.id = p.order_id AND o.shop_id = p.shop_id
+          LEFT JOIN customers c ON c.id = o.customer_id
+          WHERE p.shop_id = ${shop.id}
+            AND (${statusFilter}::text IS NULL OR p.status::text = ${statusFilter})
+            AND (${dateFrom}::text IS NULL OR p.created_at >= ${dateFrom}::date)
+            AND (${dateTo}::text IS NULL OR p.created_at < (${dateTo}::date + INTERVAL '1 day'))
+            AND (
+              ${search}::text IS NULL
+              OR o.order_number ILIKE ${search}
+              OR COALESCE(c.name, '') ILIKE ${search}
+              OR COALESCE(c.phone, '') ILIKE ${search}
+              OR COALESCE(p.provider_payment_id, '') ILIKE ${search}
+            )
+          ORDER BY p.created_at DESC, p.id DESC
+          LIMIT ${pageSize}
+          OFFSET ${offset}
+        `,
+        client<{
+          customers_with_debt: number;
+          total_bonus_debt: number;
+        }[]>`
+          SELECT
+            COUNT(*) FILTER (WHERE bonus_balance < 0)::int AS customers_with_debt,
+            COALESCE(SUM(ABS(bonus_balance)) FILTER (WHERE bonus_balance < 0), 0)::bigint AS total_bonus_debt
+          FROM customers
+          WHERE shop_id = ${shop.id}
+        `
+      ]);
+
+      const total = Number(countRows[0]?.total || 0);
+
+      return {
+        ok: true,
+        metrics: {
+          ...(metricsRows[0] ?? {
+            paid_amount: 0,
+            paid_count: 0,
+            refunded_amount: 0,
+            refunded_count: 0,
+            pending_amount: 0,
+            pending_count: 0,
+            failed_count: 0
+          }),
+          ...(debtRows[0] ?? {
+            customers_with_debt: 0,
+            total_bonus_debt: 0
+          })
+        },
+        payments: paymentRows,
+        pagination: {
+          page: query.page,
+          pageSize,
+          total,
+          pages: Math.max(1, Math.ceil(total / pageSize))
+        },
+        viewer: {
+          role: adminContext.role,
+          canRefund: OWNER_ADMIN_ROLES.includes(adminContext.role)
+        }
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
   app.get("/api/admin/orders", async (request, reply) => {
+    const query = z.object({
+      q: z.string().trim().max(120).optional().default(""),
+      status: z.enum([
+        "all",
+        "new",
+        "confirmed",
+        "assembling",
+        "ready",
+        "assigned_courier",
+        "delivering",
+        "delivered",
+        "cancelled",
+        "problem"
+      ]).optional().default("all"),
+      payment: z.enum([
+        "all",
+        "not_required",
+        "pending",
+        "paid",
+        "failed",
+        "refunded",
+        "cancelled"
+      ]).optional().default("all"),
+      delivery: z.enum([
+        "all",
+        "delivery",
+        "pickup",
+        "express"
+      ]).optional().default("all"),
+      attention: z.enum([
+        "all",
+        "active",
+        "problem",
+        "pending_payment"
+      ]).optional().default("all"),
+      dateFrom: z.string().trim().max(10).optional().default(""),
+      dateTo: z.string().trim().max(10).optional().default(""),
+      page: z.coerce.number().int().min(1).max(10000).optional().default(1),
+      limit: z.coerce.number().int().min(10).max(100).optional().default(30)
+    }).parse(request.query ?? {});
+
+    const datePattern = /^\d{4}-\d{2}-\d{2}$/;
+    const dateFrom = datePattern.test(query.dateFrom) ? query.dateFrom : "";
+    const dateTo = datePattern.test(query.dateTo) ? query.dateTo : "";
+    const offset = (query.page - 1) * query.limit;
+
     const { client } = createDb();
 
     try {
@@ -1110,11 +1821,139 @@ export async function adminRoutes(app: FastifyInstance) {
         });
       }
 
+      const isFieldRole =
+        adminContext.role === "florist"
+        || adminContext.role === "courier";
+
+      const effectivePayment =
+        isFieldRole ? "all" : query.payment;
+
+      const effectiveAttention =
+        isFieldRole
+          && query.attention === "pending_payment"
+          ? "all"
+          : query.attention;
+
+      const countRows = await client<{
+        filtered_count: number;
+      }[]>`
+        SELECT COUNT(*)::int AS filtered_count
+        FROM orders o
+        LEFT JOIN customers c ON c.id = o.customer_id
+        WHERE o.shop_id = ${shop.id}
+          AND (
+            ${adminContext.role}::text NOT IN ('florist', 'courier')
+            OR (
+              ${adminContext.role}::text = 'florist'
+              AND o.florist_id = ${adminContext.userId}
+            )
+            OR (
+              ${adminContext.role}::text = 'courier'
+              AND o.courier_id = ${adminContext.userId}
+            )
+          )
+          AND (
+            ${query.q} = ''
+            OR o.order_number ILIKE ${`%${query.q}%`}
+            OR COALESCE(c.name, '') ILIKE ${`%${query.q}%`}
+            OR COALESCE(c.phone, '') ILIKE ${`%${query.q}%`}
+            OR COALESCE(o.recipient_name, '') ILIKE ${`%${query.q}%`}
+            OR COALESCE(o.recipient_phone, '') ILIKE ${`%${query.q}%`}
+            OR COALESCE(o.delivery_address_text, '') ILIKE ${`%${query.q}%`}
+          )
+          AND (
+            ${query.status} = 'all'
+            OR o.status::text = ${query.status}
+          )
+          AND (
+            ${effectivePayment} = 'all'
+            OR o.payment_status::text = ${effectivePayment}
+          )
+          AND (
+            ${query.delivery} = 'all'
+            OR (
+              ${query.delivery} IN ('delivery', 'pickup')
+              AND o.delivery_type::text = ${query.delivery}
+            )
+            OR (
+              ${query.delivery} = 'express'
+              AND LOWER(COALESCE(o.metadata #>> '{delivery,isExpress}', 'false')) = 'true'
+            )
+          )
+          AND (
+            ${effectiveAttention} = 'all'
+            OR (
+              ${effectiveAttention} = 'active'
+              AND o.status NOT IN ('delivered', 'cancelled')
+            )
+            OR (
+              ${effectiveAttention} = 'problem'
+              AND o.status = 'problem'
+            )
+            OR (
+              ${effectiveAttention} = 'pending_payment'
+              AND o.payment_status = 'pending'
+              AND o.status <> 'cancelled'
+            )
+          )
+          AND (
+            ${dateFrom} = ''
+            OR o.created_at >= NULLIF(${dateFrom}, '')::date
+          )
+          AND (
+            ${dateTo} = ''
+            OR o.created_at < (NULLIF(${dateTo}, '')::date + INTERVAL '1 day')
+          )
+      `;
+
+      const summaryRows = await client<{
+        total: number;
+        active: number;
+        new_orders: number;
+        problem: number;
+        pending_payment: number;
+        delivered_today: number;
+      }[]>`
+        SELECT
+          COUNT(*)::int AS total,
+          COUNT(*) FILTER (
+            WHERE o.status NOT IN ('delivered', 'cancelled')
+          )::int AS active,
+          COUNT(*) FILTER (
+            WHERE o.status = 'new'
+          )::int AS new_orders,
+          COUNT(*) FILTER (
+            WHERE o.status = 'problem'
+          )::int AS problem,
+          COUNT(*) FILTER (
+            WHERE o.payment_status = 'pending'
+              AND o.status <> 'cancelled'
+          )::int AS pending_payment,
+          COUNT(*) FILTER (
+            WHERE o.status = 'delivered'
+              AND (o.delivered_at AT TIME ZONE 'Europe/Moscow')::date
+                = (NOW() AT TIME ZONE 'Europe/Moscow')::date
+          )::int AS delivered_today
+        FROM orders o
+        WHERE o.shop_id = ${shop.id}
+          AND (
+            ${adminContext.role}::text NOT IN ('florist', 'courier')
+            OR (
+              ${adminContext.role}::text = 'florist'
+              AND o.florist_id = ${adminContext.userId}
+            )
+            OR (
+              ${adminContext.role}::text = 'courier'
+              AND o.courier_id = ${adminContext.userId}
+            )
+          )
+      `;
+
       const items = await client`
         SELECT
           o.*,
-          c.phone AS customer_phone,
-          c.name AS customer_name,
+          COALESCE(NULLIF(o.metadata #>> '{customer,phone}', ''), c.phone) AS customer_phone,
+          COALESCE(NULLIF(o.metadata #>> '{customer,name}', ''), c.name) AS customer_name,
           o.total AS total_amount,
           p.payment_url AS payment_url,
           COALESCE(ic.messages_count, 0) AS internal_chat_messages_count,
@@ -1142,40 +1981,79 @@ export async function adminRoutes(app: FastifyInstance) {
         ) ic ON true
         WHERE o.shop_id = ${shop.id}
           AND (
-            ${adminContext.role}::text
-              NOT IN (
-                'florist',
-                'courier'
-              )
-
+            ${adminContext.role}::text NOT IN ('florist', 'courier')
             OR (
-              ${adminContext.role}::text
-                = 'florist'
-              AND o.florist_id =
-                ${adminContext.userId}
+              ${adminContext.role}::text = 'florist'
+              AND o.florist_id = ${adminContext.userId}
             )
-
             OR (
-              ${adminContext.role}::text
-                = 'courier'
-              AND o.courier_id =
-                ${adminContext.userId}
+              ${adminContext.role}::text = 'courier'
+              AND o.courier_id = ${adminContext.userId}
             )
           )
-        ORDER BY o.created_at DESC
-        LIMIT 100
+          AND (
+            ${query.q} = ''
+            OR o.order_number ILIKE ${`%${query.q}%`}
+            OR COALESCE(c.name, '') ILIKE ${`%${query.q}%`}
+            OR COALESCE(c.phone, '') ILIKE ${`%${query.q}%`}
+            OR COALESCE(o.recipient_name, '') ILIKE ${`%${query.q}%`}
+            OR COALESCE(o.recipient_phone, '') ILIKE ${`%${query.q}%`}
+            OR COALESCE(o.delivery_address_text, '') ILIKE ${`%${query.q}%`}
+          )
+          AND (
+            ${query.status} = 'all'
+            OR o.status::text = ${query.status}
+          )
+          AND (
+            ${effectivePayment} = 'all'
+            OR o.payment_status::text = ${effectivePayment}
+          )
+          AND (
+            ${query.delivery} = 'all'
+            OR (
+              ${query.delivery} IN ('delivery', 'pickup')
+              AND o.delivery_type::text = ${query.delivery}
+            )
+            OR (
+              ${query.delivery} = 'express'
+              AND LOWER(COALESCE(o.metadata #>> '{delivery,isExpress}', 'false')) = 'true'
+            )
+          )
+          AND (
+            ${effectiveAttention} = 'all'
+            OR (
+              ${effectiveAttention} = 'active'
+              AND o.status NOT IN ('delivered', 'cancelled')
+            )
+            OR (
+              ${effectiveAttention} = 'problem'
+              AND o.status = 'problem'
+            )
+            OR (
+              ${effectiveAttention} = 'pending_payment'
+              AND o.payment_status = 'pending'
+              AND o.status <> 'cancelled'
+            )
+          )
+          AND (
+            ${dateFrom} = ''
+            OR o.created_at >= NULLIF(${dateFrom}, '')::date
+          )
+          AND (
+            ${dateTo} = ''
+            OR o.created_at < (NULLIF(${dateTo}, '')::date + INTERVAL '1 day')
+          )
+        ORDER BY
+          CASE
+            WHEN o.status = 'problem' THEN 0
+            WHEN LOWER(COALESCE(o.metadata #>> '{delivery,isExpress}', 'false')) = 'true'
+              AND o.status NOT IN ('delivered', 'cancelled') THEN 1
+            ELSE 2
+          END,
+          o.created_at DESC
+        LIMIT ${query.limit}
+        OFFSET ${offset}
       `;
-
-      /*
-       * ROLE ORDERS DATA 7.2.2B-2A
-       *
-       * Полевым сотрудникам API списка
-       * не отдаёт финансовые данные,
-       * оплату и публичные ссылки.
-       */
-      const isFieldRole =
-        adminContext.role === "florist"
-        || adminContext.role === "courier";
 
       const visibleItems =
         isFieldRole
@@ -1186,17 +2064,13 @@ export async function adminRoutes(app: FastifyInstance) {
                 ...item,
 
                 customer_name:
-                  adminContext.role
-                    === "courier"
-                    ? item.recipient_name
-                      ?? null
+                  adminContext.role === "courier"
+                    ? item.recipient_name ?? null
                     : null,
 
                 customer_phone:
-                  adminContext.role
-                    === "courier"
-                    ? item.recipient_phone
-                      ?? null
+                  adminContext.role === "courier"
+                    ? item.recipient_phone ?? null
                     : null,
 
                 customer_email: null,
@@ -1213,14 +2087,52 @@ export async function adminRoutes(app: FastifyInstance) {
             })
           : items;
 
+      const filteredCount = numberFromCount(
+        countRows[0]?.filtered_count
+      );
+      const totalPages = Math.max(
+        1,
+        Math.ceil(filteredCount / query.limit)
+      );
+
+      const rawSummary = summaryRows[0] ?? {
+        total: 0,
+        active: 0,
+        new_orders: 0,
+        problem: 0,
+        pending_payment: 0,
+        delivered_today: 0
+      };
+
+      const visibleSummary = isFieldRole
+        ? {
+            ...rawSummary,
+            pending_payment: 0
+          }
+        : rawSummary;
+
       return {
         shop,
         items: visibleItems,
+        pagination: {
+          page: query.page,
+          limit: query.limit,
+          totalItems: filteredCount,
+          totalPages
+        },
+        filters: {
+          q: query.q,
+          status: query.status,
+          payment: query.payment,
+          delivery: query.delivery,
+          attention: query.attention,
+          dateFrom,
+          dateTo
+        },
+        summary: visibleSummary,
         viewer: {
-          userId:
-            adminContext.userId,
-          role:
-            adminContext.role,
+          userId: adminContext.userId,
+          role: adminContext.role,
           scope:
             adminContext.role === "florist"
               ? "assigned_florist"
@@ -1270,17 +2182,31 @@ export async function adminRoutes(app: FastifyInstance) {
       const orderRows = await client`
         SELECT
           o.*,
-          c.phone AS customer_phone,
-          c.name AS customer_name,
-          c.email AS customer_email,
+          COALESCE(NULLIF(o.metadata #>> '{customer,phone}', ''), c.phone) AS customer_phone,
+          COALESCE(NULLIF(o.metadata #>> '{customer,name}', ''), c.name) AS customer_name,
+          COALESCE(NULLIF(o.metadata #>> '{customer,email}', ''), c.email) AS customer_email,
+          di.name AS delivery_interval_name,
+          dz.name AS delivery_zone_current_name,
+          manager_user.name AS manager_name,
+          florist_user.name AS florist_name,
+          courier_user.name AS courier_name,
           p.payment_url AS payment_url,
           p.status AS latest_payment_status,
           p.method AS latest_payment_method,
           p.provider AS latest_payment_provider,
           p.created_at AS latest_payment_created_at,
-        p.paid_at AS latest_payment_paid_at
+          p.paid_at AS latest_payment_paid_at
         FROM orders o
         LEFT JOIN customers c ON c.id = o.customer_id
+        LEFT JOIN delivery_intervals di
+          ON di.id = o.delivery_interval_id
+         AND di.shop_id = o.shop_id
+        LEFT JOIN delivery_zones dz
+          ON dz.id = o.delivery_zone_id
+         AND dz.shop_id = o.shop_id
+        LEFT JOIN users manager_user ON manager_user.id = o.manager_id
+        LEFT JOIN users florist_user ON florist_user.id = o.florist_id
+        LEFT JOIN users courier_user ON courier_user.id = o.courier_id
         LEFT JOIN LATERAL (
           SELECT provider, method, status, payment_url, created_at, paid_at
           FROM payments
@@ -1494,6 +2420,30 @@ export async function adminRoutes(app: FastifyInstance) {
         LIMIT 50
       `;
 
+      const payments =
+        isFieldRole
+          ? []
+          : await client`
+              SELECT
+                id,
+                provider,
+                provider_payment_id,
+                method,
+                status,
+                amount,
+                currency,
+                payment_url,
+                raw_payload,
+                paid_at,
+                created_at,
+                updated_at
+              FROM payments
+              WHERE shop_id = ${shop.id}
+                AND order_id = ${params.id}
+              ORDER BY created_at DESC, id DESC
+              LIMIT 30
+            `;
+
       const staff =
         MANAGEMENT_ROLES.includes(
           adminContext.role
@@ -1533,12 +2483,87 @@ export async function adminRoutes(app: FastifyInstance) {
       `
           : [];
 
+      const currentDeliveryZoneId =
+        typeof orderRecord.delivery_zone_id === "string"
+          ? orderRecord.delivery_zone_id
+          : null;
+
+      const currentDeliveryIntervalId =
+        typeof orderRecord.delivery_interval_id === "string"
+          ? orderRecord.delivery_interval_id
+          : null;
+
+      const deliveryOptions =
+        MANAGEMENT_ROLES.includes(
+          adminContext.role
+        )
+          ? {
+              zones: await client`
+                SELECT
+                  id,
+                  name,
+                  price,
+                  free_from_amount,
+                  is_express_available,
+                  express_price,
+                  is_active
+                FROM delivery_zones
+                WHERE shop_id = ${shop.id}
+                  AND LOWER(BTRIM(name)) <> 'самовывоз'
+                  AND (
+                    is_active = true
+                    OR id = ${currentDeliveryZoneId}
+                  )
+                ORDER BY is_active DESC, sort_order ASC, name ASC
+              `,
+              intervals: await client`
+                SELECT
+                  id,
+                  name,
+                  starts_at,
+                  ends_at,
+                  is_active
+                FROM delivery_intervals
+                WHERE shop_id = ${shop.id}
+                  AND (
+                    is_active = true
+                    OR id = ${currentDeliveryIntervalId}
+                  )
+                ORDER BY is_active DESC, sort_order ASC, starts_at ASC
+              `,
+              settings: (await client`
+                SELECT
+                  CASE
+                    WHEN jsonb_typeof(settings #> '{delivery,pickupEnabled}') = 'boolean'
+                    THEN (settings #>> '{delivery,pickupEnabled}')::boolean
+                    ELSE true
+                  END AS pickup_enabled,
+                  COALESCE(settings #>> '{delivery,pickupAddress}', '') AS pickup_address
+                FROM shop_settings
+                WHERE shop_id = ${shop.id}
+                LIMIT 1
+              `)[0] ?? {
+                pickup_enabled: true,
+                pickup_address: ''
+              }
+            }
+          : {
+              zones: [],
+              intervals: [],
+              settings: {
+                pickup_enabled: false,
+                pickup_address: ''
+              }
+            };
+
       return {
         ok: true,
         order: visibleOrder,
         items: visibleItems,
         history,
+        payments,
         staff,
+        deliveryOptions,
         viewer: {
           userId:
             adminContext.userId,
@@ -1551,7 +2576,11 @@ export async function adminRoutes(app: FastifyInstance) {
           canChangeStatus:
             true,
           canUseInternalChat:
-            true
+            true,
+          canRefund:
+            OWNER_ADMIN_ROLES.includes(
+              adminContext.role
+            )
         }
       };
     } finally {
@@ -1565,33 +2594,72 @@ export async function adminRoutes(app: FastifyInstance) {
     }).parse(request.params ?? {});
 
     const body = orderInternalCommentSchema.parse(request.body ?? {});
+    const adminContext = (request as AdminRequest).adminContext;
+
+    if (!adminContext?.userId) {
+      return reply.status(401).send({
+        ok: false,
+        message: "Требуется вход в CRM"
+      });
+    }
+
     const { client } = createDb();
 
     try {
       const shop = await getShop(client);
       const internalComment = body.internalComment.trim() || null;
 
-      const updatedRows = await client`
-        UPDATE orders
-        SET internal_comment = ${internalComment},
-            updated_at = NOW()
-        WHERE shop_id = ${shop.id}
-          AND id = ${params.id}
-        RETURNING id, order_number, internal_comment, updated_at
-      `;
+      const result = await client.begin(async (transaction) => {
+        const currentRows = await transaction<{
+          id: string;
+          order_number: string;
+          status: string;
+          internal_comment: string | null;
+        }[]>`
+          SELECT id, order_number, status::text AS status, internal_comment
+          FROM orders
+          WHERE shop_id = ${shop.id}
+            AND id = ${params.id}
+          LIMIT 1
+          FOR UPDATE
+        `;
 
-      const updatedOrder = updatedRows[0];
+        const current = currentRows[0];
 
-      if (!updatedOrder) {
-        return reply.status(404).send({
-          ok: false,
-          message: "Заказ не найден"
+        if (!current) {
+          throw new HttpError(404, "Заказ не найден");
+        }
+
+        if ((current.internal_comment || "") === (internalComment || "")) {
+          return { changed: false, order: current };
+        }
+
+        const updatedRows = await transaction`
+          UPDATE orders
+          SET internal_comment = ${internalComment},
+              updated_at = NOW()
+          WHERE shop_id = ${shop.id}
+            AND id = ${current.id}
+          RETURNING id, order_number, internal_comment, updated_at
+        `;
+
+        await addOrderOperationalHistory(transaction, {
+          shopId: shop.id,
+          orderId: current.id,
+          status: current.status,
+          userId: adminContext.userId,
+          comment: internalComment
+            ? "Обновлён внутренний комментарий заказа"
+            : "Внутренний комментарий заказа очищен"
         });
-      }
+
+        return { changed: true, order: updatedRows[0] };
+      });
 
       return {
         ok: true,
-        order: updatedOrder
+        changed: result.changed,
+        order: result.order
       };
     } finally {
       await client.end();
@@ -1613,83 +2681,140 @@ export async function adminRoutes(app: FastifyInstance) {
       const floristId = body.floristId.trim() || null;
       const courierId = body.courierId.trim() || null;
 
-      const orderRows = await client<{
-        id: string;
-        order_number: string;
-        florist_id: string | null;
-        courier_id: string | null;
-        total: number | null;
-        delivery_date: string | null;
-        delivery_address_text: string | null;
-        delivery_comment: string | null;
-        recipient_name: string | null;
-        recipient_phone: string | null;
-        delivery_interval_name: string | null;
-        tracking_token: string | null;
-      }[]>`
-        SELECT
-          o.id,
-          o.order_number,
-          o.florist_id,
-          o.courier_id,
-          o.total,
-          o.delivery_date,
-          o.delivery_address_text,
-          o.delivery_comment,
-          o.recipient_name,
-          o.recipient_phone,
-          di.name AS delivery_interval_name,
-          o.tracking_token
-        FROM orders o
-        LEFT JOIN delivery_intervals di
-          ON di.id = o.delivery_interval_id
-         AND di.shop_id = o.shop_id
-        WHERE o.shop_id = ${shop.id}
-          AND o.id = ${params.id}
-        LIMIT 1
-      `;
+      const adminContext = (request as AdminRequest).adminContext;
 
-      const order = orderRows[0];
-
-      if (!order) {
-        return reply.status(404).send({
+      if (!adminContext?.userId) {
+        return reply.status(401).send({
           ok: false,
-          message: "Заказ не найден"
+          message: "Требуется вход в CRM"
         });
       }
 
-      async function ensureAssignee(userId: string | null, role: "manager" | "florist" | "courier", label: string) {
-        if (!userId) return;
-
-        const rows = await client<{ id: string }[]>`
-          SELECT su.id
-          FROM shop_users su
-          WHERE su.shop_id = ${shop.id}
-            AND su.user_id = ${userId}
-            AND su.role = ${role}::shop_user_role
-            AND su.is_active = true
+      const assignmentResult = await client.begin(async (transaction) => {
+        const orderRows = await transaction<{
+          id: string;
+          order_number: string;
+          manager_id: string | null;
+          florist_id: string | null;
+          courier_id: string | null;
+          status: string;
+          total: number | null;
+          delivery_date: string | null;
+          delivery_address_text: string | null;
+          delivery_comment: string | null;
+          recipient_name: string | null;
+          recipient_phone: string | null;
+          delivery_interval_name: string | null;
+          tracking_token: string | null;
+        }[]>`
+          SELECT
+            o.id,
+            o.order_number,
+            o.manager_id,
+            o.florist_id,
+            o.courier_id,
+            o.status::text AS status,
+            o.total,
+            o.delivery_date,
+            o.delivery_address_text,
+            o.delivery_comment,
+            o.recipient_name,
+            o.recipient_phone,
+            di.name AS delivery_interval_name,
+            o.tracking_token
+          FROM orders o
+          LEFT JOIN delivery_intervals di
+            ON di.id = o.delivery_interval_id
+           AND di.shop_id = o.shop_id
+          WHERE o.shop_id = ${shop.id}
+            AND o.id = ${params.id}
           LIMIT 1
+          FOR UPDATE OF o
         `;
 
-        if (!rows[0]) {
-          throw new HttpError(400, `${label} не найден или не активен`);
+        const order = orderRows[0];
+
+        if (!order) {
+          throw new HttpError(404, "Заказ не найден");
         }
-      }
 
-      await ensureAssignee(managerId, "manager", "Менеджер");
-      await ensureAssignee(floristId, "florist", "Флорист");
-      await ensureAssignee(courierId, "courier", "Курьер");
+        async function ensureAssignee(
+          userId: string | null,
+          role: "manager" | "florist" | "courier",
+          label: string
+        ) {
+          if (!userId) return;
 
-      const updatedRows = await client`
-        UPDATE orders
-        SET manager_id = ${managerId},
-            florist_id = ${floristId},
-            courier_id = ${courierId},
-            updated_at = NOW()
-        WHERE shop_id = ${shop.id}
-          AND id = ${order.id}
-        RETURNING id, manager_id, florist_id, courier_id, updated_at
-      `;
+          const rows = await transaction<{ id: string }[]>`
+            SELECT su.id
+            FROM shop_users su
+            WHERE su.shop_id = ${shop.id}
+              AND su.user_id = ${userId}
+              AND su.role = ${role}::shop_user_role
+              AND su.is_active = true
+            LIMIT 1
+          `;
+
+          if (!rows[0]) {
+            throw new HttpError(400, `${label} не найден или не активен`);
+          }
+        }
+
+        await ensureAssignee(managerId, "manager", "Менеджер");
+        await ensureAssignee(floristId, "florist", "Флорист");
+        await ensureAssignee(courierId, "courier", "Курьер");
+
+        const assignmentsChanged =
+          managerId !== order.manager_id
+          || floristId !== order.florist_id
+          || courierId !== order.courier_id;
+
+        if (!assignmentsChanged) {
+          return {
+            order,
+            changed: false,
+            updatedOrder: {
+              id: order.id,
+              manager_id: order.manager_id,
+              florist_id: order.florist_id,
+              courier_id: order.courier_id
+            }
+          };
+        }
+
+        const updatedRows = await transaction`
+          UPDATE orders
+          SET manager_id = ${managerId},
+              florist_id = ${floristId},
+              courier_id = ${courierId},
+              updated_at = NOW()
+          WHERE shop_id = ${shop.id}
+            AND id = ${order.id}
+          RETURNING id, manager_id, florist_id, courier_id, updated_at
+        `;
+
+        const changedParts = [
+          managerId !== order.manager_id ? "менеджер" : "",
+          floristId !== order.florist_id ? "флорист" : "",
+          courierId !== order.courier_id ? "курьер" : ""
+        ].filter(Boolean);
+
+        await addOrderOperationalHistory(transaction, {
+          shopId: shop.id,
+          orderId: order.id,
+          status: order.status,
+          userId: adminContext.userId,
+          comment: `Обновлены ответственные: ${changedParts.join(", ")}`
+        });
+
+        return {
+          order,
+          changed: true,
+          updatedOrder: updatedRows[0]
+        };
+      });
+
+      const order = assignmentResult.order;
 
       if (floristId && floristId !== order.florist_id) {
         const floristRows = await client<{ telegram_id: string; name: string | null }[]>`
@@ -1841,12 +2966,996 @@ export async function adminRoutes(app: FastifyInstance) {
 
       return {
         ok: true,
-        order: updatedRows[0] ?? null
+        changed: assignmentResult.changed,
+        order: assignmentResult.updatedOrder ?? null
       };
     } finally {
       await client.end();
     }
   });
+
+  app.patch("/api/admin/orders/:id/operations", async (request, reply) => {
+    const params = z.object({
+      id: z.string().uuid()
+    }).parse(request.params ?? {});
+
+    const body = orderOperationsSchema.parse(request.body ?? {});
+    const adminContext = (request as AdminRequest).adminContext;
+
+    if (!adminContext?.userId) {
+      return reply.status(401).send({
+        ok: false,
+        message: "Требуется вход в CRM"
+      });
+    }
+
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+
+      const result = await client.begin(async (transaction) => {
+        const orderRows = await transaction<{
+          id: string;
+          customer_id: string | null;
+          order_number: string;
+          courier_id: string | null;
+          tracking_token: string | null;
+          status: string;
+          payment_status: string;
+          delivery_type: string;
+          delivery_zone_id: string | null;
+          delivery_interval_id: string | null;
+          delivery_date_value: string | null;
+          delivery_address_text: string | null;
+          delivery_comment: string | null;
+          recipient_name: string | null;
+          recipient_phone: string | null;
+          customer_comment: string | null;
+          contact_preference: string;
+          subtotal: number;
+          discount_total: number;
+          delivery_price: number;
+          bonus_spent: number;
+          total: number;
+          metadata: Record<string, unknown> | null;
+          customer_name: string | null;
+          customer_phone: string | null;
+          customer_email: string | null;
+        }[]>`
+          SELECT
+            o.id,
+            o.customer_id,
+            o.order_number,
+            o.courier_id,
+            o.tracking_token,
+            o.status::text AS status,
+            o.payment_status::text AS payment_status,
+            o.delivery_type::text AS delivery_type,
+            o.delivery_zone_id,
+            o.delivery_interval_id,
+            o.delivery_date::date::text AS delivery_date_value,
+            o.delivery_address_text,
+            o.delivery_comment,
+            o.recipient_name,
+            o.recipient_phone,
+            o.customer_comment,
+            o.contact_preference,
+            o.subtotal,
+            o.discount_total,
+            o.delivery_price,
+            o.bonus_spent,
+            o.total,
+            o.metadata,
+            COALESCE(NULLIF(o.metadata #>> '{customer,name}', ''), c.name) AS customer_name,
+            COALESCE(NULLIF(o.metadata #>> '{customer,phone}', ''), c.phone) AS customer_phone,
+            COALESCE(NULLIF(o.metadata #>> '{customer,email}', ''), c.email) AS customer_email
+          FROM orders o
+          LEFT JOIN customers c ON c.id = o.customer_id
+          WHERE o.shop_id = ${shop.id}
+            AND o.id = ${params.id}
+          LIMIT 1
+          FOR UPDATE OF o
+        `;
+
+        const order = orderRows[0];
+
+        if (!order) {
+          throw new HttpError(404, "Заказ не найден");
+        }
+
+        if (["delivered", "cancelled"].includes(order.status)) {
+          throw new HttpError(409, "Завершённый заказ нельзя редактировать");
+        }
+
+        const normalizedCustomerPhone = normalizeContactPhone(body.customerPhone);
+        const normalizedRecipientPhone = normalizeContactPhone(body.recipientPhone);
+
+        let deliveryZoneId: string | null = null;
+        let deliveryIntervalId: string | null = null;
+        let deliveryDate: string | null = null;
+        let deliveryAddress: string | null = null;
+        let deliveryPrice = 0;
+        let deliveryTariffName = "Самовывоз";
+        let deliveryZoneName: string | null = null;
+        let deliveryIntervalName: string | null = null;
+        let deliveryIsExpress = false;
+        let deliveryFreeThresholdApplied = false;
+        let deliveryBasePrice = 0;
+        let deliveryExpressPrice = 0;
+        let deliveryFreeFromAmount = 0;
+
+        if (body.deliveryType === "pickup") {
+          const settingsRows = await transaction<{
+            pickup_enabled: boolean;
+            pickup_address: string;
+          }[]>`
+            SELECT
+              CASE
+                WHEN jsonb_typeof(settings #> '{delivery,pickupEnabled}') = 'boolean'
+                THEN (settings #>> '{delivery,pickupEnabled}')::boolean
+                ELSE true
+              END AS pickup_enabled,
+              COALESCE(settings #>> '{delivery,pickupAddress}', '') AS pickup_address
+            FROM shop_settings
+            WHERE shop_id = ${shop.id}
+            LIMIT 1
+          `;
+
+          const pickup = settingsRows[0] ?? {
+            pickup_enabled: true,
+            pickup_address: ""
+          };
+
+          if (!pickup.pickup_enabled) {
+            throw new HttpError(400, "Самовывоз сейчас отключён в настройках магазина");
+          }
+
+          deliveryAddress = pickup.pickup_address.trim() || null;
+        } else {
+          if (!body.deliveryZoneId) {
+            throw new HttpError(400, "Выберите зону доставки");
+          }
+
+          if (!body.deliveryIntervalId) {
+            throw new HttpError(400, "Выберите интервал доставки");
+          }
+
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(body.deliveryDate)) {
+            throw new HttpError(400, "Укажите дату доставки");
+          }
+
+          if (body.deliveryAddress.length < 5) {
+            throw new HttpError(400, "Укажите полный адрес доставки");
+          }
+
+          const dateRows = await transaction<{
+            is_past: boolean;
+            is_too_far: boolean;
+          }[]>`
+            SELECT
+              ${body.deliveryDate}::date < (NOW() AT TIME ZONE 'Europe/Moscow')::date AS is_past,
+              ${body.deliveryDate}::date > (NOW() AT TIME ZONE 'Europe/Moscow')::date + 90 AS is_too_far
+          `;
+
+          if (dateRows[0]?.is_past) {
+            throw new HttpError(400, "Дата доставки не может быть в прошлом");
+          }
+
+          if (dateRows[0]?.is_too_far) {
+            throw new HttpError(400, "Дату доставки можно выбрать не более чем на 90 дней вперёд");
+          }
+
+          const zoneRows = await transaction<{
+            id: string;
+            name: string;
+            price: number;
+            free_from_amount: number | null;
+            is_express_available: boolean;
+            express_price: number | null;
+          }[]>`
+            SELECT id, name, price, free_from_amount, is_express_available, express_price
+            FROM delivery_zones
+            WHERE shop_id = ${shop.id}
+              AND id = ${body.deliveryZoneId}
+              AND (
+                is_active = true
+                OR id = ${order.delivery_zone_id}
+              )
+              AND LOWER(BTRIM(name)) <> 'самовывоз'
+            LIMIT 1
+          `;
+
+          const zone = zoneRows[0];
+
+          if (!zone) {
+            throw new HttpError(400, "Выбранная зона доставки недоступна");
+          }
+
+          const intervalRows = await transaction<{
+            id: string;
+            name: string;
+          }[]>`
+            SELECT id, name
+            FROM delivery_intervals
+            WHERE shop_id = ${shop.id}
+              AND id = ${body.deliveryIntervalId}
+              AND (
+                is_active = true
+                OR id = ${order.delivery_interval_id}
+              )
+            LIMIT 1
+          `;
+
+          const interval = intervalRows[0];
+
+          if (!interval) {
+            throw new HttpError(400, "Выбранный интервал доставки недоступен");
+          }
+
+          deliveryZoneId = zone.id;
+          deliveryIntervalId = interval.id;
+          deliveryDate = body.deliveryDate;
+          deliveryAddress = body.deliveryAddress;
+          deliveryZoneName = zone.name;
+          deliveryIntervalName = interval.name;
+          deliveryBasePrice = Math.max(0, Number(zone.price || 0));
+          deliveryExpressPrice = Math.max(0, Number(zone.express_price || 0));
+          deliveryFreeFromAmount = Math.max(0, Number(zone.free_from_amount || 0));
+          deliveryIsExpress = body.deliveryService === "express";
+
+          if (deliveryIsExpress) {
+            if (!zone.is_express_available || deliveryExpressPrice <= 0) {
+              throw new HttpError(400, "Срочная доставка недоступна для выбранной зоны");
+            }
+
+            deliveryPrice = deliveryExpressPrice;
+            deliveryTariffName = "Срочная доставка";
+          } else if (
+            deliveryFreeFromAmount > 0
+            && Number(order.subtotal || 0) >= deliveryFreeFromAmount
+          ) {
+            deliveryPrice = 0;
+            deliveryTariffName = "Бесплатная доставка";
+            deliveryFreeThresholdApplied = true;
+          } else {
+            deliveryPrice = deliveryBasePrice;
+            deliveryTariffName = zone.name;
+          }
+        }
+
+        const nextTotal = Math.max(
+          0,
+          Number(order.subtotal || 0)
+          - Number(order.discount_total || 0)
+          - Number(order.bonus_spent || 0)
+          + deliveryPrice
+        );
+
+        if (order.payment_status === "paid" && nextTotal !== Number(order.total || 0)) {
+          throw new HttpError(409, "Нельзя изменить итоговую сумму уже оплаченного заказа");
+        }
+
+        const existingMetadata =
+          order.metadata && typeof order.metadata === "object"
+            ? order.metadata
+            : {};
+
+        const existingCustomer =
+          existingMetadata.customer
+          && typeof existingMetadata.customer === "object"
+          && !Array.isArray(existingMetadata.customer)
+            ? existingMetadata.customer as Record<string, unknown>
+            : {};
+
+        const existingRecipient =
+          existingMetadata.recipient
+          && typeof existingMetadata.recipient === "object"
+          && !Array.isArray(existingMetadata.recipient)
+            ? existingMetadata.recipient as Record<string, unknown>
+            : {};
+
+        const existingDelivery =
+          existingMetadata.delivery
+          && typeof existingMetadata.delivery === "object"
+          && !Array.isArray(existingMetadata.delivery)
+            ? existingMetadata.delivery as Record<string, unknown>
+            : {};
+
+        const customerPhoneDigits = normalizePhoneDigits(normalizedCustomerPhone);
+        const recipientPhoneDigits = normalizePhoneDigits(normalizedRecipientPhone);
+        const sameAsCustomer =
+          body.customerName.trim().toLowerCase() === body.recipientName.trim().toLowerCase()
+          && customerPhoneDigits === recipientPhoneDigits;
+
+        const customerMetadata = {
+          ...existingCustomer,
+          name: body.customerName,
+          phone: normalizedCustomerPhone,
+          email: body.customerEmail || null,
+          contactPreference: body.contactPreference
+        };
+
+        const recipientMetadata = {
+          ...existingRecipient,
+          sameAsCustomer,
+          isSurprise: body.isSurprise,
+          doNotCall: body.doNotCallRecipient,
+          cardText: body.cardText || null
+        };
+
+        const nextDeliveryService = body.deliveryType === "pickup"
+          ? "pickup"
+          : deliveryIsExpress
+            ? "express"
+            : "standard";
+
+        const existingDeliveryService =
+          typeof existingDelivery.service === "string"
+            ? existingDelivery.service
+            : order.delivery_type === "pickup"
+              ? "pickup"
+              : existingDelivery.isExpress === true
+                ? "express"
+                : "standard";
+
+        const deliveryMetadata = {
+          calculationVersion: 3,
+          service: nextDeliveryService,
+          isExpress: deliveryIsExpress,
+          tariffName: deliveryTariffName,
+          zoneId: deliveryZoneId,
+          zoneName: deliveryZoneName,
+          intervalId: deliveryIntervalId,
+          intervalName: deliveryIntervalName,
+          date: deliveryDate,
+          address: deliveryAddress,
+          courierComment: body.deliveryComment || null,
+          basePrice: deliveryBasePrice,
+          expressPrice: deliveryExpressPrice,
+          freeFromAmount: deliveryFreeFromAmount,
+          freeThresholdApplied: deliveryFreeThresholdApplied,
+          appliedPrice: deliveryPrice,
+          calculatedFromSubtotal: Number(order.subtotal || 0),
+          updatedByUserId: adminContext.userId,
+          updatedAt: new Date().toISOString()
+        };
+
+        const changedParts: string[] = [];
+
+        if (
+          body.customerName !== String(order.customer_name || "")
+          || normalizedCustomerPhone !== String(order.customer_phone || "")
+          || body.customerEmail !== String(order.customer_email || "")
+        ) changedParts.push("контакты покупателя");
+
+        if (
+          body.recipientName !== String(order.recipient_name || "")
+          || normalizedRecipientPhone !== String(order.recipient_phone || "")
+          || JSON.stringify(recipientMetadata) !== JSON.stringify(existingRecipient)
+        ) changedParts.push("получатель");
+
+        if (
+          body.deliveryType !== order.delivery_type
+          || deliveryZoneId !== order.delivery_zone_id
+          || deliveryIntervalId !== order.delivery_interval_id
+          || deliveryDate !== order.delivery_date_value
+          || (deliveryAddress || "") !== (order.delivery_address_text || "")
+          || body.deliveryComment !== (order.delivery_comment || "")
+          || deliveryPrice !== Number(order.delivery_price || 0)
+          || nextDeliveryService !== existingDeliveryService
+        ) changedParts.push("доставка");
+
+        if (body.customerComment !== (order.customer_comment || "")) {
+          changedParts.push("комментарий клиента");
+        }
+
+        if (body.contactPreference !== order.contact_preference) {
+          changedParts.push("способ связи");
+        }
+
+        if (changedParts.length === 0) {
+          return { changed: false, total: order.total };
+        }
+
+        const matchingCustomerRows = await transaction<{ id: string }[]>`
+          SELECT id
+          FROM customers
+          WHERE shop_id = ${shop.id}
+            AND phone = ${normalizedCustomerPhone}
+          LIMIT 1
+          FOR UPDATE
+        `;
+
+        const matchingCustomer = matchingCustomerRows[0];
+        let nextCustomerId = order.customer_id;
+
+        if (
+          matchingCustomer
+          && order.customer_id
+          && matchingCustomer.id !== order.customer_id
+        ) {
+          throw new HttpError(
+            409,
+            "Этот телефон уже принадлежит другому клиенту. Объединение клиентов выполняется отдельно, чтобы не потерять бонусы и историю заказов."
+          );
+        }
+
+        if (matchingCustomer) {
+          nextCustomerId = matchingCustomer.id;
+
+          await transaction`
+            UPDATE customers
+            SET name = ${body.customerName},
+                email = ${body.customerEmail || null},
+                updated_at = NOW()
+            WHERE shop_id = ${shop.id}
+              AND id = ${matchingCustomer.id}
+          `;
+        } else if (order.customer_id) {
+          await transaction`
+            UPDATE customers
+            SET name = ${body.customerName},
+                phone = ${normalizedCustomerPhone},
+                email = ${body.customerEmail || null},
+                updated_at = NOW()
+            WHERE shop_id = ${shop.id}
+              AND id = ${order.customer_id}
+          `;
+        } else {
+          const insertedCustomers = await transaction<{ id: string }[]>`
+            INSERT INTO customers (
+              shop_id,
+              phone,
+              name,
+              email,
+              bonus_balance,
+              total_orders,
+              total_spent,
+              created_at,
+              updated_at
+            )
+            VALUES (
+              ${shop.id},
+              ${normalizedCustomerPhone},
+              ${body.customerName},
+              ${body.customerEmail || null},
+              0,
+              0,
+              0,
+              NOW(),
+              NOW()
+            )
+            RETURNING id
+          `;
+
+          nextCustomerId = insertedCustomers[0]?.id ?? null;
+        }
+
+        await transaction`
+          UPDATE orders
+          SET
+            customer_id = ${nextCustomerId},
+            delivery_type = ${body.deliveryType}::delivery_type,
+            delivery_zone_id = ${deliveryZoneId},
+            delivery_interval_id = ${deliveryIntervalId},
+            delivery_date = ${deliveryDate},
+            delivery_address_text = ${deliveryAddress},
+            delivery_comment = ${body.deliveryComment || null},
+            recipient_name = ${body.recipientName},
+            recipient_phone = ${normalizedRecipientPhone},
+            customer_comment = ${body.customerComment || null},
+            contact_preference = ${body.contactPreference},
+            delivery_price = ${deliveryPrice},
+            total = ${nextTotal},
+            metadata = jsonb_set(
+              jsonb_set(
+                jsonb_set(
+                  COALESCE(metadata, '{}'::jsonb),
+                  '{customer}',
+                  CAST(${JSON.stringify(customerMetadata)} AS jsonb),
+                  true
+                ),
+                '{recipient}',
+                CAST(${JSON.stringify(recipientMetadata)} AS jsonb),
+                true
+              ),
+              '{delivery}',
+              CAST(${JSON.stringify(deliveryMetadata)} AS jsonb),
+              true
+            ),
+            updated_at = NOW()
+          WHERE shop_id = ${shop.id}
+            AND id = ${order.id}
+        `;
+
+        if (nextTotal !== Number(order.total || 0)) {
+          await transaction`
+            UPDATE payments
+            SET amount = ${nextTotal},
+                updated_at = NOW()
+            WHERE id = (
+              SELECT id
+              FROM payments
+              WHERE shop_id = ${shop.id}
+                AND order_id = ${order.id}
+                AND status = 'pending'
+              ORDER BY created_at DESC
+              LIMIT 1
+            )
+          `;
+        }
+
+        await addOrderOperationalHistory(transaction, {
+          shopId: shop.id,
+          orderId: order.id,
+          status: order.status,
+          userId: adminContext.userId,
+          comment: `Обновлены данные заказа: ${changedParts.join(", ")}`
+        });
+
+        const courierNeedsUpdate =
+          Boolean(order.courier_id)
+          && body.deliveryType === "delivery"
+          && (
+            changedParts.includes("получатель")
+            || changedParts.includes("доставка")
+          );
+
+        if (courierNeedsUpdate && order.courier_id) {
+          const courierRows = await transaction<{
+            telegram_id: string;
+            name: string | null;
+          }[]>`
+            SELECT ta.telegram_id, u.name
+            FROM shop_users su
+            JOIN users u ON u.id = su.user_id
+            JOIN telegram_accounts ta
+              ON ta.shop_id = su.shop_id
+             AND ta.user_id = su.user_id
+             AND ta.is_active = true
+            WHERE su.shop_id = ${shop.id}
+              AND su.user_id = ${order.courier_id}
+              AND su.role = 'courier'
+              AND su.is_active = true
+            ORDER BY ta.linked_at DESC
+            LIMIT 1
+          `;
+
+          const courier = courierRows[0];
+
+          if (courier?.telegram_id) {
+            await transaction`
+              INSERT INTO notification_events (
+                shop_id,
+                order_id,
+                type,
+                channel,
+                recipient_type,
+                recipient_telegram_id,
+                status,
+                payload,
+                created_at,
+                updated_at
+              )
+              VALUES (
+                ${shop.id},
+                ${order.id},
+                'courier_order_assigned',
+                'telegram',
+                'staff',
+                ${courier.telegram_id},
+                'pending',
+                CAST(${JSON.stringify({
+                  orderId: order.id,
+                  orderNumber: order.order_number,
+                  courierId: order.courier_id,
+                  courierName: courier.name,
+                  deliveryDate,
+                  deliveryIntervalName,
+                  deliveryAddressText: deliveryAddress,
+                  deliveryComment: body.deliveryComment || null,
+                  recipientName: body.recipientName,
+                  recipientPhone: normalizedRecipientPhone,
+                  trackingUrl: order.tracking_token
+                    ? `/order/track/${order.tracking_token}`
+                    : null,
+                  crmUrl: `/admin/orders/${order.id}`,
+                  isOperationalUpdate: true
+                })} AS jsonb),
+                NOW(),
+                NOW()
+              )
+            `;
+          }
+        }
+
+        return { changed: true, total: nextTotal };
+      });
+
+      return {
+        ok: true,
+        changed: result.changed,
+        total: result.total
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.post(
+    "/api/admin/orders/:id/bouquet-approval",
+    async (request, reply) => {
+      const params = z
+        .object({
+          id: z.string().uuid(),
+        })
+        .parse(request.params ?? {});
+      const body = bouquetApprovalAdminSchema.parse(request.body ?? {});
+      const adminContext = (request as AdminRequest).adminContext;
+
+      if (!adminContext?.userId) {
+        return reply.status(401).send({
+          ok: false,
+          message: "Требуется вход в CRM",
+        });
+      }
+
+      if (!MANAGEMENT_ROLES.includes(adminContext.role)) {
+        return reply.status(403).send({
+          ok: false,
+          message: "Недостаточно прав",
+        });
+      }
+
+      const note = body.note.trim();
+
+      if (body.action === "revision" && note.length < 3) {
+        return reply.status(400).send({
+          ok: false,
+          message: "Опишите правку минимум тремя символами",
+        });
+      }
+
+      const { client } = createDb();
+
+      try {
+        const shop = await getShop(client);
+
+        if (adminContext.shopId !== shop.id) {
+          return reply.status(403).send({
+            ok: false,
+            message: "Нет доступа к этому магазину",
+          });
+        }
+
+        const result = await client.begin(async (transaction) => {
+          const orderRows = await transaction<
+            {
+              id: string;
+              order_number: string;
+              status: string;
+              customer_id: string | null;
+              florist_id: string | null;
+              bouquet_photo_url: string | null;
+              tracking_token: string;
+              approval_status: string | null;
+            }[]
+          >`
+            SELECT
+              id,
+              order_number,
+              status::text AS status,
+              customer_id,
+              florist_id,
+              bouquet_photo_url,
+              tracking_token,
+              metadata #>> '{bouquetApproval,status}' AS approval_status
+            FROM orders
+            WHERE id = ${params.id}
+              AND shop_id = ${shop.id}
+            FOR UPDATE
+          `;
+
+          const order = orderRows[0];
+
+          if (!order) {
+            return { kind: "not_found" as const };
+          }
+
+          if (order.status !== "assembling" || !order.bouquet_photo_url) {
+            return {
+              kind: "unavailable" as const,
+              orderNumber: order.order_number,
+            };
+          }
+
+          if (body.action === "resend") {
+            const telegramRows = await transaction<
+              { telegram_id: string }[]
+            >`
+              SELECT ta.telegram_id
+              FROM telegram_accounts ta
+              WHERE ta.shop_id = ${shop.id}
+                AND ta.customer_id = ${order.customer_id}
+                AND ta.is_active = true
+                AND ta.notifications_enabled = true
+              ORDER BY ta.linked_at DESC NULLS LAST
+              LIMIT 1
+            `;
+
+            const telegramId = telegramRows[0]?.telegram_id;
+
+            if (!telegramId) {
+              return {
+                kind: "no_telegram" as const,
+                orderNumber: order.order_number,
+              };
+            }
+
+            await transaction`
+              UPDATE orders
+              SET metadata = jsonb_set(
+                    COALESCE(metadata, '{}'::jsonb),
+                    '{bouquetApproval}',
+                    COALESCE(metadata -> 'bouquetApproval', '{}'::jsonb)
+                      || jsonb_build_object(
+                        'status', 'pending',
+                        'requestedAt', NOW(),
+                        'decidedAt', NULL,
+                        'note', NULL,
+                        'source', 'crm_resend'
+                      ),
+                    true
+                  ),
+                  updated_at = NOW()
+              WHERE id = ${order.id}
+                AND shop_id = ${shop.id}
+            `;
+
+            await transaction`
+              INSERT INTO notification_events (
+                shop_id,
+                order_id,
+                type,
+                channel,
+                recipient_type,
+                recipient_telegram_id,
+                status,
+                payload,
+                created_at,
+                updated_at
+              )
+              VALUES (
+                ${shop.id},
+                ${order.id},
+                'bouquet_approval_requested',
+                'telegram',
+                'customer',
+                ${telegramId},
+                'pending',
+                jsonb_build_object(
+                  'orderId', ${order.id},
+                  'orderNumber', ${order.order_number},
+                  'bouquetPhotoUrl', ${order.bouquet_photo_url},
+                  'trackingUrl', '/order/track/' || ${order.tracking_token}
+                ),
+                NOW(),
+                NOW()
+              )
+            `;
+
+            await transaction`
+              INSERT INTO order_status_history (
+                shop_id,
+                order_id,
+                from_status,
+                to_status,
+                changed_by_user_id,
+                comment,
+                created_at
+              )
+              VALUES (
+                ${shop.id},
+                ${order.id},
+                'assembling',
+                'assembling',
+                ${adminContext.userId},
+                'Менеджер повторно отправил фото букета покупателю на согласование',
+                NOW()
+              )
+            `;
+
+            return {
+              kind: "updated" as const,
+              orderNumber: order.order_number,
+              status: "pending",
+              message: "Фото повторно отправлено покупателю в Telegram",
+            };
+          }
+
+          const nextStatus =
+            body.action === "approve"
+              ? "approved"
+              : body.action === "waive"
+                ? "waived"
+                : "revision_requested";
+          const defaultNote =
+            body.action === "approve"
+              ? "Одобрено менеджером после связи с покупателем"
+              : body.action === "waive"
+                ? "Согласование не требуется по решению менеджера"
+                : note;
+          const savedNote = note || defaultNote;
+          const historyComment =
+            body.action === "revision"
+              ? `Менеджер запросил правку букета: ${savedNote}`
+              : body.action === "waive"
+                ? `Менеджер разрешил продолжить без согласования: ${savedNote}`
+                : `Менеджер зафиксировал одобрение букета: ${savedNote}`;
+
+          if (order.approval_status === nextStatus) {
+            return {
+              kind: "updated" as const,
+              orderNumber: order.order_number,
+              status: nextStatus,
+              message: "Статус согласования уже установлен",
+            };
+          }
+
+          await transaction`
+            UPDATE orders
+            SET metadata = jsonb_set(
+                  COALESCE(metadata, '{}'::jsonb),
+                  '{bouquetApproval}',
+                  COALESCE(metadata -> 'bouquetApproval', '{}'::jsonb)
+                    || jsonb_build_object(
+                      'status', ${nextStatus},
+                      'decidedAt', NOW(),
+                      'note', ${savedNote},
+                      'source', 'crm',
+                      'revisionCount', CASE
+                        WHEN ${body.action}::text = 'revision'
+                        THEN COALESCE(
+                          NULLIF(
+                            metadata #>> '{bouquetApproval,revisionCount}',
+                            ''
+                          )::int,
+                          0
+                        ) + 1
+                        ELSE COALESCE(
+                          NULLIF(
+                            metadata #>> '{bouquetApproval,revisionCount}',
+                            ''
+                          )::int,
+                          0
+                        )
+                      END
+                    ),
+                  true
+                ),
+                updated_at = NOW()
+            WHERE id = ${order.id}
+              AND shop_id = ${shop.id}
+          `;
+
+          await transaction`
+            INSERT INTO order_status_history (
+              shop_id,
+              order_id,
+              from_status,
+              to_status,
+              changed_by_user_id,
+              comment,
+              created_at
+            )
+            VALUES (
+              ${shop.id},
+              ${order.id},
+              'assembling',
+              'assembling',
+              ${adminContext.userId},
+              ${historyComment},
+              NOW()
+            )
+          `;
+
+          await transaction`
+            INSERT INTO notification_events (
+              shop_id,
+              order_id,
+              type,
+              channel,
+              recipient_type,
+              recipient_telegram_id,
+              status,
+              payload,
+              created_at,
+              updated_at
+            )
+            SELECT
+              o.shop_id,
+              o.id,
+              ${
+                body.action === "revision"
+                  ? "bouquet_revision_requested"
+                  : "bouquet_approved"
+              },
+              'telegram',
+              'staff',
+              ta.telegram_id,
+              'pending',
+              jsonb_build_object(
+                'orderId', o.id,
+                'orderNumber', o.order_number,
+                'note', ${savedNote},
+                'bouquetPhotoUrl', o.bouquet_photo_url,
+                'crmUrl', '/admin/orders/' || o.id::text
+              ),
+              NOW(),
+              NOW()
+            FROM orders o
+            JOIN telegram_accounts ta
+              ON ta.shop_id = o.shop_id
+             AND ta.user_id = o.florist_id
+             AND ta.is_active = true
+            JOIN shop_users su
+              ON su.shop_id = ta.shop_id
+             AND su.user_id = ta.user_id
+             AND su.role = 'florist'
+             AND su.is_active = true
+            WHERE o.id = ${order.id}
+              AND o.shop_id = ${shop.id}
+            ORDER BY ta.linked_at DESC NULLS LAST
+            LIMIT 1
+          `;
+
+          return {
+            kind: "updated" as const,
+            orderNumber: order.order_number,
+            status: nextStatus,
+            message:
+              body.action === "revision"
+                ? "Правка передана флористу"
+                : body.action === "waive"
+                  ? "Согласование пропущено, флорист может завершить сборку"
+                  : "Одобрение зафиксировано",
+          };
+        });
+
+        if (result.kind === "not_found") {
+          return reply.status(404).send({
+            ok: false,
+            message: "Заказ не найден",
+          });
+        }
+
+        if (result.kind === "unavailable") {
+          return reply.status(409).send({
+            ok: false,
+            message: "Согласование доступно только для заказа в сборке с фото",
+          });
+        }
+
+        if (result.kind === "no_telegram") {
+          return reply.status(422).send({
+            ok: false,
+            message:
+              "Telegram покупателя не подключён. Отправьте ему ссылку отслеживания вручную.",
+          });
+        }
+
+        return {
+          ok: true,
+          orderNumber: result.orderNumber,
+          status: result.status,
+          message: result.message,
+        };
+      } finally {
+        await client.end();
+      }
+    },
+  );
 
   app.get("/api/admin/orders/:id/internal-chat", async (request, reply) => {
     const params = z.object({
@@ -2243,14 +4352,19 @@ export async function adminRoutes(app: FastifyInstance) {
       const orderRows = await client<{
         id: string;
         status: string;
+        payment_status: string;
         florist_id: string | null;
         courier_id: string | null;
+        delivery_proof_photo_url: string | null;
       }[]>`
         SELECT
           id,
           status,
+          payment_status::text AS payment_status,
           florist_id,
-          courier_id
+          courier_id,
+          metadata #>> '{delivery,proofPhotoUrl}'
+            AS delivery_proof_photo_url
         FROM orders
         WHERE shop_id = ${shop.id}
           AND id = ${params.id}
@@ -2292,6 +4406,31 @@ export async function adminRoutes(app: FastifyInstance) {
           ok: true,
           message: "Статус уже установлен"
         };
+      }
+
+      if (
+        body.status === "cancelled"
+        && order.payment_status === "paid"
+      ) {
+        return reply.status(409).send({
+          ok: false,
+          message:
+            "Оплаченный заказ нельзя отменить до фиксации полного возврата. Возврат доступен владельцу или администратору в карточке заказа."
+        });
+      }
+
+      if (
+        adminContext.role === "courier"
+        && body.status === "delivered"
+        && !String(order.delivery_proof_photo_url || "").startsWith(
+          "/uploads/deliveries/"
+        )
+      ) {
+        return reply.status(409).send({
+          ok: false,
+          message:
+            "Сначала загрузите фото вручения через Telegram. После сохранения фото заказ завершится автоматически."
+        });
       }
 
       const forwardStatusByCurrent: Partial<Record<string, string>> = {
@@ -2542,6 +4681,31 @@ export async function adminRoutes(app: FastifyInstance) {
 
             let finalHistoryComment =
               historyComment;
+
+            if (
+              body.status === "cancelled"
+            ) {
+              const rollback =
+                await rollbackOrderFinancialsOnCancellation({
+                  transaction,
+                  shopId: shop.id,
+                  orderId: order.id,
+                  actorUserId: adminContext.userId
+                });
+
+              const rollbackParts = [
+                rollback.bonusReturned > 0
+                  ? `возвращено бонусов: ${rollback.bonusReturned}`
+                  : "",
+                rollback.promoRestored
+                  ? "лимит промокода восстановлен"
+                  : ""
+              ].filter(Boolean);
+
+              if (rollbackParts.length > 0) {
+                finalHistoryComment += `. ${rollbackParts.join("; ")}`;
+              }
+            }
 
             if (
               body.status
@@ -2802,8 +4966,11 @@ export async function adminRoutes(app: FastifyInstance) {
 
       const customerEventByStatus: Partial<Record<string, CustomerNotificationType>> = {
         ready: "order_ready",
+        assigned_courier: "order_courier_assigned",
         delivering: "order_delivering",
-        delivered: "order_delivered"
+        delivered: "order_delivered",
+        problem: "order_problem",
+        cancelled: "order_cancelled"
       };
       const customerEventType = customerEventByStatus[body.status];
 
@@ -2830,103 +4997,93 @@ export async function adminRoutes(app: FastifyInstance) {
       id: z.string().uuid()
     }).parse(request.params ?? {});
 
+    const adminContext = (request as AdminRequest).adminContext;
+
+    if (!adminContext?.userId) {
+      return reply.status(401).send({
+        ok: false,
+        message: "Требуется вход в CRM"
+      });
+    }
+
     const { client } = createDb();
 
     try {
       const shop = await getShop(client);
 
-      const orderRows = await client<{
-        id: string;
-        order_number: string;
-        status: string;
-      }[]>`
-        SELECT id, order_number, status
-        FROM orders
-        WHERE shop_id = ${shop.id}
-          AND id = ${params.id}
-        LIMIT 1
-      `;
+      const result = await client.begin(async (transaction) => {
+        const orderRows = await transaction<{
+          id: string;
+          order_number: string;
+          status: string;
+        }[]>`
+          SELECT id, order_number, status::text AS status
+          FROM orders
+          WHERE shop_id = ${shop.id}
+            AND id = ${params.id}
+          LIMIT 1
+          FOR UPDATE
+        `;
 
-      const order = orderRows[0];
+        const order = orderRows[0];
 
-      if (!order) {
-        return reply.status(404).send({
-          ok: false,
-          message: "Заказ не найден"
-        });
-      }
+        if (!order) {
+          throw new HttpError(404, "Заказ не найден");
+        }
 
-      if (order.status === "cancelled") {
-        return reply.status(400).send({
-          ok: false,
-          message: "Отменённый заказ нельзя подтвердить"
-        });
-      }
+        if (order.status === "cancelled") {
+          throw new HttpError(400, "Отменённый заказ нельзя подтвердить");
+        }
 
-      if (order.status !== "new") {
-        return {
-          ok: true,
-          message: "Заказ уже обработан"
-        };
-      }
+        if (order.status !== "new") {
+          return { changed: false, orderId: order.id };
+        }
 
-      await client`
-        UPDATE orders
-        SET status = 'confirmed',
-            updated_at = NOW()
-        WHERE id = ${order.id}
-      `;
+        await transaction`
+          UPDATE orders
+          SET status = 'confirmed',
+              manager_id = COALESCE(manager_id, ${adminContext.userId}),
+              updated_at = NOW()
+          WHERE id = ${order.id}
+            AND status = 'new'
+        `;
 
-      await client`
-        INSERT INTO order_status_history (
-          shop_id,
-          order_id,
-          from_status,
-          to_status,
-          comment,
-          created_at
-        )
-        VALUES (
-          ${shop.id},
-          ${order.id},
-          ${order.status},
-          'confirmed',
-          'Заказ подтверждён менеджером',
-          NOW()
-        )
-      `;
+        await transaction`
+          INSERT INTO order_status_history (
+            shop_id, order_id, from_status, to_status, changed_by_user_id, comment, created_at
+          )
+          VALUES (
+            ${shop.id}, ${order.id}, 'new', 'confirmed', ${adminContext.userId},
+            'Заказ подтверждён менеджером', NOW()
+          )
+        `;
 
-      const updatedRows = await client`
-        SELECT
-          o.*,
-          c.phone AS customer_phone,
-          c.name AS customer_name,
-          o.total AS total_amount
-        FROM orders o
-        LEFT JOIN customers c ON c.id = o.customer_id
-        WHERE o.id = ${order.id}
-        LIMIT 1
-      `;
-        const updatedOrder = updatedRows[0] as Record<string, any> | undefined;
-
-        /* STAFF ORDER CONFIRMED EVENT REMOVED
-         *
-         * Подтверждение заказа отправляется клиенту.
-         * Общая рассылка сотрудникам не создаётся.
-         * Флорист и курьер получают адресные назначения.
-         */
-
-        await queueCustomerOrderNotification(client, {
+        await queueCustomerOrderNotification(transaction, {
           shopId: shop.id,
           orderId: order.id,
           type: "order_confirmed",
           status: "confirmed"
         });
 
+        return { changed: true, orderId: order.id };
+      });
+
+      const updatedRows = await client`
+        SELECT
+          o.*,
+          COALESCE(NULLIF(o.metadata #>> '{customer,phone}', ''), c.phone) AS customer_phone,
+          COALESCE(NULLIF(o.metadata #>> '{customer,name}', ''), c.name) AS customer_name,
+          o.total AS total_amount
+        FROM orders o
+        LEFT JOIN customers c ON c.id = o.customer_id
+        WHERE o.id = ${result.orderId}
+        LIMIT 1
+      `;
 
       return {
         ok: true,
-        order: updatedRows[0]
+        changed: result.changed,
+        order: updatedRows[0] ?? null
       };
     } finally {
       await client.end();
@@ -2940,17 +5097,10 @@ export async function adminRoutes(app: FastifyInstance) {
     }).parse(request.params ?? {});
 
     const body = z.object({
-      paymentUrl: z.string()
-      .trim()
-      .url()
-      .refine((value) => {
+      paymentUrl: z.string().trim().url().refine((value) => {
         try {
           const url = new URL(value);
-
-          return (
-            url.protocol === "https:"
-            || url.protocol === "http:"
-          );
+          return url.protocol === "https:" || url.protocol === "http:";
         } catch {
           return false;
         }
@@ -2959,136 +5109,150 @@ export async function adminRoutes(app: FastifyInstance) {
       })
     }).parse(request.body ?? {});
 
+    const adminContext = (request as AdminRequest).adminContext;
+
+    if (!adminContext?.userId) {
+      return reply.status(401).send({
+        ok: false,
+        message: "Требуется вход в CRM"
+      });
+    }
+
     const { client } = createDb();
 
     try {
       const shop = await getShop(client);
 
-      const orderRows = await client<{
-        id: string;
-        order_number: string;
-        status: string;
-        payment_status: string;
-        payment_method: string;
-        total: number;
-      }[]>`
-        SELECT id, order_number, status, payment_status, payment_method, total
-        FROM orders
-        WHERE shop_id = ${shop.id}
-          AND id = ${params.id}
-        LIMIT 1
-      `;
-
-      const order = orderRows[0];
-
-      if (!order) {
-        return reply.status(404).send({
-          ok: false,
-          message: "Заказ не найден"
-        });
-      }
-
-      if (order.status !== "confirmed") {
-        return reply.status(400).send({
-          ok: false,
-          message: "Ссылку на оплату можно добавить только после подтверждения заказа"
-        });
-      }
-
-      if (order.payment_status === "paid") {
-        return reply.status(400).send({
-          ok: false,
-          message: "Заказ уже оплачен"
-        });
-      }
-
-      const paymentRows = await client`
-        INSERT INTO payments (
-          shop_id,
-          order_id,
-          provider,
-          method,
-          status,
-          amount,
-          currency,
-          payment_url,
-          raw_payload,
-          created_at,
-          updated_at
-        )
-        VALUES (
-          ${shop.id},
-          ${order.id},
-          'manual',
-          ${order.payment_method},
-          'pending',
-          ${Number(order.total || 0)},
-          'RUB',
-          ${body.paymentUrl},
-          ${JSON.stringify({ source: "admin_manual_link" })},
-          NOW(),
-          NOW()
-        )
-        RETURNING *
-      `;
-
-      await client`
-        UPDATE orders
-        SET payment_status = 'pending',
-            updated_at = NOW()
-        WHERE id = ${order.id}
-      `;
-        const payment = paymentRows[0] as Record<string, any> | undefined;
-
-        await client`
-          INSERT INTO notification_events (
-            shop_id,
-            order_id,
-            type,
-            channel,
-            recipient_type,
-            status,
-            payload,
-            created_at,
-            updated_at
-          )
-          VALUES (
-            ${shop.id},
-            ${order.id},
-            'payment_link_added',
-            'telegram',
-            'staff',
-            'pending',
-            ${JSON.stringify({
-              orderId: order.id,
-              orderNumber: order.order_number,
-              status: order.status,
-              paymentStatus: order.payment_status,
-              amount: order.total,
-              paymentUrl: body.paymentUrl,
-              paymentId: payment?.id ?? null
-            })},
-            NOW(),
-            NOW()
-          )
+      const result = await client.begin(async (transaction) => {
+        const orderRows = await transaction<{
+          id: string;
+          order_number: string;
+          status: string;
+          payment_status: string;
+          payment_method: string;
+          total: number;
+        }[]>`
+          SELECT id, order_number, status::text AS status,
+                 payment_status::text AS payment_status,
+                 payment_method::text AS payment_method, total
+          FROM orders
+          WHERE shop_id = ${shop.id}
+            AND id = ${params.id}
+          LIMIT 1
+          FOR UPDATE
         `;
 
-        await queueCustomerOrderNotification(client, {
-          shopId: shop.id,
-          orderId: order.id,
-          type: "payment_link_added",
-          status: order.status,
-          extraPayload: {
-            amount: order.total,
-            paymentUrl: body.paymentUrl,
-            paymentId: payment?.id ?? null
-          }
-        });
+        const order = orderRows[0];
 
+        if (!order) {
+          throw new HttpError(404, "Заказ не найден");
+        }
+
+        if (order.status === "new") {
+          throw new HttpError(400, "Сначала подтвердите заказ");
+        }
+
+        if (order.status === "cancelled") {
+          throw new HttpError(400, "Для отменённого заказа ссылка оплаты недоступна");
+        }
+
+        if (order.payment_status === "paid") {
+          throw new HttpError(400, "Заказ уже оплачен");
+        }
+
+        if (order.payment_status === "refunded") {
+          throw new HttpError(400, "Для заказа с возвратом нельзя создавать новую ссылку оплаты");
+        }
+
+        if (order.payment_status === "cancelled") {
+          throw new HttpError(400, "Оплата заказа отменена");
+        }
+
+        const existingRows = await transaction<{ id: string; payment_url: string | null }[]>`
+          SELECT id, payment_url
+          FROM payments
+          WHERE shop_id = ${shop.id}
+            AND order_id = ${order.id}
+            AND status = 'pending'
+          ORDER BY created_at DESC
+          LIMIT 1
+          FOR UPDATE
+        `;
+
+        const existing = existingRows[0];
+        let paymentRows;
+
+        if (existing) {
+          paymentRows = await transaction`
+            UPDATE payments
+            SET method = ${order.payment_method}::payment_method,
+                amount = ${Number(order.total || 0)},
+                payment_url = ${body.paymentUrl},
+                raw_payload = COALESCE(raw_payload, '{}'::jsonb)
+                  || ${JSON.stringify({ source: "admin_manual_link", updatedByUserId: adminContext.userId })}::jsonb,
+                updated_at = NOW()
+            WHERE id = ${existing.id}
+            RETURNING *
+          `;
+        } else {
+          paymentRows = await transaction`
+            INSERT INTO payments (
+              shop_id, order_id, provider, method, status, amount, currency,
+              payment_url, raw_payload, created_at, updated_at
+            )
+            VALUES (
+              ${shop.id}, ${order.id}, 'manual', ${order.payment_method}::payment_method,
+              'pending', ${Number(order.total || 0)}, 'RUB', ${body.paymentUrl},
+              ${JSON.stringify({ source: "admin_manual_link", createdByUserId: adminContext.userId })}::jsonb,
+              NOW(), NOW()
+            )
+            RETURNING *
+          `;
+        }
+
+        await transaction`
+          UPDATE orders
+          SET payment_status = 'pending', updated_at = NOW()
+          WHERE id = ${order.id}
+        `;
+
+        const linkChanged = !existing || existing.payment_url !== body.paymentUrl;
+
+        if (linkChanged) {
+          await addOrderOperationalHistory(transaction, {
+            shopId: shop.id,
+            orderId: order.id,
+            status: order.status,
+            userId: adminContext.userId,
+            comment: existing ? "Обновлена ссылка на оплату" : "Добавлена ссылка на оплату"
+          });
+
+          await queueCustomerOrderNotification(transaction, {
+            shopId: shop.id,
+            orderId: order.id,
+            type: "payment_link_added",
+            status: order.status,
+            extraPayload: {
+              amount: order.total,
+              paymentUrl: body.paymentUrl,
+              paymentId: (paymentRows[0] as Record<string, unknown> | undefined)?.id ?? null
+            }
+          });
+        }
+
+        return {
+          order,
+          payment: paymentRows[0],
+          isNew: !existing,
+          linkChanged
+        };
+      });
 
       return {
         ok: true,
-        payment: paymentRows[0]
+        created: result.isNew,
+        changed: result.linkChanged,
+        payment: result.payment
       };
     } finally {
       await client.end();
@@ -3145,6 +5309,58 @@ export async function adminRoutes(app: FastifyInstance) {
     }
   );
 
+
+  app.post(
+    "/api/admin/orders/:id/refund",
+    async (request, reply) => {
+      const params = z.object({
+        id: z.string().uuid()
+      }).parse(request.params ?? {});
+
+      const body = z.object({
+        reason: z.string().trim().min(5).max(500),
+        cancelOrder: z.boolean().optional().default(true)
+      }).parse(request.body ?? {});
+
+      const adminContext = (request as AdminRequest).adminContext;
+
+      if (!adminContext?.userId) {
+        return reply.status(401).send({
+          ok: false,
+          message: "Требуется вход в CRM"
+        });
+      }
+
+      if (!OWNER_ADMIN_ROLES.includes(adminContext.role)) {
+        return reply.status(403).send({
+          ok: false,
+          message: "Возврат доступен только владельцу или администратору"
+        });
+      }
+
+      const { client } = createDb();
+
+      try {
+        const shop = await getShop(client);
+
+        const result = await recordFullOrderRefund({
+          client,
+          shopId: shop.id,
+          orderId: params.id,
+          actorUserId: adminContext.userId,
+          reason: body.reason,
+          cancelOrder: body.cancelOrder
+        });
+
+        return {
+          ok: true,
+          refund: result
+        };
+      } finally {
+        await client.end();
+      }
+    }
+  );
 
   app.get("/api/admin/catalog", async () => {
     const { client } = createDb();
@@ -5149,19 +7365,65 @@ export async function adminRoutes(app: FastifyInstance) {
     try {
       const shop = await getShop(client);
 
+      const contentSettings = {
+        site: body.site,
+        homepage: body.homepage,
+        delivery: body.delivery
+      };
+
       const rows = await client`
-        UPDATE shop_settings
-        SET
-          phone = ${body.phone},
-          whatsapp = ${body.whatsapp},
-          telegram = ${body.telegram},
-          instagram = ${body.instagram},
-          address = ${body.address},
-          work_hours = ${body.workHours},
-          hero_title = ${body.heroTitle},
-          hero_subtitle = ${body.heroSubtitle},
+        INSERT INTO shop_settings (
+          shop_id,
+          phone,
+          whatsapp,
+          telegram,
+          instagram,
+          address,
+          work_hours,
+          hero_title,
+          hero_subtitle,
+          hero_image_url,
+          is_online_payment_enabled,
+          is_cash_payment_enabled,
+          is_transfer_payment_enabled,
+          settings,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          ${shop.id},
+          ${body.phone || null},
+          ${body.whatsapp || null},
+          ${body.telegram || null},
+          ${body.instagram || null},
+          ${body.address || null},
+          ${body.workHours || null},
+          ${body.heroTitle},
+          ${body.heroSubtitle},
+          ${body.heroImageUrl || null},
+          ${body.isOnlinePaymentEnabled},
+          ${body.isCashPaymentEnabled},
+          ${body.isTransferPaymentEnabled},
+          ${JSON.stringify(contentSettings)}::jsonb,
+          NOW(),
+          NOW()
+        )
+        ON CONFLICT (shop_id)
+        DO UPDATE SET
+          phone = EXCLUDED.phone,
+          whatsapp = EXCLUDED.whatsapp,
+          telegram = EXCLUDED.telegram,
+          instagram = EXCLUDED.instagram,
+          address = EXCLUDED.address,
+          work_hours = EXCLUDED.work_hours,
+          hero_title = EXCLUDED.hero_title,
+          hero_subtitle = EXCLUDED.hero_subtitle,
+          hero_image_url = EXCLUDED.hero_image_url,
+          is_online_payment_enabled = EXCLUDED.is_online_payment_enabled,
+          is_cash_payment_enabled = EXCLUDED.is_cash_payment_enabled,
+          is_transfer_payment_enabled = EXCLUDED.is_transfer_payment_enabled,
+          settings = EXCLUDED.settings,
           updated_at = NOW()
-        WHERE shop_id = ${shop.id}
         RETURNING *
       `;
 
@@ -5752,6 +8014,17 @@ export async function adminRoutes(app: FastifyInstance) {
         });
       }
 
+      if (
+        body.oldPrice !== null
+        && body.oldPrice <= body.price
+      ) {
+        return reply.status(400).send({
+          ok: false,
+          message:
+            "Старая цена должна быть выше текущей цены"
+        });
+      }
+
       const rows = await client`
         INSERT INTO products (
           shop_id,
@@ -5760,7 +8033,11 @@ export async function adminRoutes(app: FastifyInstance) {
           name,
           short_description,
           description,
+          composition,
+          care_text,
           price,
+          old_price,
+          cost_price,
           status,
           stock_quantity,
           is_stock_visible,
@@ -5776,7 +8053,11 @@ export async function adminRoutes(app: FastifyInstance) {
           ${name},
           ${body.shortDescription},
           ${body.description},
+          ${body.composition},
+          ${body.careText},
           ${body.price},
+          ${body.oldPrice},
+          ${body.costPrice},
           ${body.status},
           ${body.stockQuantity},
           false,
@@ -6288,13 +8569,277 @@ export async function adminRoutes(app: FastifyInstance) {
     }
   });
 
+
+  app.get("/api/admin/notifications", async (request) => {
+    const query = z.object({
+      status: z.enum([
+        "all",
+        "pending",
+        "processing",
+        "sent",
+        "failed",
+        "skipped"
+      ]).optional().default("all"),
+      recipientType: z.enum([
+        "all",
+        "customer",
+        "staff"
+      ]).optional().default("all"),
+      type: z.string().trim().max(80).optional().default(""),
+      q: z.string().trim().max(160).optional().default(""),
+      page: z.coerce.number().int().min(1).max(100000).optional().default(1),
+      pageSize: z.coerce.number().int().min(10).max(100).optional().default(30)
+    }).parse(request.query ?? {});
+
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+      const offset = (query.page - 1) * query.pageSize;
+      const search = `%${query.q}%`;
+      const typeFilter = query.type ? `%${query.type}%` : "%";
+
+      const [metricsRows, totalRows, eventRows, typeRows] = await Promise.all([
+        client<{
+          pending: number;
+          processing: number;
+          sent: number;
+          failed: number;
+          skipped: number;
+          sent_today: number;
+        }[]>`
+          SELECT
+            COUNT(*) FILTER (WHERE status = 'pending')::int AS pending,
+            COUNT(*) FILTER (WHERE status = 'processing')::int AS processing,
+            COUNT(*) FILTER (WHERE status = 'sent')::int AS sent,
+            COUNT(*) FILTER (WHERE status = 'failed')::int AS failed,
+            COUNT(*) FILTER (WHERE status = 'skipped')::int AS skipped,
+            COUNT(*) FILTER (
+              WHERE status = 'sent'
+                AND (sent_at AT TIME ZONE 'Europe/Moscow')::date
+                  = (NOW() AT TIME ZONE 'Europe/Moscow')::date
+            )::int AS sent_today
+          FROM notification_events
+          WHERE shop_id = ${shop.id}
+            AND created_at > NOW() - INTERVAL '30 days'
+        `,
+        client<{ count: number }[]>`
+          SELECT COUNT(*)::int AS count
+          FROM notification_events ne
+          LEFT JOIN orders o ON o.id = ne.order_id
+          WHERE ne.shop_id = ${shop.id}
+            AND (${query.status} = 'all' OR ne.status = ${query.status})
+            AND (${query.recipientType} = 'all' OR ne.recipient_type = ${query.recipientType})
+            AND ne.type ILIKE ${typeFilter}
+            AND (
+              ${query.q} = ''
+              OR ne.type ILIKE ${search}
+              OR COALESCE(ne.error, '') ILIKE ${search}
+              OR COALESCE(ne.recipient_telegram_id, '') ILIKE ${search}
+              OR COALESCE(o.order_number, '') ILIKE ${search}
+            )
+        `,
+        client<{
+          id: string;
+          order_id: string | null;
+          order_number: string | null;
+          type: string;
+          channel: string;
+          recipient_type: string;
+          recipient_telegram_id: string | null;
+          status: string;
+          attempts: number;
+          error: string | null;
+          payload: unknown;
+          sent_at: string | null;
+          created_at: string;
+          updated_at: string;
+        }[]>`
+          SELECT
+            ne.id,
+            ne.order_id,
+            o.order_number,
+            ne.type,
+            ne.channel,
+            ne.recipient_type,
+            ne.recipient_telegram_id,
+            ne.status,
+            ne.attempts,
+            ne.error,
+            ne.payload,
+            ne.sent_at::text,
+            ne.created_at::text,
+            ne.updated_at::text
+          FROM notification_events ne
+          LEFT JOIN orders o ON o.id = ne.order_id
+          WHERE ne.shop_id = ${shop.id}
+            AND (${query.status} = 'all' OR ne.status = ${query.status})
+            AND (${query.recipientType} = 'all' OR ne.recipient_type = ${query.recipientType})
+            AND ne.type ILIKE ${typeFilter}
+            AND (
+              ${query.q} = ''
+              OR ne.type ILIKE ${search}
+              OR COALESCE(ne.error, '') ILIKE ${search}
+              OR COALESCE(ne.recipient_telegram_id, '') ILIKE ${search}
+              OR COALESCE(o.order_number, '') ILIKE ${search}
+            )
+          ORDER BY
+            CASE ne.status
+              WHEN 'failed' THEN 1
+              WHEN 'pending' THEN 2
+              WHEN 'processing' THEN 3
+              WHEN 'skipped' THEN 4
+              ELSE 5
+            END,
+            ne.created_at DESC
+          LIMIT ${query.pageSize}
+          OFFSET ${offset}
+        `,
+        client<{ type: string; count: number }[]>`
+          SELECT type, COUNT(*)::int AS count
+          FROM notification_events
+          WHERE shop_id = ${shop.id}
+            AND created_at > NOW() - INTERVAL '30 days'
+          GROUP BY type
+          ORDER BY count DESC, type ASC
+          LIMIT 40
+        `
+      ]);
+
+      return {
+        ok: true,
+        metrics: metricsRows[0] ?? {
+          pending: 0,
+          processing: 0,
+          sent: 0,
+          failed: 0,
+          skipped: 0,
+          sent_today: 0
+        },
+        events: eventRows,
+        types: typeRows,
+        pagination: {
+          page: query.page,
+          pageSize: query.pageSize,
+          total: Number(totalRows[0]?.count ?? 0),
+          pages: Math.max(1, Math.ceil(Number(totalRows[0]?.count ?? 0) / query.pageSize))
+        }
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.post("/api/admin/notifications/:id/retry", async (request, reply) => {
+    const params = z.object({
+      id: z.string().uuid()
+    }).parse(request.params ?? {});
+
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+      const rows = await client<{ id: string }[]>`
+        UPDATE notification_events
+        SET status = 'pending',
+            attempts = 0,
+            error = NULL,
+            sent_at = NULL,
+            updated_at = NOW()
+        WHERE shop_id = ${shop.id}
+          AND id = ${params.id}
+          AND status IN ('failed', 'skipped')
+        RETURNING id
+      `;
+
+      if (!rows[0]) {
+        return reply.status(409).send({
+          ok: false,
+          message: "Повтор доступен только для пропущенного или неотправленного уведомления"
+        });
+      }
+
+      return { ok: true };
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.post("/api/admin/notifications/:id/skip", async (request, reply) => {
+    const params = z.object({
+      id: z.string().uuid()
+    }).parse(request.params ?? {});
+
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+      const rows = await client<{ id: string }[]>`
+        UPDATE notification_events
+        SET status = 'skipped',
+            error = COALESCE(error, 'Отменено сотрудником CRM'),
+            updated_at = NOW()
+        WHERE shop_id = ${shop.id}
+          AND id = ${params.id}
+          AND status IN ('pending', 'processing', 'failed')
+        RETURNING id
+      `;
+
+      if (!rows[0]) {
+        return reply.status(409).send({
+          ok: false,
+          message: "Это уведомление уже обработано"
+        });
+      }
+
+      return { ok: true };
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.post("/api/admin/notifications/retry-failed", async () => {
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+      const rows = await client<{ id: string }[]>`
+        WITH failed_events AS (
+          SELECT id
+          FROM notification_events
+          WHERE shop_id = ${shop.id}
+            AND status = 'failed'
+            AND created_at > NOW() - INTERVAL '30 days'
+          ORDER BY created_at ASC
+          LIMIT 100
+        )
+        UPDATE notification_events ne
+        SET status = 'pending',
+            attempts = 0,
+            error = NULL,
+            sent_at = NULL,
+            updated_at = NOW()
+        FROM failed_events
+        WHERE ne.id = failed_events.id
+        RETURNING ne.id
+      `;
+
+      return {
+        ok: true,
+        retried: rows.length
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
   app.get("/api/admin/settings", async () => {
     const { client } = createDb();
 
     try {
       const shop = await getShop(client);
 
-      const [settings, domains] = await Promise.all([
+      const [settings, domains, heroImages] = await Promise.all([
         client`
           SELECT *
           FROM shop_settings
@@ -6306,13 +8851,42 @@ export async function adminRoutes(app: FastifyInstance) {
           FROM shop_domains
           WHERE shop_id = ${shop.id}
           ORDER BY is_primary DESC, created_at ASC
+        `,
+        client`
+          SELECT
+            p.id AS product_id,
+            p.name AS product_name,
+            image.url,
+            image.alt
+          FROM products p
+          INNER JOIN LATERAL (
+            SELECT
+              pi.url,
+              pi.alt
+            FROM product_images pi
+            WHERE pi.shop_id = p.shop_id
+              AND pi.product_id = p.id
+            ORDER BY
+              pi.is_main DESC,
+              pi.sort_order ASC,
+              pi.created_at ASC
+            LIMIT 1
+          ) image ON true
+          WHERE p.shop_id = ${shop.id}
+            AND p.status <> 'archived'
+          ORDER BY
+            p.is_featured DESC,
+            p.sort_order ASC,
+            p.name ASC
+          LIMIT 200
         `
       ]);
 
       return {
         shop,
         settings: settings[0] ?? null,
-        domains
+        domains,
+        heroImages
       };
     } finally {
       await client.end();

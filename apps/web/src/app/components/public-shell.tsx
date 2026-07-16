@@ -22,42 +22,113 @@ import {
   ShellIcon
 } from "./shell-icon";
 
-type PublicShellProps = {
-  children: ReactNode;
+export type PublicShellSettings = {
+  phone: string;
+  whatsapp: string;
+  telegram: string;
+  instagram: string;
+  address: string;
+  workHours: string;
+  site: {
+    brandName: string;
+    brandSubtitle: string;
+    footerDescription: string;
+    email: string;
+    legalName: string;
+    inn: string;
+    ogrn: string;
+    policyUrl: string;
+    offerUrl: string;
+    deliveryTermsUrl: string;
+    returnsUrl: string;
+  };
 };
 
-function BrandWordmark() {
+type PublicShellProps = {
+  children: ReactNode;
+  settings: PublicShellSettings;
+};
+
+function contactHref(
+  type: "phone" | "whatsapp" | "telegram" | "instagram" | "email",
+  value: string
+) {
+  const trimmed = value.trim();
+
+  if (!trimmed) {
+    return "";
+  }
+
+  if (type === "email") {
+    return `mailto:${trimmed}`;
+  }
+
+  if (type === "phone") {
+    const normalized = trimmed.replace(
+      /[^+\d]/g,
+      ""
+    );
+
+    return normalized
+      ? `tel:${normalized}`
+      : "";
+  }
+
+  if (/^https:\/\//i.test(trimmed)) {
+    return trimmed;
+  }
+
+  if (type === "whatsapp") {
+    const digits = trimmed.replace(
+      /\D/g,
+      ""
+    );
+
+    return digits
+      ? `https://wa.me/${digits}`
+      : "";
+  }
+
+  if (type === "telegram") {
+    const username = trimmed
+      .replace(/^@/, "")
+      .replace(/[^a-zA-Z0-9_]/g, "");
+
+    return username
+      ? `https://t.me/${username}`
+      : "";
+  }
+
+  return "";
+}
+
+function BrandWordmark({
+  brandName,
+  brandSubtitle
+}: {
+  brandName: string;
+  brandSubtitle: string;
+}) {
   return (
-    <span className="vm-clean-wordmark">
-      <span className="vm-clean-wordmark-line">
-        <span>Выбери</span>
-
-        <span
-          className="vm-clean-flower"
-          aria-hidden="true"
-        >
-          <i />
-          <i />
-          <i />
-          <i />
-          <b />
-        </span>
-
-        <span>Меня</span>
+    <>
+      <span className="vm-clean-brand-line">
+        {brandName}
       </span>
 
-      <small>
-        ЦВЕТЫ И ПОДАРКИ
-      </small>
-    </span>
+      {brandSubtitle ? (
+        <small className="vm-clean-brand-subtitle">
+          {brandSubtitle}
+        </small>
+      ) : null}
+    </>
   );
 }
 
 export function PublicShell({
-  children
+  children,
+  settings
 }: PublicShellProps) {
-  const pathname =
-    usePathname();
+  const pathname = usePathname();
 
   if (
     pathname.startsWith(
@@ -93,8 +164,79 @@ export function PublicShell({
       "/cart"
     );
 
-  const year =
-    new Date().getFullYear();
+  const year = new Date().getFullYear();
+
+  const brandName =
+    settings.site.brandName
+    || "Выбери Меня";
+
+  const brandSubtitle =
+    settings.site.brandSubtitle
+    || "ЦВЕТЫ И ПОДАРКИ";
+
+  const contacts = [
+    {
+      label: "Телефон",
+      value: settings.phone,
+      href: contactHref(
+        "phone",
+        settings.phone
+      )
+    },
+    {
+      label: "WhatsApp",
+      value: settings.whatsapp,
+      href: contactHref(
+        "whatsapp",
+        settings.whatsapp
+      )
+    },
+    {
+      label: "Telegram",
+      value: settings.telegram,
+      href: contactHref(
+        "telegram",
+        settings.telegram
+      )
+    },
+    {
+      label: "Instagram",
+      value: settings.instagram,
+      href: contactHref(
+        "instagram",
+        settings.instagram
+      )
+    },
+    {
+      label: "Email",
+      value: settings.site.email,
+      href: contactHref(
+        "email",
+        settings.site.email
+      )
+    }
+  ].filter(
+    (item) => item.value && item.href
+  );
+
+  const legalLinks = [
+    {
+      label: "Политика конфиденциальности",
+      href: settings.site.policyUrl
+    },
+    {
+      label: "Публичная оферта",
+      href: settings.site.offerUrl
+    },
+    {
+      label: "Условия доставки",
+      href: settings.site.deliveryTermsUrl
+    },
+    {
+      label: "Возврат и претензии",
+      href: settings.site.returnsUrl
+    }
+  ].filter((item) => item.href);
 
   return (
     <div className="vm-clean-shell">
@@ -120,7 +262,8 @@ export function PublicShell({
           <i aria-hidden="true" />
 
           <span>
-            Удобные интервалы доставки
+            {settings.workHours
+              || "Удобные интервалы доставки"}
           </span>
         </div>
       </div>
@@ -131,18 +274,18 @@ export function PublicShell({
             href="/"
             className="vm-clean-brand"
             aria-label={
-              "Выбери Меня — "
-              + "перейти на главную"
+              `${brandName} — перейти на главную`
             }
           >
-            <BrandWordmark />
+            <BrandWordmark
+              brandName={brandName}
+              brandSubtitle={brandSubtitle}
+            />
           </Link>
 
           <nav
             className="vm-clean-desktop-nav"
-            aria-label={
-              "Основная навигация"
-            }
+            aria-label="Основная навигация"
           >
             <Link
               href="/catalog"
@@ -187,13 +330,8 @@ export function PublicShell({
               }
               aria-label="Профиль"
             >
-              <ShellIcon
-                name="profile"
-              />
-
-              <span>
-                Профиль
-              </span>
+              <ShellIcon name="profile" />
+              <span>Профиль</span>
             </Link>
 
             <Link
@@ -206,26 +344,17 @@ export function PublicShell({
               aria-label="Корзина"
             >
               <span className="vm-clean-action-icon">
-                <ShellIcon
-                  name="cart"
-                />
-
+                <ShellIcon name="cart" />
                 <CartCountBadge />
               </span>
-
-              <span>
-                Корзина
-              </span>
+              <span>Корзина</span>
             </Link>
           </div>
 
           <Link
             href="/catalog"
             className="vm-clean-mobile-search"
-            aria-label={
-              "Перейти к поиску "
-              + "по каталогу"
-            }
+            aria-label="Перейти к поиску по каталогу"
           >
             <ShellIcon name="search" />
           </Link>
@@ -246,75 +375,109 @@ export function PublicShell({
               href="/"
               className="vm-clean-brand"
             >
-              <BrandWordmark />
+              <BrandWordmark
+                brandName={brandName}
+                brandSubtitle={brandSubtitle}
+              />
             </Link>
 
             <p>
-              Собираем букеты под заказ,
-              показываем готовую работу
-              перед отправкой и бережно
-              доставляем получателю.
+              {settings.site.footerDescription}
             </p>
+
+            {settings.address ? (
+              <span className="vm-clean-footer-note">
+                {settings.address}
+              </span>
+            ) : null}
           </section>
 
           <nav
             className="vm-clean-footer-column"
-            aria-label={
-              "Разделы магазина"
-            }
+            aria-label="Разделы магазина"
           >
-            <strong>
-              Покупателям
-            </strong>
-
-            <Link href="/catalog">
-              Каталог
-            </Link>
-
-            <Link href="/cart">
-              Корзина
-            </Link>
-
-            <Link href="/orders">
-              Мои заказы
-            </Link>
-
-            <Link href="/account">
-              Профиль
-            </Link>
+            <strong>Покупателям</strong>
+            <Link href="/catalog">Каталог</Link>
+            <Link href="/cart">Корзина</Link>
+            <Link href="/orders">Мои заказы</Link>
+            <Link href="/account">Профиль</Link>
           </nav>
 
-          <section className="vm-clean-footer-column">
-            <strong>
-              Наш сервис
-            </strong>
+          {contacts.length > 0 ? (
+            <section className="vm-clean-footer-column">
+              <strong>Контакты</strong>
 
-            <span>
-              Сборка под заказ
-            </span>
+              {contacts.map((contact) => (
+                <a
+                  key={contact.label}
+                  href={contact.href}
+                  target={
+                    contact.href.startsWith("http")
+                      ? "_blank"
+                      : undefined
+                  }
+                  rel={
+                    contact.href.startsWith("http")
+                      ? "noopener noreferrer"
+                      : undefined
+                  }
+                >
+                  {contact.label}
+                </a>
+              ))}
 
-            <span>
-              Фото готового букета
-            </span>
+              {settings.workHours ? (
+                <span>{settings.workHours}</span>
+              ) : null}
+            </section>
+          ) : (
+            <section className="vm-clean-footer-column">
+              <strong>Наш сервис</strong>
+              <span>Сборка под заказ</span>
+              <span>Фото готового букета</span>
+              <span>Выбор интервала доставки</span>
+              <span>Отслеживание заказа</span>
+            </section>
+          )}
 
-            <span>
-              Выбор интервала доставки
-            </span>
+          {legalLinks.length > 0 ? (
+            <nav
+              className="vm-clean-footer-column"
+              aria-label="Документы"
+            >
+              <strong>Документы</strong>
 
-            <span>
-              Отслеживание заказа
-            </span>
-          </section>
+              {legalLinks.map((item) => (
+                <a
+                  key={item.label}
+                  href={item.href}
+                >
+                  {item.label}
+                </a>
+              ))}
+            </nav>
+          ) : null}
         </div>
 
         <div className="vm-clean-footer-bottom">
           <div className="vm-clean-container">
             <span>
-              © {year} Выбери Меня
+              © {year} {brandName}
             </span>
 
             <span>
-              Цветы и подарки
+              {[
+                settings.site.legalName,
+                settings.site.inn
+                  ? `ИНН ${settings.site.inn}`
+                  : "",
+                settings.site.ogrn
+                  ? `ОГРН ${settings.site.ogrn}`
+                  : ""
+              ]
+                .filter(Boolean)
+                .join(" · ")
+                || brandSubtitle}
             </span>
           </div>
         </div>

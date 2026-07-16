@@ -225,6 +225,30 @@ export default async function AdminCatalogPage() {
       !safeProductImageUrl(product.primary_image_url)
   ).length;
 
+  const outOfStockCount = products.filter(
+    (product) =>
+      String(product.status) === "active"
+      && Number(product.stock_quantity ?? 0) <= 0
+  ).length;
+
+  const lowStockCount = products.filter(
+    (product) => {
+      const stock = Number(
+        product.stock_quantity ?? 0
+      );
+
+      return (
+        String(product.status) === "active"
+        && stock > 0
+        && stock <= 5
+      );
+    }
+  ).length;
+
+  const withoutCategoryCount = products.filter(
+    (product) => !product.category_id
+  ).length;
+
   return (
     <div className="admin-page admin-catalog-page">
       <div className="admin-page-head">
@@ -267,6 +291,39 @@ export default async function AdminCatalogPage() {
         >
           <span>Без фотографии</span>
           <strong>{withoutPhotoCount}</strong>
+        </article>
+
+        <article
+          className={
+            outOfStockCount > 0
+              ? "admin-catalog-metric danger"
+              : "admin-catalog-metric"
+          }
+        >
+          <span>Закончились</span>
+          <strong>{outOfStockCount}</strong>
+        </article>
+
+        <article
+          className={
+            lowStockCount > 0
+              ? "admin-catalog-metric warning"
+              : "admin-catalog-metric"
+          }
+        >
+          <span>Осталось 1–5</span>
+          <strong>{lowStockCount}</strong>
+        </article>
+
+        <article
+          className={
+            withoutCategoryCount > 0
+              ? "admin-catalog-metric warning"
+              : "admin-catalog-metric"
+          }
+        >
+          <span>Без категории</span>
+          <strong>{withoutCategoryCount}</strong>
         </article>
       </section>
 

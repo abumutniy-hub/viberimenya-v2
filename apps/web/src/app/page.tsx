@@ -4,6 +4,16 @@ import {
   ProcessCarousel
 } from "./components/process-carousel";
 
+import {
+  AddToCartButton,
+  FavoriteButton
+} from "./components/add-to-cart-button";
+
+import {
+  ProductTileImage
+} from "./components/product-tile-image";
+
+
 export const dynamic =
   "force-dynamic";
 
@@ -18,17 +28,47 @@ type Category = {
   slug: string;
   name: string;
   description?: string | null;
+  imageUrl?: string | null;
+  productCount?: number;
+};
+
+type HomeProduct = {
+  id: string;
+  categoryId?: string | null;
+  categoryName?: string | null;
+  categorySlug?: string | null;
+  slug: string;
+  name: string;
+  shortDescription?: string | null;
+  description?: string | null;
+  price: number;
+  oldPrice?: number | null;
+  availability: "available" | "unavailable";
+  isFeatured?: boolean;
+  primaryImage?: {
+    url: string;
+    alt?: string | null;
+  } | null;
 };
 
 type HomeResponse = {
   settings: ShopSettings | null;
   sections: {
     hero: {
+      eyebrow: string;
       title: string;
       subtitle: string;
+      imageUrl?: string | null;
+      primaryCtaLabel: string;
+      secondaryCtaLabel: string;
+      benefits: Array<{
+        title: string;
+        text: string;
+      }>;
     };
     occasions: string[];
     categories: Category[];
+    featuredProducts: HomeProduct[];
   };
 };
 
@@ -46,6 +86,13 @@ type DeliveryResponse = {
     startsAt: string;
     endsAt: string;
   }>;
+  pickup?: {
+    enabled: boolean;
+    address: string;
+    note: string;
+  };
+  minimumOrderAmount?: number;
+  notice?: string;
 };
 
 type FeatureIconName =
@@ -225,6 +272,17 @@ function formatMoney(
   );
 }
 
+function hasOldPrice(
+  product: HomeProduct
+) {
+  return (
+    product.oldPrice !== null
+    && product.oldPrice !== undefined
+    && Number(product.oldPrice)
+      > Number(product.price)
+  );
+}
+
 export default async function HomePage() {
   const [
     home,
@@ -250,6 +308,40 @@ export default async function HomePage() {
       + "и бережно доставляем получателю."
     );
 
+  const eyebrow =
+    home?.sections.hero.eyebrow
+    ?? "Цветочная мастерская";
+
+  const primaryCtaLabel =
+    home?.sections.hero.primaryCtaLabel
+    ?? "Выбрать букет";
+
+  const secondaryCtaLabel =
+    home?.sections.hero.secondaryCtaLabel
+    ?? "Условия доставки";
+
+  const benefits =
+    home?.sections.hero.benefits
+    && home.sections.hero.benefits.length === 3
+      ? home.sections.hero.benefits
+      : [
+          {
+            title: "Стильные букеты",
+            text:
+              "Авторские композиции из свежих цветов на любой случай."
+          },
+          {
+            title: "Фото перед доставкой",
+            text:
+              "Покажем готовый букет, чтобы вы были уверены в результате."
+          },
+          {
+            title: "Бережная доставка",
+            text:
+              "Аккуратно упакуем и доставим в выбранный интервал."
+          }
+        ];
+
   const categories =
     home?.sections.categories
     && home.sections.categories.length > 0
@@ -274,6 +366,28 @@ export default async function HomePage() {
           "Учителю"
         ];
 
+  const featuredProducts =
+    home?.sections.featuredProducts
+    ?? [];
+
+  const heroProduct =
+    featuredProducts[0]
+    ?? null;
+
+  const heroProductHref =
+    heroProduct
+      ? `/product/${heroProduct.slug}`
+      : "/catalog";
+
+  const heroProductName =
+    heroProduct?.name
+    ?? "Нежные розы";
+
+  const heroProductImage =
+    home?.sections.hero.imageUrl
+    || heroProduct?.primaryImage?.url
+    || heroImageUrl;
+
   const zones =
     delivery?.zones ?? [];
 
@@ -291,7 +405,7 @@ export default async function HomePage() {
       <section className={styles.hero}>
         <div className={styles.heroCopy}>
           <span className={styles.eyebrow}>
-            Цветочная мастерская
+            {eyebrow}
           </span>
 
           <h1>{title}</h1>
@@ -305,14 +419,14 @@ export default async function HomePage() {
               href="/catalog"
               className={styles.primaryButton}
             >
-              Выбрать букет
+              {primaryCtaLabel}
             </a>
 
             <a
-              href="/cart"
+              href="#delivery"
               className={styles.secondaryButton}
             >
-              Оформить заказ
+              {secondaryCtaLabel}
             </a>
           </div>
 
@@ -354,18 +468,21 @@ export default async function HomePage() {
         </div>
 
         <a
-          href="/product/n1"
+          href={heroProductHref}
           className={styles.heroVisual}
-          aria-label="Посмотреть букет Нежные розы"
+          aria-label={
+            `Посмотреть ${heroProductName}`
+          }
         >
-          <img
-            src={heroImageUrl}
-            alt="Нежный букет роз"
+          <ProductTileImage
+            src={heroProductImage}
+            alt={heroProductName}
+            priority
           />
 
           <span className={styles.heroOverlay}>
             <strong>
-              Нежные розы
+              {heroProductName}
             </strong>
 
             <em>
@@ -379,59 +496,26 @@ export default async function HomePage() {
         className={styles.primaryBenefits}
         aria-label="Преимущества магазина"
       >
-        <article>
-          <span className={styles.benefitIcon}>
-            <FeatureIcon name="flower" />
-          </span>
+        {benefits.map((benefit, index) => (
+          <article key={`${benefit.title}-${index}`}>
+            <span className={styles.benefitIcon}>
+              <FeatureIcon
+                name={
+                  index === 0
+                    ? "flower"
+                    : index === 1
+                      ? "camera"
+                      : "delivery"
+                }
+              />
+            </span>
 
-          <div>
-            <strong>
-              Стильные букеты
-            </strong>
-
-            <p>
-              Авторские композиции
-              из свежих цветов
-              на любой случай.
-            </p>
-          </div>
-        </article>
-
-        <article>
-          <span className={styles.benefitIcon}>
-            <FeatureIcon name="camera" />
-          </span>
-
-          <div>
-            <strong>
-              Фото перед доставкой
-            </strong>
-
-            <p>
-              Покажем готовый букет,
-              чтобы вы были уверены
-              в результате.
-            </p>
-          </div>
-        </article>
-
-        <article>
-          <span className={styles.benefitIcon}>
-            <FeatureIcon name="delivery" />
-          </span>
-
-          <div>
-            <strong>
-              Бережная доставка
-            </strong>
-
-            <p>
-              Аккуратно упакуем
-              и доставим в выбранный
-              интервал.
-            </p>
-          </div>
-        </article>
+            <div>
+              <strong>{benefit.title}</strong>
+              <p>{benefit.text}</p>
+            </div>
+          </article>
+        ))}
       </section>
 
       <section
@@ -598,6 +682,167 @@ export default async function HomePage() {
         </div>
       </section>
 
+      {featuredProducts.length > 0 ? (
+        <section
+          className={`${styles.section} ${styles.featuredSection}`}
+          id="popular"
+        >
+          <div className={styles.featuredHeadingRow}>
+            <div className={styles.sectionHeading}>
+              <span>
+                Выбор покупателей
+              </span>
+
+              <h2>
+                Популярные букеты
+              </h2>
+
+              <p>
+                Готовые композиции,
+                которые можно добавить
+                в корзину сразу с главной.
+              </p>
+            </div>
+
+            <a
+              href="/catalog?sort=recommended"
+              className={styles.featuredAllLink}
+            >
+              Смотреть весь каталог
+            </a>
+          </div>
+
+          <div className={styles.featuredGrid}>
+            {featuredProducts.map(
+              (product) => {
+                const available =
+                  product.availability
+                  === "available";
+
+                return (
+                  <article
+                    key={product.id}
+                    className={styles.featuredCard}
+                  >
+                    <div className={styles.featuredMedia}>
+                      <a
+                        href={`/product/${product.slug}`}
+                        aria-label={product.name}
+                      >
+                        <ProductTileImage
+                          src={
+                            product.primaryImage?.url
+                            ?? null
+                          }
+                          alt={
+                            product.primaryImage?.alt
+                            || product.name
+                          }
+                        />
+                      </a>
+
+                      <FavoriteButton
+                        productId={product.id}
+                        className={styles.featuredFavorite!}
+                      />
+
+                      {hasOldPrice(product) ? (
+                        <span className={styles.featuredSaleBadge}>
+                          Выгодно
+                        </span>
+                      ) : null}
+                    </div>
+
+                    <div className={styles.featuredBody}>
+                      <div className={styles.featuredMeta}>
+                        <span>
+                          {product.categoryName
+                            || "Букет"}
+                        </span>
+
+                        <em
+                          className={
+                            available
+                              ? styles.available
+                              : styles.unavailable
+                          }
+                        >
+                          {available
+                            ? "В наличии"
+                            : "Нет в наличии"}
+                        </em>
+                      </div>
+
+                      <h3>
+                        <a href={`/product/${product.slug}`}>
+                          {product.name}
+                        </a>
+                      </h3>
+
+                      <p>
+                        {product.shortDescription
+                          || product.description
+                          || "Свежая композиция для красивого повода."}
+                      </p>
+
+                      <div className={styles.featuredPriceRow}>
+                        <strong>
+                          {formatMoney(product.price)} ₽
+                        </strong>
+
+                        {hasOldPrice(product) ? (
+                          <span>
+                            {formatMoney(
+                              Number(product.oldPrice)
+                            )} ₽
+                          </span>
+                        ) : null}
+                      </div>
+
+                      <div className={styles.featuredActions}>
+                        <a
+                          href={`/product/${product.slug}`}
+                          className={styles.featuredOpenButton}
+                        >
+                          Подробнее
+                        </a>
+
+                        {available ? (
+                          <AddToCartButton
+                            className={styles.featuredCartButton!}
+                            label="В корзину"
+                            product={{
+                              id: product.id,
+                              slug: product.slug,
+                              name: product.name,
+                              price: product.price,
+                              imageUrl:
+                                product.primaryImage?.url
+                                ?? "",
+                              imageAlt:
+                                product.primaryImage?.alt
+                                || product.name
+                            }}
+                          />
+                        ) : (
+                          <button
+                            type="button"
+                            className={`${styles.featuredCartButton} ${styles.disabled}`}
+                            disabled
+                          >
+                            Недоступно
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </article>
+                );
+              }
+            )}
+          </div>
+        </section>
+      ) : null}
+
       <section
         className={styles.deliverySection}
         id="delivery"
@@ -616,6 +861,12 @@ export default async function HomePage() {
             интервал при оформлении заказа.
           </p>
         </div>
+
+        {delivery?.notice ? (
+          <div className={styles.deliveryNotice}>
+            {delivery.notice}
+          </div>
+        ) : null}
 
         <div className={styles.deliveryPanel}>
           {zones
@@ -649,6 +900,33 @@ export default async function HomePage() {
                 </div>
               )
             )}
+
+          {Number(
+            delivery?.minimumOrderAmount
+            ?? 0
+          ) > 0 ? (
+            <div className={styles.deliveryRule}>
+              <span>Минимальная сумма заказа</span>
+              <strong>
+                {formatMoney(
+                  Number(
+                    delivery?.minimumOrderAmount
+                    ?? 0
+                  )
+                )} ₽
+              </strong>
+            </div>
+          ) : null}
+
+          {delivery?.pickup?.enabled
+          && delivery.pickup.address ? (
+            <div className={styles.deliveryRule}>
+              <span>Самовывоз</span>
+              <strong>
+                {delivery.pickup.address}
+              </strong>
+            </div>
+          ) : null}
 
           <div className={styles.intervalGrid}>
             {intervals

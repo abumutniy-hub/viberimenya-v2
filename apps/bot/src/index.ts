@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, unlink, writeFile } from "node:fs/promises";
 import { extname, join, resolve } from "node:path";
 import { config } from "dotenv";
 import postgres from "postgres";
@@ -17,6 +17,7 @@ type NotificationEvent = {
   payload: Record<string, unknown>;
   attempts: number;
   created_at: string;
+  updated_at: string;
 };
 
 type TelegramUser = {
@@ -95,6 +96,32 @@ const pendingFloristProblemRequests = new Map<number, {
   userId: string;
   createdAt: number;
 }>();
+
+const pendingCourierDeliveryPhotoRequests = new Map<number, {
+  orderId: string;
+  orderNumber: string;
+  shopId: string;
+  userId: string;
+  createdAt: number;
+}>();
+
+const pendingCourierProblemRequests = new Map<number, {
+  orderId: string;
+  orderNumber: string;
+  shopId: string;
+  userId: string;
+  createdAt: number;
+}>();
+
+const pendingCustomerBouquetRevisionRequests = new Map<number, {
+  orderId: string;
+  orderNumber: string;
+  shopId: string;
+  customerId: string;
+  createdAt: number;
+}>();
+
+const MAX_DELIVERY_PHOTO_BYTES = 12 * 1024 * 1024;
 
 if (!DATABASE_URL) {
   throw new Error("DATABASE_URL is required");
@@ -179,8 +206,20 @@ async function getDefaultShopId() {
 async function queueCustomerOrderNotification(params: {
   shopId: string;
   orderId: string;
-  type: "order_ready" | "order_delivering" | "order_delivered";
-  status: "ready" | "delivering" | "delivered";
+  type:
+    | "order_ready"
+    | "order_courier_assigned"
+    | "order_delivering"
+    | "order_delivered"
+    | "order_problem"
+    | "order_cancelled";
+  status:
+    | "ready"
+    | "assigned_courier"
+    | "delivering"
+    | "delivered"
+    | "problem"
+    | "cancelled";
 }) {
   await sql`
     INSERT INTO notification_events (
@@ -212,6 +251,8 @@ async function queueCustomerOrderNotification(params: {
         'deliveryAddressText', o.delivery_address_text,
         'deliveryComment', o.delivery_comment,
         'bouquetPhotoUrl', o.bouquet_photo_url,
+        'deliveryProofPhotoUrl', o.metadata #>> '{delivery,proofPhotoUrl}',
+        'deliveredAt', o.delivered_at,
         'trackingToken', o.tracking_token,
         'trackingUrl', CASE
           WHEN o.tracking_token IS NULL OR o.tracking_token = '' THEN NULL
@@ -225,6 +266,133 @@ async function queueCustomerOrderNotification(params: {
     WHERE o.id = ${params.orderId}
       AND o.shop_id = ${params.shopId}
       AND o.customer_id IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1
+        FROM notification_events existing
+        WHERE existing.shop_id = o.shop_id
+          AND existing.order_id = o.id
+          AND existing.type = ${params.type}
+          AND existing.channel = 'telegram'
+          AND existing.recipient_type = 'customer'
+          AND existing.status IN ('pending', 'processing', 'sent')
+      )
+  `;
+}
+
+async function queueBouquetApprovalRequest(params: {
+  shopId: string;
+  orderId: string;
+}) {
+  const inserted = await sql<{ id: string }[]>`
+    INSERT INTO notification_events (
+      shop_id,
+      order_id,
+      type,
+      channel,
+      recipient_type,
+      recipient_telegram_id,
+      status,
+      payload,
+      created_at,
+      updated_at
+    )
+    SELECT
+      o.shop_id,
+      o.id,
+      'bouquet_approval_requested',
+      'telegram',
+      'customer',
+      ta.telegram_id,
+      'pending',
+      jsonb_build_object(
+        'orderId', o.id,
+        'orderNumber', o.order_number,
+        'bouquetPhotoUrl', o.bouquet_photo_url,
+        'photoVersion', COALESCE(
+          NULLIF(o.metadata #>> '{bouquetApproval,photoVersion}', '')::int,
+          1
+        ),
+        'trackingToken', o.tracking_token,
+        'trackingUrl', CASE
+          WHEN o.tracking_token IS NULL OR o.tracking_token = '' THEN NULL
+          ELSE '/order/track/' || o.tracking_token
+        END
+      ),
+      NOW(),
+      NOW()
+    FROM orders o
+    JOIN telegram_accounts ta
+      ON ta.shop_id = o.shop_id
+     AND ta.customer_id = o.customer_id
+     AND ta.is_active = true
+     AND ta.notifications_enabled = true
+    WHERE o.id = ${params.orderId}
+      AND o.shop_id = ${params.shopId}
+      AND o.customer_id IS NOT NULL
+    ORDER BY ta.linked_at DESC NULLS LAST
+    LIMIT 1
+    RETURNING id
+  `;
+
+  return inserted.length > 0;
+}
+
+async function queueBouquetApprovalStaffNotification(params: {
+  shopId: string;
+  orderId: string;
+  type: "bouquet_approved" | "bouquet_revision_requested";
+  note?: string;
+}) {
+  const note = String(params.note || "").trim().slice(0, 500);
+
+  await sql`
+    INSERT INTO notification_events (
+      shop_id,
+      order_id,
+      type,
+      channel,
+      recipient_type,
+      recipient_telegram_id,
+      status,
+      payload,
+      created_at,
+      updated_at
+    )
+    SELECT DISTINCT
+      o.shop_id,
+      o.id,
+      ${params.type}::text,
+      'telegram',
+      'staff',
+      ta.telegram_id,
+      'pending',
+      jsonb_build_object(
+        'orderId', o.id,
+        'orderNumber', o.order_number,
+        'note', ${note || null},
+        'bouquetPhotoUrl', o.bouquet_photo_url,
+        'crmUrl', '/admin/orders/' || o.id::text
+      ),
+      NOW(),
+      NOW()
+    FROM orders o
+    JOIN telegram_accounts ta
+      ON ta.shop_id = o.shop_id
+     AND ta.is_active = true
+     AND ta.user_id IS NOT NULL
+    JOIN shop_users su
+      ON su.shop_id = ta.shop_id
+     AND su.user_id = ta.user_id
+     AND su.is_active = true
+    WHERE o.id = ${params.orderId}
+      AND o.shop_id = ${params.shopId}
+      AND (
+        ta.user_id = o.florist_id
+        OR (
+          ${params.type}::text = 'bouquet_revision_requested'
+          AND su.role IN ('owner', 'admin', 'manager')
+        )
+      )
   `;
 }
 
@@ -2895,6 +3063,9 @@ async function handleFloristAssemblyOrders(chatId: number) {
     delivery_address_text: string | null;
     recipient_name: string | null;
     product_name: string | null;
+    bouquet_photo_url: string | null;
+    bouquet_approval_status: string | null;
+    bouquet_approval_note: string | null;
     created_at: string;
   }[]>`
     SELECT
@@ -2904,6 +3075,9 @@ async function handleFloristAssemblyOrders(chatId: number) {
       o.delivery_date,
       o.delivery_address_text,
       o.recipient_name,
+      o.bouquet_photo_url,
+      o.metadata #>> '{bouquetApproval,status}' AS bouquet_approval_status,
+      o.metadata #>> '{bouquetApproval,note}' AS bouquet_approval_note,
       o.created_at,
       COALESCE((
         SELECT string_agg(
@@ -2972,19 +3146,23 @@ async function handleFloristAssemblyOrders(chatId: number) {
     }
 
     if (order.status === "assembling") {
+      const approvalStatus = order.bouquet_approval_status || "";
+
       rows.push([
         {
-          text: "📸 Загрузить фото",
+          text: order.bouquet_photo_url ? "📸 Заменить фото" : "📸 Загрузить фото",
           callback_data: `florist:photo:${order.id}`
         }
       ]);
 
-      rows.push([
-        {
-          text: "✅ Готово",
-          callback_data: `florist:ready:${order.id}`
-        }
-      ]);
+      if (approvalStatus === "approved" || approvalStatus === "waived" || !approvalStatus) {
+        rows.push([
+          {
+            text: "✅ Готово",
+            callback_data: `florist:ready:${order.id}`
+          }
+        ]);
+      }
     }
 
     rows.push([
@@ -3009,7 +3187,19 @@ async function handleFloristAssemblyOrders(chatId: number) {
         order.product_name ? `Товар: ${order.product_name}` : "",
         order.delivery_date ? `Дата доставки: ${shortDateText(order.delivery_date)}` : "",
         order.recipient_name ? `Получатель: ${order.recipient_name}` : "",
-        order.delivery_address_text ? `Адрес: ${order.delivery_address_text}` : ""
+        order.delivery_address_text ? `Адрес: ${order.delivery_address_text}` : "",
+        order.bouquet_photo_url
+          ? order.bouquet_approval_status === "pending"
+            ? "Согласование: ⏳ ждём ответ клиента"
+            : order.bouquet_approval_status === "revision_requested"
+              ? "Согласование: 🔄 клиент попросил правку"
+              : order.bouquet_approval_status === "approved"
+                ? "Согласование: ✅ одобрено клиентом"
+                : order.bouquet_approval_status === "waived"
+                  ? "Согласование: ✅ разрешено менеджером"
+                  : "Согласование: не требуется для старого заказа"
+          : "",
+        order.bouquet_approval_note ? `Комментарий: ${order.bouquet_approval_note}` : ""
       ].filter(Boolean).join("\n"),
       {
         reply_markup: inlineKeyboard(rows)
@@ -3478,6 +3668,20 @@ async function handleFloristProblemReasonMessage(
 
   pendingFloristProblemRequests.delete(chatId);
 
+  try {
+    await queueCustomerOrderNotification({
+      shopId: request.shopId,
+      orderId: order.id,
+      type: "order_problem",
+      status: "problem"
+    });
+  } catch (error) {
+    console.error(
+      `[bot-worker] customer problem notification failed order=${order.id}`,
+      error instanceof Error ? error.message : error
+    );
+  }
+
   type StaffRecipient = {
     telegram_id: string;
   };
@@ -3585,7 +3789,11 @@ async function handleFloristProblemReasonMessage(
   return true;
 }
 
-async function downloadTelegramFile(fileId: string, fileNamePrefix: string) {
+async function downloadTelegramFile(
+  fileId: string,
+  fileNamePrefix: string,
+  uploadFolder = "bouquets"
+) {
   const file = await telegramApi<{
     file_id: string;
     file_unique_id: string;
@@ -3600,9 +3808,13 @@ async function downloadTelegramFile(fileId: string, fileNamePrefix: string) {
   const extension = extname(file.file_path) || ".jpg";
   const safePrefix = fileNamePrefix.replace(/[^a-z0-9_-]/gi, "-");
   const fileName = `${safePrefix}-${Date.now()}-${randomUUID()}${extension}`;
-  const uploadDir = join(UPLOADS_DIR, "bouquets");
+  const safeFolder =
+    uploadFolder === "deliveries"
+      ? "deliveries"
+      : "bouquets";
+  const uploadDir = join(UPLOADS_DIR, safeFolder);
   const fullPath = join(uploadDir, fileName);
-  const publicUrl = `/uploads/bouquets/${fileName}`;
+  const publicUrl = `/uploads/${safeFolder}/${fileName}`;
 
   await mkdir(uploadDir, { recursive: true });
 
@@ -3674,6 +3886,9 @@ async function handleFloristBouquetPhotoMessage(message: TelegramMessage) {
     return true;
   }
 
+  let uploadedPublicUrl = "";
+  let photoPersisted = false;
+
   try {
     const photo = pickLargestTelegramPhoto(photos);
 
@@ -3689,32 +3904,117 @@ async function handleFloristBouquetPhotoMessage(message: TelegramMessage) {
       return true;
     }
 
-    const publicUrl = await downloadTelegramFile(photo.file_id, `bouquet-${request.orderId}`);
+    const publicUrl = await downloadTelegramFile(
+      photo.file_id,
+      `bouquet-${request.orderId}`
+    );
+    uploadedPublicUrl = publicUrl;
 
-    const updatedRows = await sql<{
-      id: string;
-      order_number: string;
-      status: string;
-      bouquet_photo_url: string | null;
-    }[]>`
-      UPDATE orders
-      SET bouquet_photo_url = ${publicUrl},
-          updated_at = NOW()
-      WHERE id = ${request.orderId}
-        AND shop_id = ${request.shopId}
-        AND florist_id = ${request.userId}
-        AND status IN ('assembling', 'ready')
-      RETURNING id, order_number, status, bouquet_photo_url
-    `;
+    const updatedOrder = await sql.begin(async (transaction) => {
+      const currentRows = await transaction<{
+        id: string;
+        order_number: string;
+        status: string;
+        florist_id: string | null;
+      }[]>`
+        SELECT
+          id,
+          order_number,
+          status::text AS status,
+          florist_id
+        FROM orders
+        WHERE id = ${request.orderId}
+          AND shop_id = ${request.shopId}
+        FOR UPDATE
+      `;
 
-    const updatedOrder = updatedRows[0];
+      const current = currentRows[0];
+
+      if (
+        !current
+        || current.florist_id !== request.userId
+        || current.status !== "assembling"
+      ) {
+        return null;
+      }
+
+      const updatedRows = await transaction<{
+        id: string;
+        order_number: string;
+        status: string;
+        bouquet_photo_url: string | null;
+      }[]>`
+        UPDATE orders
+        SET bouquet_photo_url = ${publicUrl},
+            metadata = jsonb_set(
+              COALESCE(metadata, '{}'::jsonb),
+              '{bouquetApproval}',
+              jsonb_build_object(
+                'status', 'pending',
+                'requestedAt', NOW(),
+                'decidedAt', NULL,
+                'note', NULL,
+                'source', 'florist_telegram',
+                'photoVersion', COALESCE(
+                  NULLIF(metadata #>> '{bouquetApproval,photoVersion}', '')::int,
+                  0
+                ) + 1,
+                'revisionCount', COALESCE(
+                  NULLIF(metadata #>> '{bouquetApproval,revisionCount}', '')::int,
+                  0
+                )
+              ),
+              true
+            ),
+            updated_at = NOW()
+        WHERE id = ${request.orderId}
+          AND shop_id = ${request.shopId}
+          AND florist_id = ${request.userId}
+          AND status = 'assembling'
+        RETURNING
+          id,
+          order_number,
+          status::text AS status,
+          bouquet_photo_url
+      `;
+
+      const updated = updatedRows[0];
+
+      if (!updated) {
+        return null;
+      }
+
+      await transaction`
+        INSERT INTO order_status_history (
+          shop_id,
+          order_id,
+          from_status,
+          to_status,
+          changed_by_user_id,
+          comment,
+          created_at
+        )
+        VALUES (
+          ${request.shopId},
+          ${updated.id},
+          'assembling',
+          'assembling',
+          ${request.userId},
+          'Флорист загрузил фото букета и отправил его клиенту на согласование',
+          NOW()
+        )
+      `;
+
+      return updated;
+    });
 
     if (!updatedOrder) {
+      await removeUploadedFile(publicUrl);
       pendingBouquetPhotoRequests.delete(chatId);
 
       await sendTelegramMessage(
         chatId,
-        "Фото получено, но заказ уже недоступен для загрузки фото.",
+        "Фото получено, но заказ уже недоступен для загрузки. Статус не изменён.",
         {
           reply_markup: await mainKeyboardForChat(chatId)
         }
@@ -3723,24 +4023,22 @@ async function handleFloristBouquetPhotoMessage(message: TelegramMessage) {
       return true;
     }
 
-    await sql`
-      INSERT INTO order_status_history (
-        shop_id,
-        order_id,
-        from_status,
-        to_status,
-        comment,
-        created_at
-      )
-      VALUES (
-        ${request.shopId},
-        ${updatedOrder.id},
-        ${updatedOrder.status}::order_status,
-        ${updatedOrder.status}::order_status,
-        'Флорист загрузил фото готового букета через Telegram',
-        NOW()
-      )
-    `;
+    photoPersisted = true;
+
+    let approvalNotificationQueued = false;
+
+    try {
+      approvalNotificationQueued =
+        await queueBouquetApprovalRequest({
+          shopId: request.shopId,
+          orderId: updatedOrder.id
+        });
+    } catch (notificationError) {
+      console.error(
+        `[bot-worker] bouquet approval notification failed order=${updatedOrder.id}`,
+        notificationError
+      );
+    }
 
     pendingBouquetPhotoRequests.delete(chatId);
 
@@ -3749,17 +4047,14 @@ async function handleFloristBouquetPhotoMessage(message: TelegramMessage) {
       [
         `✅ Фото по заказу ${updatedOrder.order_number} сохранено`,
         "",
-        "Фото теперь отображается в CRM-карточке заказа.",
-        `Ссылка: ${absoluteUrl(publicUrl)}`
+        approvalNotificationQueued
+          ? "Фото отправлено покупателю в Telegram на согласование."
+          : "Telegram покупателя не подключён. Фото уже доступно по ссылке отслеживания — менеджер сможет отправить её вручную.",
+        "После одобрения станет доступна кнопка «Готово».",
+        `Фото: ${absoluteUrl(publicUrl)}`
       ].join("\n"),
       {
         reply_markup: inlineKeyboard([
-          [
-            {
-              text: "✅ Готово",
-              callback_data: `florist:ready:${updatedOrder.id}`
-            }
-          ],
           [
             {
               text: "🔄 Сборка заказов",
@@ -3772,6 +4067,10 @@ async function handleFloristBouquetPhotoMessage(message: TelegramMessage) {
 
     return true;
   } catch (error) {
+    if (uploadedPublicUrl && !photoPersisted) {
+      await removeUploadedFile(uploadedPublicUrl);
+    }
+
     await sendTelegramMessage(
       chatId,
       error instanceof Error ? error.message : "Не удалось сохранить фото. Попробуйте ещё раз.",
@@ -3825,8 +4124,11 @@ async function handleFloristPhotoRequest(callbackQuery: TelegramCallbackQuery, o
     return;
   }
 
-  if (order.status !== "assembling" && order.status !== "ready") {
-    await answerCallbackQuery(callbackQuery.id, "Фото можно загрузить для заказа в сборке");
+  if (order.status !== "assembling") {
+    await answerCallbackQuery(
+      callbackQuery.id,
+      "Фото можно менять только пока заказ находится в сборке"
+    );
     return;
   }
 
@@ -3846,7 +4148,8 @@ async function handleFloristPhotoRequest(callbackQuery: TelegramCallbackQuery, o
       `📸 Фото для заказа ${order.order_number}`,
       "",
       "Отправьте фото готового букета следующим сообщением.",
-      "После отправки фото оно появится в CRM-карточке заказа."
+      "Фото появится в CRM и будет отправлено покупателю на согласование.",
+      "Не фотографируйте людей без их согласия."
     ].join("\n"),
     {
       reply_markup: await mainKeyboardForChat(chatId)
@@ -3876,8 +4179,15 @@ async function handleFloristReadyOrder(callbackQuery: TelegramCallbackQuery, ord
     status: string;
     florist_id: string | null;
     bouquet_photo_url: string | null;
+    bouquet_approval_status: string | null;
   }[]>`
-    SELECT id, order_number, status, florist_id, bouquet_photo_url
+    SELECT
+      id,
+      order_number,
+      status,
+      florist_id,
+      bouquet_photo_url,
+      metadata #>> '{bouquetApproval,status}' AS bouquet_approval_status
     FROM orders
     WHERE id = ${orderId}
       AND shop_id = ${profile.shop_id}
@@ -3937,103 +4247,214 @@ async function handleFloristReadyOrder(callbackQuery: TelegramCallbackQuery, ord
     return;
   }
 
-  await sql`
-    UPDATE orders
-    SET status = 'ready',
-        updated_at = NOW()
-    WHERE id = ${order.id}
-      AND shop_id = ${profile.shop_id}
-  `;
+  if (
+    order.bouquet_approval_status === "pending"
+    || order.bouquet_approval_status === "revision_requested"
+  ) {
+    const waitingForCustomer =
+      order.bouquet_approval_status === "pending";
 
-  await sql`
-    INSERT INTO order_status_history (
-      shop_id,
-      order_id,
-      from_status,
-      to_status,
-      comment,
-      created_at
-    )
-    VALUES (
-      ${profile.shop_id},
-      ${order.id},
-      ${order.status}::order_status,
-      'ready',
-      'Флорист отметил заказ готовым через Telegram',
-      NOW()
-    )
-  `;
+    await answerCallbackQuery(
+      callbackQuery.id,
+      waitingForCustomer
+        ? "Сначала дождитесь согласования клиента"
+        : "Клиент попросил внести правки"
+    );
 
-  await sql`
-    INSERT INTO notification_events (
-      shop_id,
-      order_id,
-      type,
-      channel,
-      recipient_type,
-      recipient_telegram_id,
-      status,
-      payload,
-      created_at,
-      updated_at
-    )
-    SELECT
-      o.shop_id,
-      o.id,
-      'courier_order_assigned',
-      'telegram',
-      'staff',
-      courier_ta.telegram_id,
-      'pending',
-      jsonb_build_object(
-        'orderId', o.id,
-        'orderNumber', o.order_number,
-        'courierId', o.courier_id,
-        'courierName', cu.name,
-        'deliveryDate', o.delivery_date,
-        'deliveryIntervalName', di.name,
-        'deliveryAddressText', o.delivery_address_text,
-        'deliveryComment', o.delivery_comment,
-        'recipientName', o.recipient_name,
-        'recipientPhone', o.recipient_phone,
-        'trackingUrl', CASE
-          WHEN o.tracking_token IS NULL OR o.tracking_token = '' THEN NULL
-          ELSE '/order/track/' || o.tracking_token
-        END,
-        'crmUrl', '/admin/orders/' || o.id::text
-      ),
-      NOW(),
-      NOW()
-    FROM orders o
-    JOIN users cu ON cu.id = o.courier_id
-    JOIN LATERAL (
-      SELECT ta.telegram_id
-      FROM telegram_accounts ta
-      JOIN shop_users su
-        ON su.shop_id = ta.shop_id
-       AND su.user_id = ta.user_id
-       AND su.role = 'courier'
-       AND su.is_active = true
-      WHERE ta.shop_id = o.shop_id
-        AND ta.user_id = o.courier_id
-        AND ta.is_active = true
-      ORDER BY ta.linked_at DESC
-      LIMIT 1
-    ) courier_ta ON true
-    LEFT JOIN delivery_intervals di
-      ON di.id = o.delivery_interval_id
-     AND di.shop_id = o.shop_id
-    WHERE o.id = ${order.id}
-      AND o.shop_id = ${profile.shop_id}
-      AND o.courier_id IS NOT NULL
-  `;
+    await sendTelegramMessage(
+      chatId,
+      [
+        waitingForCustomer
+          ? `⏳ Фото по заказу ${order.order_number} ожидает согласования`
+          : `🔄 По заказу ${order.order_number} нужна правка`,
+        "",
+        waitingForCustomer
+          ? "После ответа клиента кнопка «Готово» станет доступна."
+          : "Внесите изменения и загрузите новое фото букета."
+      ].join("\n"),
+      {
+        reply_markup: inlineKeyboard([
+          [
+            {
+              text: waitingForCustomer ? "🔄 Обновить" : "📸 Загрузить новое фото",
+              callback_data: waitingForCustomer
+                ? "florist:list"
+                : `florist:photo:${order.id}`
+            }
+          ]
+        ])
+      }
+    );
 
-  await queueCustomerOrderNotification({
-    shopId: profile.shop_id,
-    orderId: order.id,
-    type: "order_ready",
-    status: "ready"
+    return;
+  }
+
+  const readyResult = await sql.begin(async (transaction) => {
+    const updatedRows = await transaction<{
+      id: string;
+      order_number: string;
+    }[]>`
+      UPDATE orders
+      SET status = 'ready',
+          updated_at = NOW()
+      WHERE id = ${order.id}
+        AND shop_id = ${profile.shop_id}
+        AND florist_id = ${profile.user_id}
+        AND status = 'assembling'
+        AND bouquet_photo_url IS NOT NULL
+        AND COALESCE(
+          metadata #>> '{bouquetApproval,status}',
+          'not_required'
+        ) IN ('approved', 'waived', 'not_required')
+      RETURNING id, order_number
+    `;
+
+    const updated = updatedRows[0];
+
+    if (!updated) {
+      return null;
+    }
+
+    await transaction`
+      INSERT INTO order_status_history (
+        shop_id,
+        order_id,
+        from_status,
+        to_status,
+        changed_by_user_id,
+        comment,
+        created_at
+      )
+      VALUES (
+        ${profile.shop_id},
+        ${updated.id},
+        'assembling',
+        'ready',
+        ${profile.user_id},
+        'Флорист завершил сборку после согласования фото',
+        NOW()
+      )
+    `;
+
+    await transaction`
+      INSERT INTO notification_events (
+        shop_id,
+        order_id,
+        type,
+        channel,
+        recipient_type,
+        recipient_telegram_id,
+        status,
+        payload,
+        created_at,
+        updated_at
+      )
+      SELECT
+        o.shop_id,
+        o.id,
+        'courier_order_assigned',
+        'telegram',
+        'staff',
+        courier_ta.telegram_id,
+        'pending',
+        jsonb_build_object(
+          'orderId', o.id,
+          'orderNumber', o.order_number,
+          'courierId', o.courier_id,
+          'courierName', cu.name,
+          'deliveryDate', o.delivery_date,
+          'deliveryIntervalName', di.name,
+          'deliveryAddressText', o.delivery_address_text,
+          'deliveryComment', o.delivery_comment,
+          'recipientName', o.recipient_name,
+          'recipientPhone', o.recipient_phone,
+          'trackingUrl', CASE
+            WHEN o.tracking_token IS NULL OR o.tracking_token = '' THEN NULL
+            ELSE '/order/track/' || o.tracking_token
+          END,
+          'crmUrl', '/admin/orders/' || o.id::text
+        ),
+        NOW(),
+        NOW()
+      FROM orders o
+      JOIN users cu ON cu.id = o.courier_id
+      JOIN LATERAL (
+        SELECT ta.telegram_id
+        FROM telegram_accounts ta
+        JOIN shop_users su
+          ON su.shop_id = ta.shop_id
+         AND su.user_id = ta.user_id
+         AND su.role = 'courier'
+         AND su.is_active = true
+        WHERE ta.shop_id = o.shop_id
+          AND ta.user_id = o.courier_id
+          AND ta.is_active = true
+        ORDER BY ta.linked_at DESC
+        LIMIT 1
+      ) courier_ta ON true
+      LEFT JOIN delivery_intervals di
+        ON di.id = o.delivery_interval_id
+       AND di.shop_id = o.shop_id
+      WHERE o.id = ${updated.id}
+        AND o.shop_id = ${profile.shop_id}
+        AND o.courier_id IS NOT NULL
+    `;
+
+    await transaction`
+      INSERT INTO notification_events (
+        shop_id,
+        order_id,
+        type,
+        channel,
+        recipient_type,
+        status,
+        payload,
+        created_at,
+        updated_at
+      )
+      SELECT
+        o.shop_id,
+        o.id,
+        'order_ready',
+        'telegram',
+        'customer',
+        'pending',
+        jsonb_build_object(
+          'orderId', o.id,
+          'orderNumber', o.order_number,
+          'status', 'ready',
+          'customerName', c.name,
+          'customerPhone', c.phone,
+          'recipientName', o.recipient_name,
+          'recipientPhone', o.recipient_phone,
+          'deliveryAddressText', o.delivery_address_text,
+          'deliveryComment', o.delivery_comment,
+          'bouquetPhotoUrl', o.bouquet_photo_url,
+          'trackingToken', o.tracking_token,
+          'trackingUrl', CASE
+            WHEN o.tracking_token IS NULL OR o.tracking_token = '' THEN NULL
+            ELSE '/order/track/' || o.tracking_token
+          END
+        ),
+        NOW(),
+        NOW()
+      FROM orders o
+      LEFT JOIN customers c ON c.id = o.customer_id
+      WHERE o.id = ${updated.id}
+        AND o.shop_id = ${profile.shop_id}
+        AND o.customer_id IS NOT NULL
+    `;
+
+    return updated;
   });
+
+  if (!readyResult) {
+    await answerCallbackQuery(
+      callbackQuery.id,
+      "Заказ уже изменён. Обновите список."
+    );
+    return;
+  }
 
   await answerCallbackQuery(callbackQuery.id, "Заказ готов");
 
@@ -4049,6 +4470,436 @@ async function handleFloristReadyOrder(callbackQuery: TelegramCallbackQuery, ord
       reply_markup: await mainKeyboardForChat(chatId)
     }
   );
+}
+
+async function handleCustomerBouquetApprove(
+  callbackQuery: TelegramCallbackQuery,
+  orderId: string
+) {
+  const message = callbackQuery.message;
+
+  if (!message || message.chat.type !== "private") {
+    await answerCallbackQuery(callbackQuery.id);
+    return;
+  }
+
+  const chatId = message.chat.id;
+  const profile = await getTelegramProfile(String(chatId));
+
+  if (!profile?.customer_id) {
+    await answerCallbackQuery(
+      callbackQuery.id,
+      "Сначала привяжите Telegram к личному кабинету"
+    );
+    return;
+  }
+
+  const result = await sql.begin(async (transaction) => {
+    const rows = await transaction<{
+      id: string;
+      order_number: string;
+      status: string;
+      customer_id: string | null;
+      bouquet_photo_url: string | null;
+      approval_status: string | null;
+    }[]>`
+      SELECT
+        id,
+        order_number,
+        status::text AS status,
+        customer_id,
+        bouquet_photo_url,
+        metadata #>> '{bouquetApproval,status}' AS approval_status
+      FROM orders
+      WHERE id = ${orderId}
+        AND shop_id = ${profile.shop_id}
+      FOR UPDATE
+    `;
+
+    const order = rows[0];
+
+    if (!order || order.customer_id !== profile.customer_id) {
+      return { kind: "not_found" as const, orderNumber: "" };
+    }
+
+    if (order.approval_status === "approved") {
+      return { kind: "already" as const, orderNumber: order.order_number };
+    }
+
+    if (
+      order.status !== "assembling"
+      || !order.bouquet_photo_url
+      || order.approval_status === "revision_requested"
+    ) {
+      return { kind: "unavailable" as const, orderNumber: order.order_number };
+    }
+
+    await transaction`
+      UPDATE orders
+      SET metadata = jsonb_set(
+            COALESCE(metadata, '{}'::jsonb),
+            '{bouquetApproval}',
+            COALESCE(metadata -> 'bouquetApproval', '{}'::jsonb)
+              || jsonb_build_object(
+                'status', 'approved',
+                'decidedAt', NOW(),
+                'note', NULL,
+                'source', 'customer_telegram'
+              ),
+            true
+          ),
+          updated_at = NOW()
+      WHERE id = ${order.id}
+        AND shop_id = ${profile.shop_id}
+    `;
+
+    await transaction`
+      INSERT INTO order_status_history (
+        shop_id,
+        order_id,
+        from_status,
+        to_status,
+        comment,
+        created_at
+      )
+      VALUES (
+        ${profile.shop_id},
+        ${order.id},
+        'assembling',
+        'assembling',
+        'Покупатель одобрил фото готового букета в Telegram',
+        NOW()
+      )
+    `;
+
+    return { kind: "approved" as const, orderNumber: order.order_number };
+  });
+
+  if (result.kind === "not_found") {
+    await answerCallbackQuery(callbackQuery.id, "Заказ не найден");
+    return;
+  }
+
+  if (result.kind === "unavailable") {
+    await answerCallbackQuery(callbackQuery.id, "Согласование уже недоступно");
+    return;
+  }
+
+  if (result.kind === "approved") {
+    await queueBouquetApprovalStaffNotification({
+      shopId: profile.shop_id,
+      orderId,
+      type: "bouquet_approved"
+    });
+  }
+
+  pendingCustomerBouquetRevisionRequests.delete(chatId);
+
+  await answerCallbackQuery(
+    callbackQuery.id,
+    result.kind === "already" ? "Фото уже одобрено" : "Спасибо, фото одобрено"
+  );
+
+  await sendTelegramMessage(
+    chatId,
+    [
+      `✅ Фото букета по заказу ${result.orderNumber} одобрено`,
+      "",
+      "Флорист получил подтверждение и завершит подготовку заказа."
+    ].join("\n"),
+    {
+      reply_markup: await mainKeyboardForChat(chatId)
+    }
+  );
+}
+
+async function handleCustomerBouquetRevisionRequest(
+  callbackQuery: TelegramCallbackQuery,
+  orderId: string
+) {
+  const message = callbackQuery.message;
+
+  if (!message || message.chat.type !== "private") {
+    await answerCallbackQuery(callbackQuery.id);
+    return;
+  }
+
+  const chatId = message.chat.id;
+  const profile = await getTelegramProfile(String(chatId));
+
+  if (!profile?.customer_id) {
+    await answerCallbackQuery(
+      callbackQuery.id,
+      "Сначала привяжите Telegram к личному кабинету"
+    );
+    return;
+  }
+
+  const rows = await sql<{
+    id: string;
+    order_number: string;
+    status: string;
+    customer_id: string | null;
+    bouquet_photo_url: string | null;
+    approval_status: string | null;
+  }[]>`
+    SELECT
+      id,
+      order_number,
+      status::text AS status,
+      customer_id,
+      bouquet_photo_url,
+      metadata #>> '{bouquetApproval,status}' AS approval_status
+    FROM orders
+    WHERE id = ${orderId}
+      AND shop_id = ${profile.shop_id}
+    LIMIT 1
+  `;
+
+  const order = rows[0];
+
+  if (!order || order.customer_id !== profile.customer_id) {
+    await answerCallbackQuery(callbackQuery.id, "Заказ не найден");
+    return;
+  }
+
+  if (
+    order.status !== "assembling"
+    || !order.bouquet_photo_url
+    || order.approval_status === "approved"
+    || order.approval_status === "waived"
+  ) {
+    await answerCallbackQuery(callbackQuery.id, "Согласование уже завершено");
+    return;
+  }
+
+  pendingCustomerBouquetRevisionRequests.set(chatId, {
+    orderId: order.id,
+    orderNumber: order.order_number,
+    shopId: profile.shop_id,
+    customerId: profile.customer_id,
+    createdAt: Date.now()
+  });
+
+  await answerCallbackQuery(callbackQuery.id, "Напишите, что нужно изменить");
+
+  await sendTelegramMessage(
+    chatId,
+    [
+      `🔄 Правка по заказу ${order.order_number}`,
+      "",
+      "Напишите одним сообщением, что именно нужно изменить в букете.",
+      "Например: «Сделать упаковку светлее и добавить больше белых цветов».",
+      "",
+      "Для отмены отправьте /cancel.",
+      "Запрос действует 15 минут."
+    ].join("\n"),
+    {
+      reply_markup: await mainKeyboardForChat(chatId)
+    }
+  );
+}
+
+async function handleCustomerBouquetRevisionReasonMessage(
+  message: TelegramMessage,
+  text: string
+): Promise<boolean> {
+  const chatId = message.chat.id;
+  const request = pendingCustomerBouquetRevisionRequests.get(chatId);
+
+  if (!request) {
+    return false;
+  }
+
+  if (Date.now() - request.createdAt > 15 * 60 * 1000) {
+    pendingCustomerBouquetRevisionRequests.delete(chatId);
+
+    await sendTelegramMessage(
+      chatId,
+      "Время ожидания ответа истекло. Откройте заказ и нажмите «Нужна правка» ещё раз.",
+      {
+        reply_markup: await mainKeyboardForChat(chatId)
+      }
+    );
+
+    return true;
+  }
+
+  if (text === "/cancel") {
+    pendingCustomerBouquetRevisionRequests.delete(chatId);
+
+    await sendTelegramMessage(
+      chatId,
+      "Запрос на правку отменён. Фото по-прежнему ожидает вашего решения.",
+      {
+        reply_markup: await mainKeyboardForChat(chatId)
+      }
+    );
+
+    return true;
+  }
+
+  const navigationTexts = new Set([
+    "👤 Профиль",
+    "🛍 Каталог",
+    "📦 Мои заказы",
+    "🎁 Бонусы",
+    "☎️ Связь",
+    "🧺 Корзина",
+    "🔔 Уведомления"
+  ]);
+
+  if (
+    text.startsWith("/start")
+    || text === "/menu"
+    || navigationTexts.has(text)
+  ) {
+    pendingCustomerBouquetRevisionRequests.delete(chatId);
+    return false;
+  }
+
+  const note = text.trim();
+
+  if (note.length < 3 || note.length > 500) {
+    await sendTelegramMessage(
+      chatId,
+      "Опишите правку текстом от 3 до 500 символов.",
+      {
+        reply_markup: await mainKeyboardForChat(chatId)
+      }
+    );
+
+    return true;
+  }
+
+  const profile = await getTelegramProfile(String(chatId));
+
+  if (
+    !profile?.customer_id
+    || profile.customer_id !== request.customerId
+    || profile.shop_id !== request.shopId
+  ) {
+    pendingCustomerBouquetRevisionRequests.delete(chatId);
+    await sendTelegramMessage(chatId, "Не удалось подтвердить покупателя.");
+    return true;
+  }
+
+  const result = await sql.begin(async (transaction) => {
+    const rows = await transaction<{
+      id: string;
+      order_number: string;
+      status: string;
+      customer_id: string | null;
+      bouquet_photo_url: string | null;
+      approval_status: string | null;
+    }[]>`
+      SELECT
+        id,
+        order_number,
+        status::text AS status,
+        customer_id,
+        bouquet_photo_url,
+        metadata #>> '{bouquetApproval,status}' AS approval_status
+      FROM orders
+      WHERE id = ${request.orderId}
+        AND shop_id = ${request.shopId}
+      FOR UPDATE
+    `;
+
+    const order = rows[0];
+
+    if (
+      !order
+      || order.customer_id !== request.customerId
+      || order.status !== "assembling"
+      || !order.bouquet_photo_url
+      || order.approval_status === "approved"
+      || order.approval_status === "waived"
+    ) {
+      return null;
+    }
+
+    await transaction`
+      UPDATE orders
+      SET metadata = jsonb_set(
+            COALESCE(metadata, '{}'::jsonb),
+            '{bouquetApproval}',
+            COALESCE(metadata -> 'bouquetApproval', '{}'::jsonb)
+              || jsonb_build_object(
+                'status', 'revision_requested',
+                'decidedAt', NOW(),
+                'note', ${note},
+                'source', 'customer_telegram',
+                'revisionCount', COALESCE(
+                  NULLIF(metadata #>> '{bouquetApproval,revisionCount}', '')::int,
+                  0
+                ) + 1
+              ),
+            true
+          ),
+          updated_at = NOW()
+      WHERE id = ${order.id}
+        AND shop_id = ${request.shopId}
+    `;
+
+    await transaction`
+      INSERT INTO order_status_history (
+        shop_id,
+        order_id,
+        from_status,
+        to_status,
+        comment,
+        created_at
+      )
+      VALUES (
+        ${request.shopId},
+        ${order.id},
+        'assembling',
+        'assembling',
+        ${`Покупатель запросил правку букета: ${note}`},
+        NOW()
+      )
+    `;
+
+    return order;
+  });
+
+  pendingCustomerBouquetRevisionRequests.delete(chatId);
+
+  if (!result) {
+    await sendTelegramMessage(
+      chatId,
+      "Не удалось сохранить правку: согласование уже завершено или заказ изменился.",
+      {
+        reply_markup: await mainKeyboardForChat(chatId)
+      }
+    );
+
+    return true;
+  }
+
+  await queueBouquetApprovalStaffNotification({
+    shopId: request.shopId,
+    orderId: request.orderId,
+    type: "bouquet_revision_requested",
+    note
+  });
+
+  await sendTelegramMessage(
+    chatId,
+    [
+      `🔄 Правка по заказу ${request.orderNumber} отправлена`,
+      "",
+      `Ваш комментарий: ${note}`,
+      "",
+      "Флорист подготовит обновлённый вариант и пришлёт новое фото."
+    ].join("\n"),
+    {
+      reply_markup: await mainKeyboardForChat(chatId)
+    }
+  );
+
+  return true;
 }
 
 /* ЕДИНАЯ КАРТОЧКА КУРЬЕРА 6.6.2 */
@@ -4068,6 +4919,8 @@ type CourierOrderCard = {
   delivery_tariff_name: string | null;
   delivery_zone_name: string | null;
   courier_name: string | null;
+  delivery_proof_photo_url: string | null;
+  delivery_proof_uploaded_at: string | null;
   created_at: string;
 };
 
@@ -4137,6 +4990,14 @@ async function loadCourierOrderCard(
 
         courier.name
           AS courier_name,
+
+        o.metadata #>>
+          '{delivery,proofPhotoUrl}'
+          AS delivery_proof_photo_url,
+
+        o.metadata #>>
+          '{delivery,proofUploadedAt}'
+          AS delivery_proof_uploaded_at,
 
         o.created_at
 
@@ -4222,9 +5083,22 @@ function courierOrderButtonRows(
   ) {
     rows.push([
       {
-        text: "✅ Доставлено",
+        text: "📸 Завершить с фото",
         callback_data:
-          `courier:delivered:${order.id}`
+          `courier:proof:${order.id}`
+      }
+    ]);
+  }
+
+  if (
+    order.status === "assigned_courier"
+    || order.status === "delivering"
+  ) {
+    rows.push([
+      {
+        text: "⚠️ Проблема доставки",
+        callback_data:
+          `courier:problem:${order.id}`
       }
     ]);
   }
@@ -4388,6 +5262,10 @@ function courierOrderCardText(
       ? `Комментарий: ${
           visibleComment
         }`
+      : "",
+
+    order.delivery_proof_photo_url
+      ? "Фото вручения: загружено"
       : "",
 
     showCourierName
@@ -4787,7 +5665,440 @@ async function handleCourierStartDelivery(
   }
 }
 
-async function handleCourierDeliveredOrder(
+async function handleCourierProblemOrder(
+  callbackQuery: TelegramCallbackQuery,
+  orderId: string
+) {
+  const message = callbackQuery.message;
+
+  if (!message || message.chat.type !== "private") {
+    await answerCallbackQuery(callbackQuery.id);
+    return;
+  }
+
+  const chatId = message.chat.id;
+  const profile = await getTelegramProfile(String(chatId));
+
+  if (!profile?.user_id) {
+    await answerCallbackQuery(
+      callbackQuery.id,
+      "Доступно только сотруднику"
+    );
+    return;
+  }
+
+  const order = await loadCourierOrderCard(
+    profile.shop_id,
+    orderId
+  );
+
+  if (!order) {
+    await answerCallbackQuery(
+      callbackQuery.id,
+      "Заказ не найден"
+    );
+    return;
+  }
+
+  if (order.courier_id !== profile.user_id) {
+    await answerCallbackQuery(
+      callbackQuery.id,
+      "Заказ назначен другому курьеру"
+    );
+    return;
+  }
+
+  if (order.status === "problem") {
+    await answerCallbackQuery(
+      callbackQuery.id,
+      "Проблема уже отмечена"
+    );
+    return;
+  }
+
+  if (
+    order.status !== "assigned_courier"
+    && order.status !== "delivering"
+  ) {
+    await answerCallbackQuery(
+      callbackQuery.id,
+      "Проблему можно отметить только по принятой доставке"
+    );
+    return;
+  }
+
+  pendingCourierDeliveryPhotoRequests.delete(chatId);
+  pendingCourierProblemRequests.set(chatId, {
+    orderId: order.id,
+    orderNumber: order.order_number,
+    shopId: profile.shop_id,
+    userId: profile.user_id,
+    createdAt: Date.now()
+  });
+
+  await answerCallbackQuery(
+    callbackQuery.id,
+    "Опишите проблему"
+  );
+
+  await sendTelegramMessage(
+    chatId,
+    [
+      `⚠️ Проблема доставки ${order.order_number}`,
+      "",
+      "Одним сообщением опишите, что произошло и какая помощь нужна от менеджера.",
+      "",
+      "Например:",
+      "• получатель не отвечает;",
+      "• неверный адрес;",
+      "• получатель отказался принять заказ;",
+      "• невозможно попасть в подъезд.",
+      "",
+      "Для отмены отправьте /cancel.",
+      "Запрос действует 15 минут."
+    ].join("\n"),
+    {
+      reply_markup: await mainKeyboardForChat(chatId)
+    }
+  );
+}
+
+async function handleCourierProblemReasonMessage(
+  message: TelegramMessage,
+  text: string
+): Promise<boolean> {
+  const chatId = message.chat.id;
+  const request = pendingCourierProblemRequests.get(chatId);
+
+  if (!request) {
+    return false;
+  }
+
+  const navigationTexts = new Set([
+    "👤 Профиль",
+    "🛍 Каталог",
+    "📦 Мои заказы",
+    "📦 Заказы",
+    "🎁 Бонусы",
+    "☎️ Связь",
+    "🧺 Корзина",
+    "🧾 CRM",
+    "⚙️ Настройки",
+    "💐 Сборка заказов",
+    "🚚 Доставка",
+    "🔔 Уведомления"
+  ]);
+
+  if (
+    text.startsWith("/start")
+    || text === "/menu"
+    || navigationTexts.has(text)
+  ) {
+    pendingCourierProblemRequests.delete(chatId);
+    return false;
+  }
+
+  if (text === "/cancel") {
+    pendingCourierProblemRequests.delete(chatId);
+
+    await sendTelegramMessage(
+      chatId,
+      [
+        `Отметка проблемы по заказу ${request.orderNumber} отменена.`,
+        "",
+        "Статус заказа не изменялся."
+      ].join("\n"),
+      {
+        reply_markup: await mainKeyboardForChat(chatId)
+      }
+    );
+
+    return true;
+  }
+
+  if (Date.now() - request.createdAt > 15 * 60 * 1000) {
+    pendingCourierProblemRequests.delete(chatId);
+
+    await sendTelegramMessage(
+      chatId,
+      [
+        `Время ввода причины по заказу ${request.orderNumber} истекло.`,
+        "",
+        "Откройте доставку и нажмите «⚠️ Проблема доставки» ещё раз."
+      ].join("\n"),
+      {
+        reply_markup: await mainKeyboardForChat(chatId)
+      }
+    );
+
+    return true;
+  }
+
+  const reason = text.trim();
+
+  if (reason.length < 3) {
+    await sendTelegramMessage(
+      chatId,
+      "Опишите проблему подробнее — минимум 3 символа."
+    );
+    return true;
+  }
+
+  if (reason.length > 1000) {
+    await sendTelegramMessage(
+      chatId,
+      "Описание слишком длинное. Сократите его до 1000 символов."
+    );
+    return true;
+  }
+
+  const profile = await getTelegramProfile(String(chatId));
+
+  if (
+    !profile?.user_id
+    || profile.shop_id !== request.shopId
+    || profile.user_id !== request.userId
+  ) {
+    pendingCourierProblemRequests.delete(chatId);
+    await sendTelegramMessage(
+      chatId,
+      "Не удалось подтвердить профиль курьера. Откройте раздел доставки повторно."
+    );
+    return true;
+  }
+
+  const result = await sql.begin(async (transaction) => {
+    const rows = await transaction<{
+      id: string;
+      order_number: string;
+      status: string;
+      courier_id: string | null;
+      manager_id: string | null;
+    }[]>`
+      SELECT
+        id,
+        order_number,
+        status::text AS status,
+        courier_id,
+        manager_id
+      FROM orders
+      WHERE id = ${request.orderId}
+        AND shop_id = ${request.shopId}
+      LIMIT 1
+      FOR UPDATE
+    `;
+
+    const order = rows[0];
+
+    if (!order) {
+      return {
+        ok: false as const,
+        message: "Заказ больше не найден."
+      };
+    }
+
+    if (order.courier_id !== request.userId) {
+      return {
+        ok: false as const,
+        message: "Заказ больше не назначен вам."
+      };
+    }
+
+    if (order.status === "problem") {
+      return {
+        ok: false as const,
+        message: "По этому заказу проблема уже отмечена."
+      };
+    }
+
+    if (
+      order.status !== "assigned_courier"
+      && order.status !== "delivering"
+    ) {
+      return {
+        ok: false as const,
+        message: "Статус заказа уже изменился. Обновите список доставок."
+      };
+    }
+
+    const updated = await transaction<{ id: string }[]>`
+      UPDATE orders
+      SET
+        status = 'problem',
+        updated_at = NOW()
+      WHERE id = ${order.id}
+        AND shop_id = ${request.shopId}
+        AND courier_id = ${request.userId}
+        AND status = ${order.status}::order_status
+      RETURNING id
+    `;
+
+    if (!updated[0]) {
+      return {
+        ok: false as const,
+        message: "Статус заказа уже изменился."
+      };
+    }
+
+    await transaction`
+      INSERT INTO order_status_history (
+        shop_id,
+        order_id,
+        from_status,
+        to_status,
+        changed_by_user_id,
+        comment,
+        created_at
+      )
+      VALUES (
+        ${request.shopId},
+        ${order.id},
+        ${order.status}::order_status,
+        'problem',
+        ${request.userId},
+        ${`Проблема доставки от курьера через Telegram: ${reason}`},
+        NOW()
+      )
+    `;
+
+    return {
+      ok: true as const,
+      orderId: order.id,
+      orderNumber: order.order_number,
+      managerId: order.manager_id
+    };
+  });
+
+  pendingCourierProblemRequests.delete(chatId);
+
+  if (!result.ok) {
+    await sendTelegramMessage(
+      chatId,
+      result.message,
+      {
+        reply_markup: await mainKeyboardForChat(chatId)
+      }
+    );
+    return true;
+  }
+
+  try {
+    await queueCustomerOrderNotification({
+      shopId: request.shopId,
+      orderId: result.orderId,
+      type: "order_problem",
+      status: "problem"
+    });
+  } catch (error) {
+    console.error(
+      `[bot-worker] customer courier-problem notification failed order=${result.orderId}`,
+      error instanceof Error ? error.message : error
+    );
+  }
+
+  type StaffRecipient = {
+    telegram_id: string;
+  };
+
+  let recipients: StaffRecipient[] = [];
+  let recipientLabel = "менеджеру";
+
+  if (result.managerId) {
+    recipients = await sql<StaffRecipient[]>`
+      SELECT DISTINCT ta.telegram_id
+      FROM telegram_accounts ta
+      JOIN shop_users su
+        ON su.shop_id = ta.shop_id
+       AND su.user_id = ta.user_id
+       AND su.is_active = true
+      WHERE ta.shop_id = ${request.shopId}
+        AND ta.user_id = ${result.managerId}
+        AND ta.is_active = true
+        AND ta.notifications_enabled = true
+    `;
+  }
+
+  if (recipients.length === 0) {
+    recipientLabel = "владельцу или администратору";
+
+    recipients = await sql<StaffRecipient[]>`
+      SELECT DISTINCT ta.telegram_id
+      FROM telegram_accounts ta
+      JOIN shop_users su
+        ON su.shop_id = ta.shop_id
+       AND su.user_id = ta.user_id
+       AND su.is_active = true
+      WHERE ta.shop_id = ${request.shopId}
+        AND su.role IN ('owner', 'admin')
+        AND ta.is_active = true
+        AND ta.notifications_enabled = true
+      ORDER BY ta.telegram_id
+    `;
+  }
+
+  const crmUrl = `${SITE_URL}/admin/orders/${result.orderId}`;
+  let notifiedCount = 0;
+
+  for (const recipient of recipients) {
+    try {
+      await sendTelegramMessage(
+        recipient.telegram_id,
+        [
+          `⚠️ Проблема доставки ${result.orderNumber}`,
+          "",
+          "Курьер сообщил:",
+          reason,
+          "",
+          "Статус заказа изменён на «Проблема»."
+        ].join("\n"),
+        {
+          reply_markup: inlineKeyboard([
+            [
+              {
+                text: "Открыть заказ в CRM",
+                url: crmUrl
+              }
+            ]
+          ])
+        }
+      );
+      notifiedCount += 1;
+    } catch (error) {
+      console.error(
+        `[bot-worker] courier problem notification failed order=${result.orderId} recipient=${recipient.telegram_id}`,
+        error instanceof Error ? error.message : error
+      );
+    }
+  }
+
+  await sendTelegramMessage(
+    chatId,
+    [
+      `✅ Проблема по заказу ${result.orderNumber} сохранена`,
+      "",
+      `Причина: ${reason}`,
+      "",
+      "Статус изменён на «Проблема».",
+      notifiedCount > 0
+        ? `Уведомление отправлено ${recipientLabel}.`
+        : "Получатель уведомления не найден. Причина сохранена в истории заказа."
+    ].join("\n"),
+    {
+      reply_markup: inlineKeyboard([
+        [
+          {
+            text: "🔄 Обновить доставки",
+            callback_data: "courier:list"
+          }
+        ]
+      ])
+    }
+  );
+
+  return true;
+}
+
+async function handleCourierDeliveryPhotoRequest(
   callbackQuery: TelegramCallbackQuery,
   orderId: string
 ) {
@@ -4869,90 +6180,436 @@ async function handleCourierDeliveredOrder(
     return;
   }
 
-  const updated =
-    await sql<{ id: string }[]>`
-      UPDATE orders
-      SET
-        status = 'delivered',
-        updated_at = NOW()
-      WHERE id = ${order.id}
-        AND shop_id =
-          ${profile.shop_id}
-        AND courier_id =
-          ${profile.user_id}
-        AND status =
-          'delivering'
-      RETURNING id
-    `;
+  pendingCourierProblemRequests.delete(
+    chatId
+  );
 
-  if (!updated[0]) {
-    await answerCallbackQuery(
-      callbackQuery.id,
-      "Статус уже изменился"
-    );
-
-    return;
-  }
-
-  await sql`
-    INSERT INTO order_status_history (
-      shop_id,
-      order_id,
-      from_status,
-      to_status,
-      changed_by_user_id,
-      comment,
-      created_at
-    )
-    VALUES (
-      ${profile.shop_id},
-      ${order.id},
-      'delivering',
-      'delivered',
-      ${profile.user_id},
-      'Курьер отметил доставку через Telegram',
-      NOW()
-    )
-  `;
-
-  await queueCustomerOrderNotification({
-    shopId:
-      profile.shop_id,
-    orderId:
-      order.id,
-    type:
-      "order_delivered",
-    status:
-      "delivered"
-  });
+  pendingCourierDeliveryPhotoRequests.set(
+    chatId,
+    {
+      orderId: order.id,
+      orderNumber:
+        order.order_number,
+      shopId:
+        profile.shop_id,
+      userId:
+        profile.user_id,
+      createdAt:
+        Date.now()
+    }
+  );
 
   await answerCallbackQuery(
     callbackQuery.id,
-    "Заказ доставлен"
+    "Отправьте фото вручения"
   );
 
   await sendTelegramMessage(
     chatId,
     [
-      `✅ Заказ ${order.order_number} доставлен`,
+      `📸 Подтверждение доставки ${order.order_number}`,
       "",
-      "Статус сохранён в CRM.",
-      "Заказ удалён из активных доставок."
+      "Отправьте одним сообщением фотографию букета после вручения или у двери получателя.",
+      "",
+      "Важно:",
+      "• лицо получателя фотографируйте только с его согласия;",
+      "• на снимке должен быть виден доставленный букет;",
+      "• после сохранения фото заказ автоматически станет «Доставлен».",
+      "",
+      "Для отмены отправьте /cancel.",
+      "Запрос действует 15 минут."
     ].join("\n"),
     {
       reply_markup:
-        inlineKeyboard([
-          [
-            {
-              text:
-                "🔄 Обновить доставки",
-              callback_data:
-                "courier:list"
-            }
-          ]
-        ])
+        await mainKeyboardForChat(
+          chatId
+        )
     }
   );
+}
+
+async function removeUploadedFile(
+  publicUrl: string
+) {
+  const relativePath =
+    publicUrl.replace(
+      /^\/uploads\//,
+      ""
+    );
+
+  if (
+    !relativePath
+    || relativePath.includes("..")
+  ) {
+    return;
+  }
+
+  try {
+    await unlink(
+      join(
+        UPLOADS_DIR,
+        relativePath
+      )
+    );
+  } catch {
+    // Файл мог уже отсутствовать. Это не должно ломать рабочий сценарий.
+  }
+}
+
+async function handleCourierDeliveryPhotoMessage(
+  message: TelegramMessage
+): Promise<boolean> {
+  const chatId = message.chat.id;
+  const request =
+    pendingCourierDeliveryPhotoRequests.get(
+      chatId
+    );
+
+  if (!request) {
+    return false;
+  }
+
+  if (
+    Date.now() - request.createdAt
+    > 15 * 60 * 1000
+  ) {
+    pendingCourierDeliveryPhotoRequests.delete(
+      chatId
+    );
+
+    await sendTelegramMessage(
+      chatId,
+      [
+        `Время ожидания фото по заказу ${request.orderNumber} истекло.`,
+        "",
+        "Откройте раздел «🚚 Доставка» и нажмите «📸 Завершить с фото» ещё раз."
+      ].join("\n"),
+      {
+        reply_markup:
+          await mainKeyboardForChat(
+            chatId
+          )
+      }
+    );
+
+    return true;
+  }
+
+  const photos = message.photo || [];
+
+  if (!photos.length) {
+    return false;
+  }
+
+  const profile =
+    await getTelegramProfile(
+      String(chatId)
+    );
+
+  if (
+    !profile?.user_id
+    || profile.user_id
+      !== request.userId
+    || profile.shop_id
+      !== request.shopId
+  ) {
+    pendingCourierDeliveryPhotoRequests.delete(
+      chatId
+    );
+
+    await sendTelegramMessage(
+      chatId,
+      "Не удалось подтвердить курьера для завершения доставки."
+    );
+
+    return true;
+  }
+
+  const photo =
+    pickLargestTelegramPhoto(
+      photos
+    );
+
+  if (!photo) {
+    await sendTelegramMessage(
+      chatId,
+      "Не удалось получить фотографию. Отправьте изображение ещё раз."
+    );
+
+    return true;
+  }
+
+  if (
+    photo.file_size
+    && photo.file_size
+      > MAX_DELIVERY_PHOTO_BYTES
+  ) {
+    await sendTelegramMessage(
+      chatId,
+      "Фотография слишком большая. Отправьте обычное фото размером до 12 МБ."
+    );
+
+    return true;
+  }
+
+  let publicUrl = "";
+
+  try {
+    publicUrl =
+      await downloadTelegramFile(
+        photo.file_id,
+        `delivery-${request.orderId}`,
+        "deliveries"
+      );
+
+    const proofUploadedAt =
+      new Date().toISOString();
+
+    const result = await sql.begin(
+      async (transaction) => {
+        const orderRows =
+          await transaction<{
+            id: string;
+            order_number: string;
+            status: string;
+            courier_id: string | null;
+          }[]>`
+            SELECT
+              id,
+              order_number,
+              status::text AS status,
+              courier_id
+            FROM orders
+            WHERE id = ${request.orderId}
+              AND shop_id = ${request.shopId}
+            LIMIT 1
+            FOR UPDATE
+          `;
+
+        const order = orderRows[0];
+
+        if (!order) {
+          return {
+            ok: false as const,
+            message:
+              "Заказ больше не найден."
+          };
+        }
+
+        if (
+          order.courier_id
+          !== request.userId
+        ) {
+          return {
+            ok: false as const,
+            message:
+              "Заказ больше не назначен вам."
+          };
+        }
+
+        if (
+          order.status === "delivered"
+        ) {
+          return {
+            ok: false as const,
+            message:
+              "Заказ уже отмечен доставленным."
+          };
+        }
+
+        if (
+          order.status !== "delivering"
+        ) {
+          return {
+            ok: false as const,
+            message:
+              "Статус заказа изменился. Обновите список доставок."
+          };
+        }
+
+        const proofPatch = {
+          proofPhotoUrl: publicUrl,
+          proofUploadedAt,
+          proofCourierUserId:
+            request.userId,
+          proofSource: "telegram",
+          proofPrivacyNote:
+            "Получатель не должен попадать в кадр без согласия"
+        };
+
+        const updatedRows =
+          await transaction<{
+            id: string;
+            order_number: string;
+          }[]>`
+            UPDATE orders
+            SET
+              status = 'delivered',
+              delivered_at = NOW(),
+              metadata =
+                jsonb_set(
+                  COALESCE(
+                    metadata,
+                    '{}'::jsonb
+                  ),
+                  '{delivery}',
+                  COALESCE(
+                    metadata -> 'delivery',
+                    '{}'::jsonb
+                  )
+                  || CAST(
+                    ${JSON.stringify(proofPatch)}
+                    AS jsonb
+                  ),
+                  true
+                ),
+              updated_at = NOW()
+            WHERE id = ${order.id}
+              AND shop_id = ${request.shopId}
+              AND courier_id = ${request.userId}
+              AND status = 'delivering'
+            RETURNING
+              id,
+              order_number
+          `;
+
+        const updatedOrder =
+          updatedRows[0];
+
+        if (!updatedOrder) {
+          return {
+            ok: false as const,
+            message:
+              "Статус заказа уже изменился."
+          };
+        }
+
+        await transaction`
+          INSERT INTO order_status_history (
+            shop_id,
+            order_id,
+            from_status,
+            to_status,
+            changed_by_user_id,
+            comment,
+            created_at
+          )
+          VALUES (
+            ${request.shopId},
+            ${order.id},
+            'delivering',
+            'delivered',
+            ${request.userId},
+            'Курьер загрузил фото вручения и завершил доставку через Telegram',
+            NOW()
+          )
+        `;
+
+        return {
+          ok: true as const,
+          orderId:
+            updatedOrder.id,
+          orderNumber:
+            updatedOrder.order_number
+        };
+      }
+    );
+
+    if (!result.ok) {
+      await removeUploadedFile(
+        publicUrl
+      );
+
+      pendingCourierDeliveryPhotoRequests.delete(
+        chatId
+      );
+
+      await sendTelegramMessage(
+        chatId,
+        result.message,
+        {
+          reply_markup:
+            await mainKeyboardForChat(
+              chatId
+            )
+        }
+      );
+
+      return true;
+    }
+
+    pendingCourierDeliveryPhotoRequests.delete(
+      chatId
+    );
+
+    try {
+      await queueCustomerOrderNotification({
+        shopId:
+          request.shopId,
+        orderId:
+          result.orderId,
+        type:
+          "order_delivered",
+        status:
+          "delivered"
+      });
+    } catch (error) {
+      console.error(
+        `[bot-worker] customer delivery notification failed order=${result.orderId}`,
+        error instanceof Error
+          ? error.message
+          : error
+      );
+    }
+
+    await sendTelegramPhoto(
+      chatId,
+      absoluteUrl(publicUrl),
+      [
+        `✅ Заказ ${result.orderNumber} доставлен`,
+        "",
+        "Фото вручения сохранено в CRM и в истории заказа.",
+        "Клиенту отправлено уведомление о доставке.",
+        "Заказ удалён из активных доставок."
+      ].join("\n"),
+      {
+        reply_markup:
+          inlineKeyboard([
+            [
+              {
+                text:
+                  "🔄 Обновить доставки",
+                callback_data:
+                  "courier:list"
+              }
+            ]
+          ])
+      }
+    );
+
+    return true;
+  } catch (error) {
+    if (publicUrl) {
+      await removeUploadedFile(
+        publicUrl
+      );
+    }
+
+    await sendTelegramMessage(
+      chatId,
+      error instanceof Error
+        ? error.message
+        : "Не удалось сохранить фото доставки. Попробуйте ещё раз.",
+      {
+        reply_markup:
+          await mainKeyboardForChat(
+            chatId
+          )
+      }
+    );
+
+    return true;
+  }
 }
 
 async function handleCourierAcceptOrder(
@@ -5207,6 +6864,18 @@ async function handleCallbackQuery(callbackQuery: TelegramCallbackQuery) {
     return;
   }
 
+  if (data.startsWith("bouquet:approve:")) {
+    const orderId = data.slice("bouquet:approve:".length);
+    await handleCustomerBouquetApprove(callbackQuery, orderId);
+    return;
+  }
+
+  if (data.startsWith("bouquet:revision:")) {
+    const orderId = data.slice("bouquet:revision:".length);
+    await handleCustomerBouquetRevisionRequest(callbackQuery, orderId);
+    return;
+  }
+
   if (
     data.startsWith("florist:") &&
     !data.startsWith("florist:problem:")
@@ -5256,9 +6925,21 @@ async function handleCallbackQuery(callbackQuery: TelegramCallbackQuery) {
     return;
   }
 
+  if (data.startsWith("courier:problem:")) {
+    const orderId = data.slice("courier:problem:".length);
+    await handleCourierProblemOrder(callbackQuery, orderId);
+    return;
+  }
+
+  if (data.startsWith("courier:proof:")) {
+    const orderId = data.slice("courier:proof:".length);
+    await handleCourierDeliveryPhotoRequest(callbackQuery, orderId);
+    return;
+  }
+
   if (data.startsWith("courier:delivered:")) {
     const orderId = data.slice("courier:delivered:".length);
-    await handleCourierDeliveredOrder(callbackQuery, orderId);
+    await handleCourierDeliveryPhotoRequest(callbackQuery, orderId);
     return;
   }
 
@@ -5497,7 +7178,19 @@ async function handleUpdate(update: TelegramUpdate) {
   await ensureTelegramAccount(update);
 
   if (message.photo?.length) {
-    const photoHandled = await handleFloristBouquetPhotoMessage(message);
+    const courierPhotoHandled =
+      await handleCourierDeliveryPhotoMessage(
+        message
+      );
+
+    if (courierPhotoHandled) {
+      return;
+    }
+
+    const photoHandled =
+      await handleFloristBouquetPhotoMessage(
+        message
+      );
 
     if (photoHandled) {
       return;
@@ -5507,6 +7200,55 @@ async function handleUpdate(update: TelegramUpdate) {
   const text = message.text?.trim();
 
   if (!text) {
+    return;
+  }
+
+  if (
+    text === "/cancel"
+    && pendingCourierDeliveryPhotoRequests.has(
+      message.chat.id
+    )
+  ) {
+    const request =
+      pendingCourierDeliveryPhotoRequests.get(
+        message.chat.id
+      );
+
+    pendingCourierDeliveryPhotoRequests.delete(
+      message.chat.id
+    );
+
+    await sendTelegramMessage(
+      message.chat.id,
+      [
+        request
+          ? `Загрузка фото по заказу ${request.orderNumber} отменена.`
+          : "Загрузка фото отменена.",
+        "",
+        "Статус заказа не изменялся."
+      ].join("\n"),
+      {
+        reply_markup:
+          await mainKeyboardForChat(
+            message.chat.id
+          )
+      }
+    );
+
+    return;
+  }
+
+  const bouquetRevisionHandled =
+    await handleCustomerBouquetRevisionReasonMessage(message, text);
+
+  if (bouquetRevisionHandled) {
+    return;
+  }
+
+  const courierProblemHandled =
+    await handleCourierProblemReasonMessage(message, text);
+
+  if (courierProblemHandled) {
     return;
   }
 
@@ -5765,11 +7507,30 @@ function formatEvent(event: NotificationEvent): string {
       ].filter(Boolean).join("\n");
     }
 
+    if (event.type === "bouquet_approval_requested") {
+      return [
+        `💐 Фото букета по заказу ${orderTitle}`,
+        "",
+        "Пожалуйста, проверьте готовую композицию.",
+        "Нажмите «Одобряю», если всё подходит, или «Нужна правка» и напишите комментарий флористу.",
+        trackingUrl ? `Страница заказа: ${trackingUrl}` : ""
+      ].filter(Boolean).join("\n");
+    }
+
     if (event.type === "order_ready") {
       return [
         `💐 Букет по заказу ${orderTitle} готов`,
         "",
         "Флорист собрал букет и прикрепил фото. Скоро передадим заказ курьеру.",
+        trackingUrl ? `Отследить заказ: ${trackingUrl}` : ""
+      ].filter(Boolean).join("\n");
+    }
+
+    if (event.type === "order_courier_assigned") {
+      return [
+        `🚚 Заказ ${orderTitle} передан курьеру`,
+        "",
+        "Курьер получил данные доставки. Когда он выедет, статус обновится автоматически.",
         trackingUrl ? `Отследить заказ: ${trackingUrl}` : ""
       ].filter(Boolean).join("\n");
     }
@@ -5784,10 +7545,67 @@ function formatEvent(event: NotificationEvent): string {
     }
 
     if (event.type === "order_delivered") {
+      const deliveryProofPhotoUrl = absoluteUrl(
+        payloadValue(
+          payload,
+          "deliveryProofPhotoUrl",
+          "delivery_proof_photo_url"
+        )
+      );
+
       return [
         `✅ Заказ ${orderTitle} доставлен`,
         "",
+        deliveryProofPhotoUrl
+          ? "Курьер подтвердил вручение фотографией."
+          : "Доставка завершена.",
         "Спасибо, что выбрали ВЫБЕРИ МЕНЯ. Будем рады собрать следующий букет.",
+        trackingUrl ? `Страница заказа: ${trackingUrl}` : ""
+      ].filter(Boolean).join("\n");
+    }
+
+    if (event.type === "order_problem") {
+      return [
+        `⚠️ По заказу ${orderTitle} требуется уточнение`,
+        "",
+        "Возник вопрос, который требует участия менеджера. Мы свяжемся с вами по контактам из заказа.",
+        trackingUrl ? `Страница заказа: ${trackingUrl}` : ""
+      ].filter(Boolean).join("\n");
+    }
+
+    if (event.type === "order_cancelled") {
+      return [
+        `❌ Заказ ${orderTitle} отменён`,
+        "",
+        "Если заказ был оплачен, менеджер отдельно согласует возврат средств.",
+        trackingUrl ? `Страница заказа: ${trackingUrl}` : ""
+      ].filter(Boolean).join("\n");
+    }
+
+    if (event.type === "order_refunded") {
+      const refundAmount = payloadValue(
+        payload,
+        "refundAmount",
+        "refund_amount"
+      );
+      const refundReason = payloadText(
+        payload,
+        "refundReason",
+        "refund_reason"
+      );
+      const orderCancelled = payloadValue(
+        payload,
+        "orderCancelled",
+        "order_cancelled"
+      ) === true;
+
+      return [
+        `↩️ По заказу ${orderTitle} зафиксирован возврат`,
+        refundAmount !== "" ? `Сумма: ${money(refundAmount)}` : "",
+        refundReason ? `Причина: ${refundReason}` : "",
+        "",
+        "Денежный перевод выполняется тем способом, который согласован с менеджером.",
+        orderCancelled ? "Заказ также отменён." : "",
         trackingUrl ? `Страница заказа: ${trackingUrl}` : ""
       ].filter(Boolean).join("\n");
     }
@@ -5802,6 +7620,27 @@ function formatEvent(event: NotificationEvent): string {
       "",
       messageText ? `Сообщение: ${messageText}` : "",
       trackingUrl ? `Открыть заказ: ${trackingUrl}` : ""
+    ].filter(Boolean).join("\n");
+  }
+
+  if (event.type === "bouquet_approved") {
+    return [
+      `✅ Покупатель одобрил букет по заказу ${orderTitle}`,
+      "",
+      "Можно завершить сборку и передать заказ на следующий этап."
+    ].join("\n");
+  }
+
+  if (event.type === "bouquet_revision_requested") {
+    const note = payloadText(payload, "note");
+    const crmUrl = absoluteUrl(payloadValue(payload, "crmUrl", "crm_url"));
+
+    return [
+      `🔄 Покупатель попросил изменить букет по заказу ${orderTitle}`,
+      note ? `Комментарий: ${note}` : "",
+      "",
+      "Внесите правки и загрузите новое фото на согласование.",
+      crmUrl ? `CRM: ${crmUrl}` : ""
     ].filter(Boolean).join("\n");
   }
 
@@ -5880,6 +7719,32 @@ function formatEvent(event: NotificationEvent): string {
   return `Уведомление по заказу ${orderTitle}`;
 }
 
+class NotificationSkippedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "NotificationSkippedError";
+  }
+}
+
+function isPermanentTelegramRecipientError(message: string) {
+  return /bot was blocked by the user|chat not found|user is deactivated|forbidden|have no rights to send/i.test(message);
+}
+
+async function deactivateTelegramRecipient(shopId: string, telegramId: string, reason: string) {
+  await sql`
+    UPDATE telegram_accounts
+    SET is_active = false,
+        updated_at = NOW()
+    WHERE shop_id = ${shopId}
+      AND telegram_id = ${telegramId}
+      AND is_active = true
+  `;
+
+  console.warn(
+    `[bot-worker] telegram recipient deactivated shop=${shopId} chat=${telegramId} reason=${reason}`
+  );
+}
+
 async function getRecipients(event: NotificationEvent): Promise<string[]> {
   const directRecipient = valueToText(event.recipient_telegram_id).trim();
 
@@ -5887,8 +7752,49 @@ async function getRecipients(event: NotificationEvent): Promise<string[]> {
     return [];
   }
 
-  if (directRecipient) {
-    return [directRecipient];
+  if (directRecipient && event.recipient_type === "customer") {
+    const rows = await sql<{ telegram_id: string }[]>`
+      SELECT ta.telegram_id
+      FROM telegram_accounts ta
+      LEFT JOIN orders o
+        ON o.id = ${event.order_id}
+       AND o.shop_id = ta.shop_id
+      WHERE ta.shop_id = ${event.shop_id}
+        AND ta.telegram_id = ${directRecipient}
+        AND ta.customer_id IS NOT NULL
+        AND ta.is_active = true
+        AND (
+          ${event.type} = 'customer_login_code'
+          OR ta.notifications_enabled = true
+        )
+        AND (
+          ${event.order_id}::uuid IS NULL
+          OR o.customer_id = ta.customer_id
+        )
+      ORDER BY ta.linked_at DESC
+      LIMIT 1
+    `;
+
+    return rows.map((row) => row.telegram_id).filter(Boolean);
+  }
+
+  if (directRecipient && event.recipient_type === "staff") {
+    const rows = await sql<{ telegram_id: string }[]>`
+      SELECT ta.telegram_id
+      FROM telegram_accounts ta
+      JOIN shop_users su
+        ON su.shop_id = ta.shop_id
+       AND su.user_id = ta.user_id
+       AND su.is_active = true
+      WHERE ta.shop_id = ${event.shop_id}
+        AND ta.telegram_id = ${directRecipient}
+        AND ta.user_id IS NOT NULL
+        AND ta.is_active = true
+        AND ta.notifications_enabled = true
+      LIMIT 1
+    `;
+
+    return rows.map((row) => row.telegram_id).filter(Boolean);
   }
 
   if (event.recipient_type === "customer" && event.order_id) {
@@ -5920,6 +7826,7 @@ async function getRecipients(event: NotificationEvent): Promise<string[]> {
       WHERE ta.shop_id = ${event.shop_id}
         AND ta.user_id IS NOT NULL
         AND ta.is_active = true
+        AND ta.notifications_enabled = true
       ORDER BY ta.telegram_id
     `;
 
@@ -5930,12 +7837,31 @@ async function getRecipients(event: NotificationEvent): Promise<string[]> {
 }
 
 async function processNotificationEvents() {
+  await sql`
+    UPDATE notification_events
+    SET status = 'pending',
+        error = COALESCE(error, 'Восстановлено после зависшего процесса'),
+        updated_at = NOW()
+    WHERE channel = 'telegram'
+      AND status = 'processing'
+      AND updated_at < NOW() - INTERVAL '10 minutes'
+  `;
+
   const events = await sql<NotificationEvent[]>`
-    SELECT id, shop_id, order_id, type, channel, recipient_type, recipient_telegram_id, payload, attempts, created_at
+    SELECT id, shop_id, order_id, type, channel, recipient_type, recipient_telegram_id, payload, attempts, created_at, updated_at
     FROM notification_events
     WHERE status = 'pending'
       AND channel = 'telegram'
       AND attempts < 5
+      AND updated_at <= NOW() - (
+        CASE attempts
+          WHEN 0 THEN INTERVAL '0 seconds'
+          WHEN 1 THEN INTERVAL '30 seconds'
+          WHEN 2 THEN INTERVAL '2 minutes'
+          WHEN 3 THEN INTERVAL '10 minutes'
+          ELSE INTERVAL '30 minutes'
+        END
+      )
     ORDER BY created_at ASC
     LIMIT 10
   `;
@@ -5972,19 +7898,68 @@ async function processNotificationEvents() {
       const recipients = await getRecipients(event);
 
       if (recipients.length === 0) {
-        throw new Error("No active Telegram staff recipients");
+        throw new NotificationSkippedError(
+          event.recipient_type === "customer"
+            ? "Telegram покупателя не подключён или уведомления выключены"
+            : "Нет активного сотрудника с включёнными Telegram-уведомлениями"
+        );
       }
 
+      let deliveredRecipients = 0;
+
       for (const chatId of recipients) {
-        const payload = eventPayload(event);
+        try {
+          const payload = eventPayload(event);
         const productImageUrl = absoluteUrl(payloadValue(payload, "productImageUrl", "product_image_url"));
         const bouquetPhotoUrl = absoluteUrl(payloadValue(payload, "bouquetPhotoUrl", "bouquet_photo_url"));
+        const deliveryProofPhotoUrl = absoluteUrl(
+          payloadValue(
+            payload,
+            "deliveryProofPhotoUrl",
+            "delivery_proof_photo_url"
+          )
+        );
         const orderId = payloadText(payload, "orderId", "order_id");
         const crmUrl = absoluteUrl(payloadValue(payload, "crmUrl", "crm_url"));
         const trackingUrl = absoluteUrl(payloadValue(payload, "trackingUrl", "tracking_url"));
 
         const deliveryAddressText = payloadText(payload, "deliveryAddressText", "delivery_address_text");
         const actionButtonRows: TelegramInlineKeyboardButton[][] = [];
+
+        if (
+          event.recipient_type === "customer"
+          && event.type === "bouquet_approval_requested"
+          && orderId
+        ) {
+          actionButtonRows.push([
+            {
+              text: "✅ Одобряю",
+              callback_data: `bouquet:approve:${orderId}`
+            },
+            {
+              text: "🔄 Нужна правка",
+              callback_data: `bouquet:revision:${orderId}`
+            }
+          ]);
+        }
+
+        if (event.type === "bouquet_approved" && orderId) {
+          actionButtonRows.push([
+            {
+              text: "✅ Завершить сборку",
+              callback_data: `florist:ready:${orderId}`
+            }
+          ]);
+        }
+
+        if (event.type === "bouquet_revision_requested" && orderId) {
+          actionButtonRows.push([
+            {
+              text: "📸 Загрузить новое фото",
+              callback_data: `florist:photo:${orderId}`
+            }
+          ]);
+        }
 
         if (event.type === "florist_order_assigned" && orderId) {
           actionButtonRows.push([
@@ -6013,7 +7988,15 @@ async function processNotificationEvents() {
           }
         }
 
-        if ((event.type === "florist_order_assigned" || event.type === "courier_order_assigned") && crmUrl) {
+        if (
+          (
+            event.type === "florist_order_assigned"
+            || event.type === "courier_order_assigned"
+            || event.type === "bouquet_approved"
+            || event.type === "bouquet_revision_requested"
+          )
+          && crmUrl
+        ) {
           actionButtonRows.push([
             {
               text: "Открыть CRM",
@@ -6079,10 +8062,34 @@ async function processNotificationEvents() {
               reply_markup: actionReplyMarkup
             });
           }
+        } else if (
+          event.type === "bouquet_approval_requested"
+          && bouquetPhotoUrl
+        ) {
+          await sendTelegramPhoto(
+            chatId,
+            bouquetPhotoUrl,
+            message,
+            actionReplyMarkup
+              ? { reply_markup: actionReplyMarkup }
+              : undefined
+          );
         } else if (event.type === "order_ready" && bouquetPhotoUrl) {
           await sendTelegramPhoto(chatId, bouquetPhotoUrl, message, actionReplyMarkup ? {
             reply_markup: actionReplyMarkup
           } : undefined);
+        } else if (event.type === "order_delivered" && deliveryProofPhotoUrl) {
+          await sendTelegramPhoto(
+            chatId,
+            deliveryProofPhotoUrl,
+            message,
+            actionReplyMarkup
+              ? {
+                  reply_markup:
+                    actionReplyMarkup
+                }
+              : undefined
+          );
         } else if (actionReplyMarkup) {
           await sendTelegramMessage(chatId, message, {
             reply_markup: actionReplyMarkup
@@ -6090,6 +8097,35 @@ async function processNotificationEvents() {
         } else {
           await sendTelegramMessage(chatId, message);
         }
+
+          deliveredRecipients += 1;
+        } catch (recipientError) {
+          const recipientErrorMessage =
+            recipientError instanceof Error
+              ? recipientError.message
+              : String(recipientError);
+
+          if (isPermanentTelegramRecipientError(recipientErrorMessage)) {
+            await deactivateTelegramRecipient(
+              event.shop_id,
+              String(chatId),
+              recipientErrorMessage
+            );
+
+            console.warn(
+              `[bot-worker] recipient skipped event=${event.id} chat=${chatId}`
+            );
+            continue;
+          }
+
+          throw recipientError;
+        }
+      }
+
+      if (deliveredRecipients === 0) {
+        throw new NotificationSkippedError(
+          "Все получатели Telegram недоступны или отключены"
+        );
       }
 
       await sql`
@@ -6104,6 +8140,38 @@ async function processNotificationEvents() {
 
       console.log(`[bot-worker] sent event=${event.id} type=${event.type}`);
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+
+      if (error instanceof NotificationSkippedError) {
+        await sql`
+          UPDATE notification_events
+          SET status = 'skipped',
+              error = ${errorMessage},
+              updated_at = NOW()
+          WHERE id = ${event.id}
+        `;
+
+        console.warn(`[bot-worker] skipped event=${event.id} reason=${errorMessage}`);
+        continue;
+      }
+
+      const directRecipient = valueToText(event.recipient_telegram_id).trim();
+
+      if (directRecipient && isPermanentTelegramRecipientError(errorMessage)) {
+        await deactivateTelegramRecipient(event.shop_id, directRecipient, errorMessage);
+
+        await sql`
+          UPDATE notification_events
+          SET status = 'skipped',
+              attempts = attempts + 1,
+              error = ${`Получатель Telegram отключён автоматически: ${errorMessage}`},
+              updated_at = NOW()
+          WHERE id = ${event.id}
+        `;
+
+        continue;
+      }
+
       const nextAttempts = Number(event.attempts || 0) + 1;
       const nextStatus = nextAttempts >= 5 ? "failed" : "pending";
 
@@ -6111,7 +8179,7 @@ async function processNotificationEvents() {
         UPDATE notification_events
         SET status = ${nextStatus},
             attempts = attempts + 1,
-            error = ${error instanceof Error ? error.message : String(error)},
+            error = ${errorMessage},
             updated_at = NOW()
         WHERE id = ${event.id}
       `;

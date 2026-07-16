@@ -588,8 +588,24 @@ export function ProductForm({
                 form.get("shortDescription"),
               description:
                 form.get("description"),
+              composition:
+                form.get("composition"),
+              careText:
+                form.get("careText"),
               price:
                 form.get("price"),
+              oldPrice:
+                String(
+                  form.get("oldPrice") ?? ""
+                ).trim()
+                  ? form.get("oldPrice")
+                  : null,
+              costPrice:
+                String(
+                  form.get("costPrice") ?? ""
+                ).trim()
+                  ? form.get("costPrice")
+                  : null,
               stockQuantity:
                 form.get("stockQuantity"),
               status:
@@ -755,6 +771,32 @@ export function ProductForm({
         </label>
 
         <label>
+          <span>Старая цена, ₽</span>
+          <input
+            name="oldPrice"
+            type="number"
+            min="0"
+            step="1"
+            placeholder="Необязательно"
+          />
+          <small>
+            Укажите только для реальной скидки.
+            Старая цена должна быть выше текущей.
+          </small>
+        </label>
+
+        <label>
+          <span>Себестоимость, ₽</span>
+          <input
+            name="costPrice"
+            type="number"
+            min="0"
+            step="1"
+            placeholder="Видна только в CRM"
+          />
+        </label>
+
+        <label>
           <span>Внутренний остаток</span>
           <input
             name="stockQuantity"
@@ -821,6 +863,24 @@ export function ProductForm({
           <textarea
             name="description"
             maxLength={20000}
+          />
+        </label>
+
+        <label className="wide">
+          <span>Состав букета</span>
+          <textarea
+            name="composition"
+            maxLength={10000}
+            placeholder="Например: розы, эустома, эвкалипт, упаковка"
+          />
+        </label>
+
+        <label className="wide">
+          <span>Уход за букетом</span>
+          <textarea
+            name="careText"
+            maxLength={10000}
+            placeholder="Короткая памятка для получателя"
           />
         </label>
 

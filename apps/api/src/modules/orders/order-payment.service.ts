@@ -119,6 +119,20 @@ export async function markOrderPaid(
         );
       }
 
+      if (order.payment_status === "refunded") {
+        throw new HttpError(
+          400,
+          "Заказ с зафиксированным возвратом нельзя повторно отметить оплаченным"
+        );
+      }
+
+      if (order.payment_status === "cancelled") {
+        throw new HttpError(
+          400,
+          "Отменённую оплату нельзя повторно подтвердить"
+        );
+      }
+
       if (!order.customer_id) {
         throw new HttpError(
           400,

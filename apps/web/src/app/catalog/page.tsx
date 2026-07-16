@@ -4,6 +4,10 @@ import {
 } from "../components/add-to-cart-button";
 
 import {
+  ProductTileImage
+} from "../components/product-tile-image";
+
+import {
   CategoryIcon,
   categoryIconKeyFromImageUrl
 } from "../../components/category-icon";
@@ -33,8 +37,7 @@ type Product = {
   description?: string | null;
   price: number;
   oldPrice?: number | null;
-  stockQuantity?: number | null;
-  status: string;
+  availability?: "available" | "unavailable" | null;
   isFeatured?: boolean | null;
   primaryImage?: {
     url: string;
@@ -87,7 +90,7 @@ type SortValue =
 const availabilityValues = [
   "all",
   "available",
-  "order"
+  "unavailable"
 ] as const;
 
 type AvailabilityValue =
@@ -173,15 +176,9 @@ function positivePage(
 function productAvailabilityText(
   product: Product
 ) {
-  if (
-    product.stockQuantity !== null
-    && product.stockQuantity !== undefined
-    && Number(product.stockQuantity) <= 0
-  ) {
-    return "Под заказ";
-  }
-
-  return "В наличии";
+  return product.availability === "available"
+    ? "В наличии"
+    : "Нет в наличии";
 }
 
 function hasOldPrice(
@@ -231,38 +228,27 @@ function ProductCard({
 }: {
   product: Product;
 }) {
+  const available =
+    product.availability === "available";
+
   return (
     <article className="product-card">
       <div className="product-card-media">
         <a
-          className={
-            `product-image ${
-              product.primaryImage
-                ? "has-image"
-                : "product-image-placeholder"
-            }`
-          }
+          className="product-image product-image-safe"
           href={`/product/${product.slug}`}
           aria-label={product.name}
         >
-          {product.primaryImage ? (
-            <img
-              src={product.primaryImage.url}
-              alt={
-                product.primaryImage.alt
-                || product.name
-              }
-              loading="lazy"
-              decoding="async"
-            />
-          ) : (
-            <>
-              <span>ВМ</span>
-              <small>
-                Индивидуальная сборка под заказ
-              </small>
-            </>
-          )}
+          <ProductTileImage
+            src={
+              product.primaryImage?.url
+              ?? null
+            }
+            alt={
+              product.primaryImage?.alt
+              || product.name
+            }
+          />
         </a>
 
         <FavoriteButton
@@ -275,7 +261,15 @@ function ProductCard({
           <div className="product-card-title-row">
             <h3>{product.name}</h3>
 
-            <span className="product-status-badge">
+            <span
+              className={
+                `product-status-badge ${
+                  available
+                    ? "is-available"
+                    : "is-unavailable"
+                }`
+              }
+            >
               {productAvailabilityText(product)}
             </span>
           </div>
@@ -310,22 +304,32 @@ function ProductCard({
               Открыть
             </a>
 
-            <AddToCartButton
-              className="product-cart-button"
-              label="В корзину"
-              product={{
-                id: product.id,
-                slug: product.slug,
-                name: product.name,
-                price: product.price,
-                imageUrl:
-                  product.primaryImage?.url
-                  ?? "",
-                imageAlt:
-                  product.primaryImage?.alt
-                  || product.name
-              }}
-            />
+            {available ? (
+              <AddToCartButton
+                className="product-cart-button"
+                label="В корзину"
+                product={{
+                  id: product.id,
+                  slug: product.slug,
+                  name: product.name,
+                  price: product.price,
+                  imageUrl:
+                    product.primaryImage?.url
+                    ?? "",
+                  imageAlt:
+                    product.primaryImage?.alt
+                    || product.name
+                }}
+              />
+            ) : (
+              <button
+                type="button"
+                className="product-cart-button is-disabled"
+                disabled
+              >
+                Нет в наличии
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -547,9 +551,9 @@ export default async function CatalogPage({
     );
   }
 
-  if (availability === "order") {
+  if (availability === "unavailable") {
     activeFilterLabels.push(
-      "Под заказ"
+      "Нет в наличии"
     );
   }
 
@@ -745,8 +749,8 @@ export default async function CatalogPage({
                       В наличии
                     </option>
 
-                    <option value="order">
-                      Под заказ
+                    <option value="unavailable">
+                      Нет в наличии
                     </option>
                   </select>
                 </label>

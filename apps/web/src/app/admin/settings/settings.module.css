@@ -1,0 +1,329 @@
+.form {
+  display: grid;
+  gap: 24px;
+  padding-bottom: 96px;
+}
+
+.section {
+  border: 1px solid rgba(74, 36, 45, 0.12);
+  border-radius: 24px;
+  background: #fff;
+  padding: 24px;
+  box-shadow: 0 16px 36px rgba(58, 26, 34, 0.06);
+}
+
+.sectionHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 22px;
+}
+
+.sectionHead > div > span {
+  display: block;
+  color: #9a5262;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.sectionHead h2 {
+  margin: 0;
+  color: #3e2028;
+  font-size: clamp(21px, 2vw, 28px);
+}
+
+.sectionHead p {
+  max-width: 420px;
+  margin: 0;
+  color: #765f65;
+  line-height: 1.55;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.grid label,
+.blockLabel,
+.benefits label {
+  display: grid;
+  gap: 8px;
+  color: #543941;
+  font-weight: 700;
+}
+
+.grid label > span,
+.blockLabel > span,
+.benefits label > span {
+  font-size: 13px;
+}
+
+.grid input,
+.grid textarea,
+.grid select,
+.blockLabel textarea,
+.benefits input,
+.benefits textarea {
+  width: 100%;
+  min-height: 46px;
+  border: 1px solid rgba(74, 36, 45, 0.18);
+  border-radius: 14px;
+  background: #fffdfb;
+  color: #3e2028;
+  padding: 11px 13px;
+  font: inherit;
+  box-sizing: border-box;
+}
+
+.grid textarea,
+.blockLabel textarea,
+.benefits textarea {
+  resize: vertical;
+  min-height: 94px;
+}
+
+.grid input:focus,
+.grid textarea:focus,
+.grid select:focus,
+.blockLabel textarea:focus,
+.benefits input:focus,
+.benefits textarea:focus {
+  outline: 3px solid rgba(154, 82, 98, 0.12);
+  border-color: #9a5262;
+}
+
+.wide {
+  grid-column: 1 / -1;
+}
+
+.switchLabel {
+  align-content: center;
+  grid-template-columns: auto 1fr !important;
+  display: flex !important;
+  align-items: center;
+  gap: 10px !important;
+  min-height: 46px;
+  border: 1px solid rgba(74, 36, 45, 0.12);
+  border-radius: 14px;
+  padding: 10px 14px;
+  background: #fffaf7;
+}
+
+.switchLabel input {
+  width: 20px;
+  min-height: 20px;
+}
+
+.heroPreview {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.8fr) minmax(0, 1.2fr);
+  gap: 20px;
+  align-items: stretch;
+  margin-top: 20px;
+  border-radius: 20px;
+  overflow: hidden;
+  background: #f7ece8;
+}
+
+.heroPreview img,
+.heroPreview > div {
+  width: 100%;
+  min-height: 220px;
+  max-height: 320px;
+  object-fit: cover;
+}
+
+.heroPreview > div {
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  box-sizing: border-box;
+  color: #806970;
+  text-align: center;
+  border: 1px dashed rgba(74, 36, 45, 0.2);
+}
+
+.heroPreview section {
+  align-self: center;
+  padding: 30px;
+}
+
+.heroPreview section span {
+  color: #9a5262;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.heroPreview section strong {
+  display: block;
+  margin-top: 10px;
+  color: #3e2028;
+  font-size: 28px;
+  line-height: 1.15;
+}
+
+.heroPreview section p {
+  color: #765f65;
+  line-height: 1.55;
+}
+
+.benefits {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.benefits article {
+  border: 1px solid rgba(74, 36, 45, 0.12);
+  border-radius: 18px;
+  padding: 16px;
+  background: #fffaf7;
+}
+
+.benefits article > span {
+  display: block;
+  margin-bottom: 14px;
+  color: #9a5262;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.blockLabel small {
+  color: #806970;
+  font-weight: 500;
+}
+
+.switchGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.switchGrid label {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  border: 1px solid rgba(74, 36, 45, 0.12);
+  border-radius: 18px;
+  padding: 18px;
+  background: #fffaf7;
+}
+
+.switchGrid input {
+  width: 20px;
+  height: 20px;
+  margin-top: 2px;
+}
+
+.switchGrid label > span {
+  display: grid;
+  gap: 5px;
+}
+
+.switchGrid strong {
+  color: #3e2028;
+}
+
+.switchGrid small {
+  color: #806970;
+  line-height: 1.45;
+}
+
+.saveBar {
+  position: sticky;
+  z-index: 20;
+  bottom: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  border: 1px solid rgba(74, 36, 45, 0.16);
+  border-radius: 20px;
+  background: rgba(255, 253, 251, 0.96);
+  box-shadow: 0 18px 46px rgba(58, 26, 34, 0.18);
+  padding: 16px 18px;
+  backdrop-filter: blur(14px);
+}
+
+.saveBar div {
+  color: #765f65;
+}
+
+.saveBar strong {
+  color: #326649;
+}
+
+.saveBar button {
+  min-height: 46px;
+  border: 0;
+  border-radius: 14px;
+  padding: 0 24px;
+  background: #5c2434;
+  color: #fff;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.saveBar button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+@media (max-width: 900px) {
+  .sectionHead {
+    display: grid;
+  }
+
+  .benefits,
+  .switchGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .heroPreview {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .form {
+    gap: 16px;
+    padding-bottom: 120px;
+  }
+
+  .section {
+    border-radius: 18px;
+    padding: 18px;
+  }
+
+  .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .wide {
+    grid-column: auto;
+  }
+
+  .heroPreview section {
+    padding: 22px;
+  }
+
+  .saveBar {
+    bottom: 10px;
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .saveBar button {
+    width: 100%;
+  }
+}

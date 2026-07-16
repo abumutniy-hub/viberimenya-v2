@@ -3,37 +3,13 @@ import type {
   Viewport
 } from "next";
 
-import {
-  Manrope,
-  Playfair_Display
-} from "next/font/google";
-
 import "./globals.css";
 import "./public-shell.css";
 
 import {
-  PublicShell
+  PublicShell,
+  type PublicShellSettings
 } from "./components/public-shell";
-
-const manrope = Manrope({
-  subsets: [
-    "latin",
-    "cyrillic"
-  ],
-  variable: "--font-public-sans",
-  display: "swap"
-});
-
-const playfair =
-  Playfair_Display({
-    subsets: [
-      "latin",
-      "cyrillic"
-    ],
-    variable:
-      "--font-public-display",
-    display: "swap"
-  });
 
 export const metadata: Metadata = {
   metadataBase:
@@ -73,20 +49,85 @@ export const viewport: Viewport = {
   colorScheme: "light"
 };
 
-export default function RootLayout({
+const defaultShellSettings:
+  PublicShellSettings = {
+    phone: "",
+    whatsapp: "",
+    telegram: "",
+    instagram: "",
+    address: "",
+    workHours: "",
+    site: {
+      brandName: "Выбери Меня",
+      brandSubtitle: "ЦВЕТЫ И ПОДАРКИ",
+      footerDescription:
+        "Собираем букеты под заказ, показываем готовую работу перед отправкой и бережно доставляем получателю.",
+      email: "",
+      legalName: "",
+      inn: "",
+      ogrn: "",
+      policyUrl: "",
+      offerUrl: "",
+      deliveryTermsUrl: "",
+      returnsUrl: ""
+    }
+  };
+
+async function loadShellSettings():
+  Promise<PublicShellSettings> {
+  const baseUrl =
+    process.env.API_INTERNAL_URL
+    ?? "http://127.0.0.1:4001";
+
+  try {
+    const response = await fetch(
+      `${baseUrl}/api/public/shop`,
+      {
+        cache: "no-store"
+      }
+    );
+
+    if (!response.ok) {
+      return defaultShellSettings;
+    }
+
+    const data = await response.json() as {
+      settings?: Partial<
+        PublicShellSettings
+      > & {
+        site?: Partial<
+          PublicShellSettings["site"]
+        >;
+      };
+    };
+
+    return {
+      ...defaultShellSettings,
+      ...data.settings,
+      site: {
+        ...defaultShellSettings.site,
+        ...data.settings?.site
+      }
+    };
+  } catch {
+    return defaultShellSettings;
+  }
+}
+
+export default async function RootLayout({
   children
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const shellSettings =
+    await loadShellSettings();
+
   return (
     <html lang="ru">
-      <body
-        className={
-          `${manrope.variable} `
-          + `${playfair.variable}`
-        }
-      >
-        <PublicShell>
+      <body>
+        <PublicShell
+          settings={shellSettings}
+        >
           {children}
         </PublicShell>
       </body>

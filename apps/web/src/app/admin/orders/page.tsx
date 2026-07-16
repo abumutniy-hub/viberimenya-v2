@@ -5,9 +5,35 @@ import { AdminPresenceHeartbeat } from "../components/admin-presence-heartbeat";
 
 export const dynamic = "force-dynamic";
 
+type PageProps = {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+};
+
 type Response = {
   items: AdminRow[];
-
+  pagination?: {
+    page?: number;
+    limit?: number;
+    totalItems?: number;
+    totalPages?: number;
+  };
+  filters?: {
+    q?: string;
+    status?: string;
+    payment?: string;
+    delivery?: string;
+    attention?: string;
+    dateFrom?: string;
+    dateTo?: string;
+  };
+  summary?: {
+    total?: number;
+    active?: number;
+    new_orders?: number;
+    problem?: number;
+    pending_payment?: number;
+    delivered_today?: number;
+  };
   viewer?: {
     userId?: string;
     role?: string;
@@ -51,8 +77,13 @@ function numberField(row: AdminRow, key: string) {
   return Number(row[key] ?? 0);
 }
 
+function numberValue(value: unknown) {
+  const result = Number(value ?? 0);
+  return Number.isFinite(result) ? result : 0;
+}
+
 function money(value: unknown) {
-  return `${Number(value || 0).toLocaleString("ru-RU")} ₽`;
+  return `${numberValue(value).toLocaleString("ru-RU")} ₽`;
 }
 
 function dateTime(value: unknown) {
@@ -87,43 +118,17 @@ function statusClass(value: string) {
   return value.replace(/[^a-z0-9_-]/gi, "-");
 }
 
-function orderStatusChip(row: AdminRow) {
-  const status = field(row, "status");
-
-  return (
-    <span className={`admin-status-chip status-${statusClass(status)}`}>
-      {orderStatusLabels[status] || status || "—"}
-    </span>
-  );
-}
-
-function recordValue(
-  value: unknown
-): Record<string, unknown> {
-  if (
-    value
-    && typeof value === "object"
-    && !Array.isArray(value)
-  ) {
-    return value as
-      Record<string, unknown>;
+function recordValue(value: unknown): Record<string, unknown> {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
   }
 
-  if (
-    typeof value === "string"
-    && value.trim()
-  ) {
+  if (typeof value === "string" && value.trim()) {
     try {
-      const parsed =
-        JSON.parse(value);
+      const parsed = JSON.parse(value);
 
-      if (
-        parsed
-        && typeof parsed === "object"
-        && !Array.isArray(parsed)
-      ) {
-        return parsed as
-          Record<string, unknown>;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
       }
     } catch {
       return {};
@@ -133,62 +138,33 @@ function recordValue(
   return {};
 }
 
-function deliverySnapshot(
-  row: AdminRow
-) {
-  const metadata =
-    recordValue(row.metadata);
-
-  return recordValue(
-    metadata.delivery
-  );
+function deliverySnapshot(row: AdminRow) {
+  const metadata = recordValue(row.metadata);
+  return recordValue(metadata.delivery);
 }
 
-function isExpressOrder(
-  row: AdminRow
-) {
-  const snapshot =
-    deliverySnapshot(row);
+function isExpressOrder(row: AdminRow) {
+  const snapshot = deliverySnapshot(row);
 
   return (
     snapshot.isExpress === true
-    || String(
-      snapshot.isExpress ?? ""
-    )
-      .trim()
-      .toLowerCase()
-      === "true"
+    || String(snapshot.isExpress ?? "").trim().toLowerCase() === "true"
   );
 }
 
-function deliveryTariffName(
-  row: AdminRow
-) {
-  const snapshot =
-    deliverySnapshot(row);
+function deliveryTariffName(row: AdminRow) {
+  const snapshot = deliverySnapshot(row);
+  const name = String(snapshot.tariffName ?? "").trim();
 
-  const name =
-    String(
-      snapshot.tariffName ?? ""
-    ).trim();
+  if (name) return name;
 
-  if (name) {
-    return name;
-  }
-
-  return field(
-    row,
-    "delivery_type"
-  ) === "pickup"
+  return field(row, "delivery_type") === "pickup"
     ? "Самовывоз"
     : "Обычная доставка";
 }
 
-function isActiveExpressOrder(
-  row: AdminRow
-) {
-  const status =
-    field(row, "status");
+function isActiveExpressOrder(row: AdminRow) {
+  const status = field(row, "status");
 
   return (
     isExpressOrder(row)
@@ -197,57 +173,32 @@ function isActiveExpressOrder(
   );
 }
 
-function orderCreatedTimestamp(
-  row: AdminRow
-) {
-  const timestamp =
-    Date.parse(
-      String(
-        row.created_at ?? ""
-      )
-    );
-
-  return Number.isFinite(timestamp)
-    ? timestamp
-    : 0;
+function orderCreatedTimestamp(row: AdminRow) {
+  const timestamp = Date.parse(String(row.created_at ?? ""));
+  return Number.isFinite(timestamp) ? timestamp : 0;
 }
 
-function sortOrders(
-  rows: AdminRow[]
-) {
+function sortOrders(rows: AdminRow[]) {
   return rows
-    .map((row, index) => ({
-      row,
-      index
-    }))
+    .map((row, index) => ({ row, index }))
     .sort((left, right) => {
-      const priorityDifference =
-        Number(
-          isActiveExpressOrder(
-            right.row
-          )
-        )
-        - Number(
-          isActiveExpressOrder(
-            left.row
-          )
-        );
+      const problemDifference =
+        Number(field(right.row, "status") === "problem")
+        - Number(field(left.row, "status") === "problem");
 
-      if (priorityDifference !== 0) {
-        return priorityDifference;
-      }
+      if (problemDifference !== 0) return problemDifference;
+
+      const priorityDifference =
+        Number(isActiveExpressOrder(right.row))
+        - Number(isActiveExpressOrder(left.row));
+
+      if (priorityDifference !== 0) return priorityDifference;
 
       const dateDifference =
-        orderCreatedTimestamp(
-          right.row
-        )
-        - orderCreatedTimestamp(
-            left.row
-          );
+        orderCreatedTimestamp(right.row)
+        - orderCreatedTimestamp(left.row);
 
-      if (dateDifference !== 0) {
-        return dateDifference;
-      }
+      if (dateDifference !== 0) return dateDifference;
 
       return left.index - right.index;
     })
@@ -264,21 +215,71 @@ function paymentStatusChip(row: AdminRow) {
   );
 }
 
-export default async function AdminOrdersPage() {
-  const data =
-    await fetchAdmin<Response>(
-      "/api/admin/orders"
-    );
+function firstParam(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value[0] ?? "" : value ?? "";
+}
 
-  const viewerRole =
-    String(
-      data?.viewer?.role
-      || "manager"
-    );
+function buildQuery(values: Record<string, string>, page?: number) {
+  const params = new URLSearchParams();
 
-  const isFieldRole =
-    viewerRole === "florist"
-    || viewerRole === "courier";
+  for (const [key, value] of Object.entries(values)) {
+    if (!value || value === "all") continue;
+    params.set(key, value);
+  }
+
+  if (page && page > 1) {
+    params.set("page", String(page));
+  }
+
+  return params.toString();
+}
+
+export default async function AdminOrdersPage({ searchParams }: PageProps) {
+  const rawParams = await searchParams;
+
+  const requestedFilters = {
+    q: firstParam(rawParams.q).trim(),
+    status: firstParam(rawParams.status) || "all",
+    payment: firstParam(rawParams.payment) || "all",
+    delivery: firstParam(rawParams.delivery) || "all",
+    attention: firstParam(rawParams.attention) || "all",
+    dateFrom: firstParam(rawParams.dateFrom),
+    dateTo: firstParam(rawParams.dateTo)
+  };
+
+  const requestedPage = Math.max(1, Number(firstParam(rawParams.page)) || 1);
+  const apiQuery = buildQuery(requestedFilters, requestedPage);
+
+  const data = await fetchAdmin<Response>(
+    `/api/admin/orders${apiQuery ? `?${apiQuery}` : ""}`
+  );
+
+  const viewerRole = String(data?.viewer?.role || "manager");
+  const isFieldRole = viewerRole === "florist" || viewerRole === "courier";
+  const filters = {
+    q: String(data?.filters?.q ?? requestedFilters.q),
+    status: String(data?.filters?.status ?? requestedFilters.status),
+    payment: String(data?.filters?.payment ?? requestedFilters.payment),
+    delivery: String(data?.filters?.delivery ?? requestedFilters.delivery),
+    attention: String(data?.filters?.attention ?? requestedFilters.attention),
+    dateFrom: String(data?.filters?.dateFrom ?? requestedFilters.dateFrom),
+    dateTo: String(data?.filters?.dateTo ?? requestedFilters.dateTo)
+  };
+
+  const currentPage = Math.max(1, numberValue(data?.pagination?.page) || 1);
+  const totalPages = Math.max(1, numberValue(data?.pagination?.totalPages) || 1);
+  const totalItems = numberValue(data?.pagination?.totalItems);
+  const summary = data?.summary ?? {};
+
+  const hasFilters = Object.entries(filters).some(([, value]) => value && value !== "all");
+
+  const previousHref = `/admin/orders${currentPage > 2
+    ? `?${buildQuery(filters, currentPage - 1)}`
+    : buildQuery(filters, 1)
+      ? `?${buildQuery(filters, 1)}`
+      : ""}`;
+
+  const nextHref = `/admin/orders?${buildQuery(filters, currentPage + 1)}`;
 
   return (
     <div
@@ -289,29 +290,154 @@ export default async function AdminOrdersPage() {
       ].join(" ")}
     >
       <AdminPresenceHeartbeat />
-      <div className="admin-page-head">
+
+      <div className="admin-page-head admin-orders-head">
         <div>
           <span>CRM</span>
-          <h1>
-            {isFieldRole
-              ? "Мои заказы"
-              : "Заказы"}
-          </h1>
-
+          <h1>{isFieldRole ? "Мои заказы" : "Заказы"}</h1>
           <p>
             {viewerRole === "florist"
               ? "Назначенные вам заказы на сборку и внутренний чат команды."
               : viewerRole === "courier"
                 ? "Назначенные вам доставки и контакты получателя."
-                : "Рабочий список заказов: статус, клиент, получение, оплата и быстрые действия."}
+                : "Поиск, фильтры, контроль оплаты, производства и доставки."}
           </p>
+        </div>
+
+        <div className="admin-orders-result-count">
+          <strong>{totalItems}</strong>
+          <span>{hasFilters ? "найдено" : "в списке"}</span>
         </div>
       </div>
 
-      <section className="admin-panel">
+      <section className="admin-order-summary-cards">
+        <a href="/admin/orders">
+          <span>Все</span>
+          <strong>{numberValue(summary.total)}</strong>
+        </a>
+        <a href="/admin/orders?attention=active">
+          <span>Активные</span>
+          <strong>{numberValue(summary.active)}</strong>
+        </a>
+        <a href="/admin/orders?status=new">
+          <span>Новые</span>
+          <strong>{numberValue(summary.new_orders)}</strong>
+        </a>
+        <a
+          href="/admin/orders?attention=problem"
+          className={numberValue(summary.problem) > 0 ? "danger" : ""}
+        >
+          <span>Проблемы</span>
+          <strong>{numberValue(summary.problem)}</strong>
+        </a>
+        {!isFieldRole ? (
+          <a
+            href="/admin/orders?attention=pending_payment"
+            className={numberValue(summary.pending_payment) > 0 ? "warning" : ""}
+          >
+            <span>Ждут оплаты</span>
+            <strong>{numberValue(summary.pending_payment)}</strong>
+          </a>
+        ) : null}
+        <a href="/admin/orders?status=delivered">
+          <span>Доставлено сегодня</span>
+          <strong>{numberValue(summary.delivered_today)}</strong>
+        </a>
+      </section>
+
+      <section className="admin-panel admin-order-filter-panel">
+        <div className="admin-panel-head">
+          <div>
+            <span>Рабочая выборка</span>
+            <h2>Поиск и фильтры</h2>
+          </div>
+          {hasFilters ? <a href="/admin/orders">Сбросить всё</a> : null}
+        </div>
+
+        <form className="admin-order-filter-form" action="/admin/orders" method="get">
+          <label className="admin-order-filter-search">
+            <span>Поиск</span>
+            <input
+              type="search"
+              name="q"
+              defaultValue={filters.q}
+              placeholder="Номер, имя, телефон или адрес"
+            />
+          </label>
+
+          <label>
+            <span>Статус</span>
+            <select name="status" defaultValue={filters.status}>
+              <option value="all">Все статусы</option>
+              {Object.entries(orderStatusLabels).map(([value, label]) => (
+                <option key={value} value={value}>{label}</option>
+              ))}
+            </select>
+          </label>
+
+          {!isFieldRole ? (
+            <label>
+              <span>Оплата</span>
+              <select name="payment" defaultValue={filters.payment}>
+                <option value="all">Любая оплата</option>
+                {Object.entries(paymentStatusLabels).map(([value, label]) => (
+                  <option key={value} value={value}>{label}</option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+
+          <label>
+            <span>Получение</span>
+            <select name="delivery" defaultValue={filters.delivery}>
+              <option value="all">Все способы</option>
+              <option value="delivery">Доставка</option>
+              <option value="pickup">Самовывоз</option>
+              <option value="express">Только срочные</option>
+            </select>
+          </label>
+
+          <label>
+            <span>Контроль</span>
+            <select name="attention" defaultValue={filters.attention}>
+              <option value="all">Без ограничения</option>
+              <option value="active">Только активные</option>
+              <option value="problem">Только проблемные</option>
+              {!isFieldRole ? <option value="pending_payment">Ожидают оплаты</option> : null}
+            </select>
+          </label>
+
+          <label>
+            <span>Создан с</span>
+            <input type="date" name="dateFrom" defaultValue={filters.dateFrom} />
+          </label>
+
+          <label>
+            <span>Создан по</span>
+            <input type="date" name="dateTo" defaultValue={filters.dateTo} />
+          </label>
+
+          <div className="admin-order-filter-actions">
+            <button type="submit">Применить</button>
+            {hasFilters ? <a href="/admin/orders">Очистить</a> : null}
+          </div>
+        </form>
+      </section>
+
+      <section className="admin-panel admin-order-list-panel">
+        <div className="admin-panel-head">
+          <div>
+            <span>Результаты</span>
+            <h2>{hasFilters ? "Найденные заказы" : "Все заказы"}</h2>
+          </div>
+          <span className="admin-orders-page-indicator">
+            Страница {currentPage} из {totalPages}
+          </span>
+        </div>
+
         <AdminTable
           rows={sortOrders(data?.items ?? [])}
-          emptyText="Заказов пока нет."
+          emptyText="По выбранным условиям заказов нет."
           columns={[
             {
               key: "order_number",
@@ -326,35 +452,17 @@ export default async function AdminOrdersPage() {
             {
               key: "status",
               label: "Статус",
-
               render: (row) => {
-                const status =
-                  field(
-                    row,
-                    "status"
-                  );
-
-                const isExpress =
-                  isExpressOrder(row);
+                const status = field(row, "status");
+                const isExpress = isExpressOrder(row);
 
                 return (
                   <div className="admin-order-status-stack">
                     {isExpress ? (
-                      <span className="admin-order-express-list-badge">
-                        СРОЧНО
-                      </span>
+                      <span className="admin-order-express-list-badge">СРОЧНО</span>
                     ) : null}
-
-                    <span
-                      className={
-                        `admin-status-chip status-${statusClass(
-                          status
-                        )}`
-                      }
-                    >
-                      {orderStatusLabels[status]
-                        || status
-                        || "—"}
+                    <span className={`admin-status-chip status-${statusClass(status)}`}>
+                      {orderStatusLabels[status] || status || "—"}
                     </span>
                   </div>
                 );
@@ -362,10 +470,7 @@ export default async function AdminOrdersPage() {
             },
             {
               key: "customer_name",
-              label:
-                viewerRole === "courier"
-                  ? "Получатель"
-                  : "Клиент",
+              label: viewerRole === "courier" ? "Получатель" : "Клиент",
               render: (row) => (
                 <div className="admin-order-customer-cell">
                   <strong>{field(row, "customer_name") || "Без имени"}</strong>
@@ -376,32 +481,14 @@ export default async function AdminOrdersPage() {
             {
               key: "delivery_type",
               label: "Получение",
-
               render: (row) => {
-                const deliveryType =
-                  field(
-                    row,
-                    "delivery_type"
-                  );
-
-                const isPickup =
-                  deliveryType === "pickup";
-
-                const isExpress =
-                  isExpressOrder(row);
-
-                const tariffName =
-                  deliveryTariffName(row);
+                const deliveryType = field(row, "delivery_type");
+                const isPickup = deliveryType === "pickup";
+                const isExpress = isExpressOrder(row);
+                const tariffName = deliveryTariffName(row);
 
                 return (
-                  <div
-                    className={[
-                      "admin-order-delivery-cell",
-                      isExpress
-                        ? "is-express"
-                        : ""
-                    ].filter(Boolean).join(" ")}
-                  >
+                  <div className={["admin-order-delivery-cell", isExpress ? "is-express" : ""].filter(Boolean).join(" ")}>
                     <strong>
                       {isPickup
                         ? "Самовывоз"
@@ -409,28 +496,11 @@ export default async function AdminOrdersPage() {
                           ? "Срочная доставка"
                           : tariffName}
                     </strong>
-
                     <span>
-                      {isPickup
-                        ? "Без доставки"
-                        : `Дата: ${dateOnly(
-                            row.delivery_date
-                          )}`}
+                      {isPickup ? "Без доставки" : `Дата: ${dateOnly(row.delivery_date)}`}
                     </span>
-
-                    {isExpress ? (
-                      <small className="admin-order-express-note">
-                        Приоритетный заказ
-                      </small>
-                    ) : null}
-
-                    {!isPickup ? (
-                      <em>
-                        {money(
-                          row.delivery_price
-                        )}
-                      </em>
-                    ) : null}
+                    {isExpress ? <small className="admin-order-express-note">Приоритетный заказ</small> : null}
+                    {!isPickup && !isFieldRole ? <em>{money(row.delivery_price)}</em> : null}
                   </div>
                 );
               }
@@ -474,11 +544,19 @@ export default async function AdminOrdersPage() {
                   internalChatCount={Number(row.internal_chat_unread_count || 0)}
                   internalChatPreview={String(row.internal_chat_last_message || "")}
                   viewerRole={viewerRole}
-/>
+                />
               )
             }
           ]}
         />
+
+        {totalPages > 1 ? (
+          <nav className="admin-order-pagination" aria-label="Страницы заказов">
+            {currentPage > 1 ? <a href={previousHref}>← Назад</a> : <span>← Назад</span>}
+            <strong>{currentPage} / {totalPages}</strong>
+            {currentPage < totalPages ? <a href={nextHref}>Вперёд →</a> : <span>Вперёд →</span>}
+          </nav>
+        ) : null}
       </section>
     </div>
   );

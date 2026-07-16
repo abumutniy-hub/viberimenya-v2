@@ -32,11 +32,11 @@ export async function buildApi() {
   await app.register(publicRoutes);
   await app.register(adminRoutes);
 
-  app.setNotFoundHandler(async () => {
-    return {
+  app.setNotFoundHandler(async (_request, reply) => {
+    return reply.status(404).send({
       ok: false,
       error: "Route not found"
-    };
+    });
   });
 
   app.setErrorHandler(async (error, request, reply) => {

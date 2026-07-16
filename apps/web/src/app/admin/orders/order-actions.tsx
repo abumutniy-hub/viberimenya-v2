@@ -130,6 +130,7 @@ export function OrderActions({
   const [isConfirming, setIsConfirming] = useState(false);
   const [isPaying, setIsPaying] = useState(false);
   const [isSavingLink, setIsSavingLink] = useState(false);
+  const [isChangingStatus, setIsChangingStatus] = useState(false);
   const [link, setLink] = useState(paymentUrl || "");
 
   const [isChatOpen, setIsChatOpen] = useState(false);
@@ -152,12 +153,13 @@ export function OrderActions({
     canManage
     && status !== "new"
     && status !== "cancelled"
-    && paymentStatus !== "paid";
+    && !["paid", "refunded"].includes(paymentStatus);
 
   const canAddPaymentLink =
     canManage
-    && status === "confirmed"
-    && paymentStatus !== "paid";
+    && status !== "new"
+    && status !== "cancelled"
+    && !["paid", "refunded"].includes(paymentStatus);
 
   const trackingUrl =
     canManage && trackingToken
@@ -247,7 +249,8 @@ export function OrderActions({
   const canCancel =
     canManage
     && status !== "delivered"
-    && status !== "cancelled";
+    && status !== "cancelled"
+    && paymentStatus !== "paid";
 
   async function loadInternalChat() {
     setIsChatLoading(true);
@@ -331,6 +334,18 @@ export function OrderActions({
       alert("Ссылка заказа скопирована");
     } catch {
       window.prompt("Скопируйте ссылку заказа", absoluteUrl);
+    }
+  }
+
+  async function copyPaymentLink() {
+    const value = link.trim();
+    if (!value) return;
+
+    try {
+      await navigator.clipboard.writeText(value);
+      alert("Ссылка оплаты скопирована");
+    } catch {
+      window.prompt("Скопируйте ссылку оплаты", value);
     }
   }
 
@@ -474,6 +489,8 @@ async function changeStatus(
     }
   }
 
+  setIsChangingStatus(true);
+
   try {
     const response = await fetch(
       `/api/admin/orders/${orderId}/status`,
@@ -504,6 +521,7 @@ async function changeStatus(
         ? error.message
         : "Не удалось изменить статус"
     );
+    setIsChangingStatus(false);
   }
 }
 
@@ -561,6 +579,16 @@ async function changeStatus(
           >
             {isSavingLink ? "..." : paymentUrl ? "Обновить ссылку" : "Добавить ссылку"}
           </button>
+          {link.trim() ? (
+            <button
+              type="button"
+              className="admin-copy-link"
+              disabled={isSavingLink}
+              onClick={copyPaymentLink}
+            >
+              Копировать
+            </button>
+          ) : null}
         </div>
       ) : null}
 
@@ -568,6 +596,10 @@ async function changeStatus(
         paymentStatus === "paid" ? (
           <span className="admin-paid-badge">
             Оплачен
+          </span>
+        ) : paymentStatus === "refunded" ? (
+          <span className="admin-muted-badge">
+            Возврат зафиксирован
           </span>
         ) : canMarkPaid ? (
           <button
@@ -597,6 +629,7 @@ async function changeStatus(
             <button
               type="button"
               className="admin-action-button secondary"
+              disabled={isChangingStatus}
               onClick={() => changeStatus(
                 nextStatusAction.status,
                 nextStatusAction.label
@@ -610,6 +643,7 @@ async function changeStatus(
             <button
               type="button"
               className="admin-action-button warning"
+              disabled={isChangingStatus}
               onClick={() => changeStatus("problem", "Проблема")}
             >
               Проблема
@@ -622,10 +656,20 @@ async function changeStatus(
             </span>
           ) : null}
 
+          {canManage
+            && paymentStatus === "paid"
+            && status !== "delivered"
+            && status !== "cancelled" ? (
+              <span className="admin-muted-badge">
+                Для отмены сначала зафиксируйте возврат
+              </span>
+            ) : null}
+
           {canCancel ? (
             <button
               type="button"
               className="admin-action-button danger"
+              disabled={isChangingStatus}
               onClick={() => changeStatus("cancelled", "Отменён")}
             >
               Отменить
