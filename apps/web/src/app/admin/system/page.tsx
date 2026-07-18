@@ -29,6 +29,8 @@ type SystemResponse = {
   events?: Array<Record<string, unknown>>;
   settings?: {
     alertsEnabled: boolean;
+    operationalAlertsEnabled: boolean;
+    alertRepeatHours: number;
     dailySummaryEnabled: boolean;
     autoRestartEnabled: boolean;
     backupRetentionDays: number;
@@ -105,6 +107,8 @@ export default async function AdminSystemPage() {
   const events = data?.events ?? [];
   const settings = data?.settings ?? {
     alertsEnabled: true,
+    operationalAlertsEnabled: false,
+    alertRepeatHours: 24,
     dailySummaryEnabled: false,
     autoRestartEnabled: true,
     backupRetentionDays: 30,

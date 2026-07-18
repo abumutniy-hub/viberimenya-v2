@@ -2,7 +2,7 @@
 
 import {
   useEffect,
-  useMemo,
+  useRef,
   useState,
   type FormEvent
 } from "react";
@@ -11,6 +11,24 @@ type CategoryOption = {
   id: string;
   name: string;
 };
+
+type ProductAvailability =
+  | "available"
+  | "preorder"
+  | "unavailable";
+
+type ProductType =
+  | "bouquet"
+  | "arrangement"
+  | "flowers"
+  | "card"
+  | "gift"
+  | "sweets"
+  | "toy"
+  | "vase"
+  | "balloon"
+  | "perfume"
+  | "other";
 
 type EditableProduct = {
   id: string;
@@ -25,6 +43,8 @@ type EditableProduct = {
   oldPrice: number | null;
   costPrice: number | null;
   stockQuantity: number;
+  availability: ProductAvailability;
+  productType: ProductType;
   status: "draft" | "active" | "hidden" | "archived";
   isFeatured: boolean;
   sortOrder: number;
@@ -34,6 +54,32 @@ type ProductEditFormProps = {
   product: EditableProduct;
   categories: CategoryOption[];
 };
+
+const availabilityLabels: Record<
+  ProductAvailability,
+  string
+> = {
+  available: "Есть в наличии",
+  preorder: "Под заказ",
+  unavailable: "Нет в наличии"
+};
+
+const productTypeOptions: Array<{
+  value: ProductType;
+  label: string;
+}> = [
+  { value: "bouquet", label: "Букет" },
+  { value: "arrangement", label: "Композиция / корзина / коробка" },
+  { value: "flowers", label: "Цветы / монобукет" },
+  { value: "card", label: "Открытка / конверт" },
+  { value: "gift", label: "Подарок" },
+  { value: "sweets", label: "Конфеты / сладости" },
+  { value: "toy", label: "Мягкая игрушка" },
+  { value: "vase", label: "Ваза" },
+  { value: "balloon", label: "Воздушные шары" },
+  { value: "perfume", label: "Парфюм" },
+  { value: "other", label: "Другое" }
+];
 
 function nullableNumber(value: FormDataEntryValue | null) {
   const raw = String(value ?? "").trim();
@@ -74,24 +120,60 @@ async function readError(response: Response) {
   return `Ошибка сохранения: HTTP ${response.status}`;
 }
 
+function cleanImportedText(
+  value: string,
+  productName: string
+) {
+  const textarea = document.createElement("textarea");
+  textarea.innerHTML = value;
+
+  let result = textarea.value
+    .replace(/&quot;|&#34;/gi, '"')
+    .replace(/\s+/g, " ")
+    .replace(/\s*\|\s*/g, ". ")
+    .trim();
+
+  result = result
+    .split(/(?<=[.!?])\s+/)
+    .filter((sentence) => !(
+      /заказать цветы|доставка цветов|доставк[а-я]* недорого|по россии|бесплатн/i
+        .test(sentence)
+    ))
+    .join(" ")
+    .trim();
+
+  const normalizedName = productName
+    .trim()
+    .toLocaleLowerCase("ru-RU");
+
+  if (
+    result.toLocaleLowerCase("ru-RU") === normalizedName
+    || /^\d+(?:[.,]\d+)?$/.test(result)
+  ) {
+    return "";
+  }
+
+  return result
+    .replace(/\s+([,.!?;:])/g, "$1")
+    .replace(/([.!?]){2,}/g, "$1")
+    .trim();
+}
+
 export function ProductEditForm({
   product,
   categories
 }: ProductEditFormProps) {
+  const formRef = useRef<HTMLFormElement | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
+  const [availability, setAvailability] =
+    useState<ProductAvailability>(product.availability);
+  const [productType, setProductType] =
+    useState<ProductType>(product.productType);
   const [stockValue, setStockValue] = useState(
     String(product.stockQuantity)
   );
   const [message, setMessage] = useState("");
-
-  const customerAvailability = useMemo(() => {
-    const stock = Number(stockValue);
-
-    return Number.isFinite(stock) && stock > 0
-      ? "В наличии"
-      : "Нет в наличии";
-  }, [stockValue]);
 
   useEffect(() => {
     const handleBeforeUnload = (
@@ -121,6 +203,43 @@ export function ProductEditForm({
   function markDirty() {
     setIsDirty(true);
     setMessage("");
+  }
+
+  function cleanDescriptions() {
+    const form = formRef.current;
+
+    if (!form) {
+      return;
+    }
+
+    const nameInput = form.elements.namedItem("name");
+    const shortInput = form.elements.namedItem("shortDescription");
+    const fullInput = form.elements.namedItem("description");
+
+    if (!(nameInput instanceof HTMLInputElement)) {
+      return;
+    }
+
+    const productName = nameInput.value.trim();
+
+    if (shortInput instanceof HTMLTextAreaElement) {
+      shortInput.value = cleanImportedText(
+        shortInput.value,
+        productName
+      );
+    }
+
+    if (fullInput instanceof HTMLTextAreaElement) {
+      fullInput.value = cleanImportedText(
+        fullInput.value,
+        productName
+      );
+    }
+
+    markDirty();
+    setMessage(
+      "Импортированный рекламный текст очищен. Проверьте результат и сохраните."
+    );
   }
 
   async function handleSubmit(
@@ -153,14 +272,20 @@ export function ProductEditForm({
 
     try {
       const price = nullableNumber(form.get("price"));
-      const oldPrice = nullableNumber(
-        form.get("oldPrice")
-      );
-      const costPrice = nullableNumber(
-        form.get("costPrice")
-      );
-      const stockQuantity = nullableNumber(
+      const rawOldPrice = nullableNumber(form.get("oldPrice"));
+      const oldPrice = (
+        rawOldPrice !== null
+        && rawOldPrice > 0
+      )
+        ? rawOldPrice
+        : null;
+      const costPrice = nullableNumber(form.get("costPrice"));
+      const rawStockQuantity = nullableNumber(
         form.get("stockQuantity")
+      );
+      const stockQuantity = Math.max(
+        0,
+        rawStockQuantity ?? 0
       );
       const sortOrder = nullableNumber(
         form.get("sortOrder")
@@ -170,19 +295,8 @@ export function ProductEditForm({
         throw new Error("Укажите корректную цену");
       }
 
-      if (
-        stockQuantity === null
-        || stockQuantity < 0
-      ) {
-        throw new Error(
-          "Внутренний остаток не может быть отрицательным"
-        );
-      }
-
       if (sortOrder === null) {
-        throw new Error(
-          "Укажите порядок сортировки"
-        );
+        throw new Error("Укажите порядок сортировки");
       }
 
       if (
@@ -205,12 +319,8 @@ export function ProductEditForm({
             categoryId: String(
               form.get("categoryId") ?? ""
             ),
-            name: String(
-              form.get("name") ?? ""
-            ),
-            slug: String(
-              form.get("slug") ?? ""
-            ),
+            name: String(form.get("name") ?? ""),
+            slug: String(form.get("slug") ?? ""),
             shortDescription: String(
               form.get("shortDescription") ?? ""
             ),
@@ -227,6 +337,8 @@ export function ProductEditForm({
             oldPrice,
             costPrice,
             stockQuantity,
+            availability,
+            productType,
             status: nextStatus,
             isFeatured:
               form.get("isFeatured") === "on",
@@ -236,9 +348,7 @@ export function ProductEditForm({
       );
 
       if (!response.ok) {
-        throw new Error(
-          await readError(response)
-        );
+        throw new Error(await readError(response));
       }
 
       setIsDirty(false);
@@ -260,10 +370,27 @@ export function ProductEditForm({
 
   return (
     <form
+      ref={formRef}
       className="admin-product-edit-form"
       onSubmit={handleSubmit}
       onChange={markDirty}
     >
+      <div className="admin-product-edit-tools">
+        <div>
+          <strong>Карточка товара</strong>
+          <span>
+            Основные параметры, видимость и текст витрины.
+          </span>
+        </div>
+
+        <button
+          type="button"
+          onClick={cleanDescriptions}
+        >
+          Очистить импортированный текст
+        </button>
+      </div>
+
       <div className="admin-product-edit-grid">
         <label className="wide">
           <span>Название товара</span>
@@ -277,6 +404,59 @@ export function ProductEditForm({
         </label>
 
         <label>
+          <span>Тип товара</span>
+          <select
+            name="productType"
+            value={productType}
+            onChange={(event) => {
+              setProductType(
+                event.target.value as ProductType
+              );
+              markDirty();
+            }}
+          >
+            {productTypeOptions.map((option) => (
+              <option
+                key={option.value}
+                value={option.value}
+              >
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <small>
+            Определяет подписи, состав и рекомендации на сайте.
+          </small>
+        </label>
+
+        <label>
+          <span>Наличие для покупателя</span>
+          <select
+            name="availability"
+            value={availability}
+            onChange={(event) => {
+              setAvailability(
+                event.target.value as ProductAvailability
+              );
+              markDirty();
+            }}
+          >
+            <option value="available">
+              Есть в наличии
+            </option>
+            <option value="preorder">
+              Под заказ
+            </option>
+            <option value="unavailable">
+              Нет в наличии
+            </option>
+          </select>
+          <small>
+            Покупатель не видит точное количество.
+          </small>
+        </label>
+
+        <label>
           <span>Slug</span>
           <input
             name="slug"
@@ -286,9 +466,6 @@ export function ProductEditForm({
             pattern="[a-z0-9]+(?:-[a-z0-9]+)*"
             title="Латинские буквы, цифры и дефисы"
           />
-          <small>
-            Используется в адресе публичной карточки.
-          </small>
         </label>
 
         <label>
@@ -298,7 +475,6 @@ export function ProductEditForm({
             defaultValue={product.categoryId}
           >
             <option value="">Без категории</option>
-
             {categories.map((category) => (
               <option
                 key={category.id}
@@ -316,18 +492,10 @@ export function ProductEditForm({
             name="status"
             defaultValue={product.status}
           >
-            <option value="active">
-              Опубликован
-            </option>
-            <option value="draft">
-              Черновик
-            </option>
-            <option value="hidden">
-              Скрыт
-            </option>
-            <option value="archived">
-              Архив
-            </option>
+            <option value="active">Опубликован</option>
+            <option value="draft">Черновик</option>
+            <option value="hidden">Скрыт</option>
+            <option value="archived">Архив</option>
           </select>
         </label>
 
@@ -350,13 +518,11 @@ export function ProductEditForm({
             type="number"
             min="0"
             step="1"
-            defaultValue={
-              product.oldPrice ?? ""
-            }
+            defaultValue={product.oldPrice ?? ""}
             placeholder="Не указана"
           />
           <small>
-            Заполняется только для отображения скидки.
+            Необязательна. Оставьте пустой, если скидки нет.
           </small>
         </label>
 
@@ -367,46 +533,15 @@ export function ProductEditForm({
             type="number"
             min="0"
             step="1"
-            defaultValue={
-              product.costPrice ?? ""
-            }
+            defaultValue={product.costPrice ?? ""}
             placeholder="Только для CRM"
           />
-          <small>
-            Покупателю не показывается.
-          </small>
-        </label>
-
-        <label>
-          <span>Внутренний остаток</span>
-          <input
-            name="stockQuantity"
-            type="number"
-            min="0"
-            step="1"
-            value={stockValue}
-            onChange={(event) => {
-              setStockValue(event.target.value);
-              markDirty();
-            }}
-            required
-          />
-          <small>
-            Клиент видит только наличие, без количества.
-            Установите 0 для статуса «Нет в наличии».
-          </small>
         </label>
 
         <div className="admin-product-availability-preview">
           <span>Клиент увидит</span>
-          <strong
-            className={
-              customerAvailability === "В наличии"
-                ? "available"
-                : "unavailable"
-            }
-          >
-            {customerAvailability}
+          <strong className={availability}>
+            {availabilityLabels[availability]}
           </strong>
         </div>
 
@@ -433,6 +568,32 @@ export function ProductEditForm({
           <span>Показывать в блоке «Хиты продаж»</span>
         </label>
 
+        <details className="admin-product-stock-details wide">
+          <summary>
+            Расширенный складской учёт
+          </summary>
+          <div>
+            <label>
+              <span>Внутренний остаток</span>
+              <input
+                name="stockQuantity"
+                type="number"
+                min="0"
+                step="1"
+                value={stockValue}
+                onChange={(event) => {
+                  setStockValue(event.target.value);
+                  markDirty();
+                }}
+              />
+              <small>
+                Для обычных букетов достаточно переключателя наличия выше.
+                Количество пригодится для штучных подарков и вариантов.
+              </small>
+            </label>
+          </div>
+        </details>
+
         <label className="wide">
           <span>Короткое описание</span>
           <textarea
@@ -454,7 +615,7 @@ export function ProductEditForm({
         </label>
 
         <label className="wide">
-          <span>Состав</span>
+          <span>Состав / характеристики</span>
           <textarea
             name="composition"
             defaultValue={product.composition}
@@ -471,6 +632,9 @@ export function ProductEditForm({
             maxLength={10000}
             rows={4}
           />
+          <small>
+            Для открыток, подарков и других дополнений поле можно оставить пустым.
+          </small>
         </label>
       </div>
 
@@ -481,14 +645,10 @@ export function ProductEditForm({
               Есть несохранённые изменения
             </span>
           ) : (
-            <span>
-              Все изменения сохранены
-            </span>
+            <span>Все изменения сохранены</span>
           )}
 
-          {message ? (
-            <strong>{message}</strong>
-          ) : null}
+          {message ? <strong>{message}</strong> : null}
         </div>
 
         <button

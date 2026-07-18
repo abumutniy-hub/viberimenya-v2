@@ -279,7 +279,7 @@ export function AddToCartButton({
 
 export function FavoriteButton({
   productId,
-  className = "favorite-button"
+  className = ""
 }: {
   productId: string;
   className?: string;
@@ -288,26 +288,43 @@ export function FavoriteButton({
     useState(false);
 
   useEffect(() => {
-    setActive(
-      readFavorites().includes(
-        productId
-      )
+    const sync = () => {
+      setActive(
+        readFavorites().includes(productId)
+      );
+    };
+
+    sync();
+
+    window.addEventListener("storage", sync);
+    window.addEventListener(
+      "viberimenya_favorites_changed",
+      sync
     );
+
+    return () => {
+      window.removeEventListener("storage", sync);
+      window.removeEventListener(
+        "viberimenya_favorites_changed",
+        sync
+      );
+    };
   }, [productId]);
 
   return (
     <button
       type="button"
-      className={
-        `${className}${
-          active ? " active" : ""
-        }`
-      }
+      className={[
+        "favorite-button",
+        className,
+        active ? "active" : ""
+      ].filter(Boolean).join(" ")}
       aria-label={
         active
           ? "Убрать из избранного"
           : "Добавить в избранное"
       }
+      aria-pressed={active}
       onClick={() => {
         const favorites =
           readFavorites();

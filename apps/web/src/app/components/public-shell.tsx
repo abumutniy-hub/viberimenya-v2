@@ -1,7 +1,9 @@
 "use client";
 
-import type {
-  ReactNode
+import {
+  useEffect,
+  useState,
+  type ReactNode
 } from "react";
 
 import Link from "next/link";
@@ -23,6 +25,7 @@ import {
 } from "./shell-icon";
 
 import { CookieConsent } from "./cookie-consent";
+import { BrandLogo } from "./brand-logo";
 import type { PublicSiteSettings } from "../lib/public-settings";
 
 export type PublicShellSettings = PublicSiteSettings;
@@ -31,6 +34,14 @@ type PublicShellProps = {
   children: ReactNode;
   settings: PublicShellSettings;
 };
+
+type HomeBrandAnimationMode =
+  | "checking"
+  | "animate"
+  | "settled";
+
+const HOME_BRAND_SESSION_KEY =
+  "viberimenya:header-brand-animation:v1";
 
 function contactHref(
   type: "phone" | "whatsapp" | "telegram" | "instagram" | "email",
@@ -85,33 +96,58 @@ function contactHref(
   return "";
 }
 
-function BrandWordmark({
-  brandName,
-  brandSubtitle
-}: {
-  brandName: string;
-  brandSubtitle: string;
-}) {
-  return (
-    <>
-      <span className="vm-clean-brand-line">
-        {brandName}
-      </span>
-
-      {brandSubtitle ? (
-        <small className="vm-clean-brand-subtitle">
-          {brandSubtitle}
-        </small>
-      ) : null}
-    </>
-  );
-}
-
 export function PublicShell({
   children,
   settings
 }: PublicShellProps) {
   const pathname = usePathname();
+  const [homeBrandMode, setHomeBrandMode] =
+    useState<HomeBrandAnimationMode>("checking");
+
+  useEffect(() => {
+    if (pathname !== "/") {
+      setHomeBrandMode("settled");
+      return;
+    }
+
+    const reducedMotion = window.matchMedia(
+      "(prefers-reduced-motion: reduce)"
+    ).matches;
+
+    let seen = false;
+
+    try {
+      seen = window.sessionStorage.getItem(
+        HOME_BRAND_SESSION_KEY
+      ) === "1";
+    } catch {
+      seen = false;
+    }
+
+    if (reducedMotion || seen) {
+      setHomeBrandMode("settled");
+      return;
+    }
+
+    setHomeBrandMode("checking");
+
+    const frame = window.requestAnimationFrame(() => {
+      setHomeBrandMode("animate");
+
+      try {
+        window.sessionStorage.setItem(
+          HOME_BRAND_SESSION_KEY,
+          "1"
+        );
+      } catch {
+        // The animation may still run when storage is unavailable.
+      }
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [pathname]);
 
   if (
     pathname.startsWith(
@@ -297,12 +333,16 @@ export function PublicShell({
         <div className="vm-clean-container vm-clean-header-inner">
           <Link
             href="/"
-            className="vm-clean-brand"
+            className={
+              pathname === "/"
+                ? `vm-clean-brand is-home-brand-${homeBrandMode}`
+                : "vm-clean-brand"
+            }
             aria-label={
               `${brandName} — перейти на главную`
             }
           >
-            <BrandWordmark
+            <BrandLogo
               brandName={brandName}
               brandSubtitle={brandSubtitle}
             />
@@ -400,9 +440,10 @@ export function PublicShell({
               href="/"
               className="vm-clean-brand"
             >
-              <BrandWordmark
+              <BrandLogo
                 brandName={brandName}
                 brandSubtitle={brandSubtitle}
+                compact
               />
             </Link>
 
@@ -508,7 +549,7 @@ export function PublicShell({
         </div>
       </footer>
 
-      <MobileTabbar />
+      <MobileTabbar settings={settings} />
       <CookieConsent
         enabled={settings.analytics.enabled}
         yandexMetrikaId={settings.analytics.yandexMetrikaId}

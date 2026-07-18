@@ -4,6 +4,7 @@ import "./admin-operations.css";
 import "./admin-growth.css";
 import "./admin-security.css";
 import "./admin-system.css";
+import "./admin-foundation.css";
 import { AdminShell } from "./components/admin-shell";
 
 export const metadata: Metadata = {

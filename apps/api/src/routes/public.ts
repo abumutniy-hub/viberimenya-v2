@@ -15,6 +15,11 @@ import {
 } from "@viberimenya/db";
 import { env } from "../lib/env";
 import { HttpError } from "../lib/http-error";
+import {
+  inferProductType,
+  productTypeValues,
+  resolveProductAvailability
+} from "../lib/catalog-product";
 import { isYooKassaConfigured } from "../modules/payments/yookassa.service";
 
 type UnknownRecord = Record<string, unknown>;
@@ -942,13 +947,55 @@ export async function publicRoutes(app: FastifyInstance) {
           c.slug,
           c.name,
           c.description,
-          c.image_url,
+          COALESCE(
+            NULLIF(TRIM(c.image_url), ''),
+            cover.url
+          ) AS image_url,
           COUNT(p.id)::int AS product_count
         FROM categories c
         INNER JOIN products p
           ON p.category_id = c.id
           AND p.shop_id = c.shop_id
           AND p.status = 'active'
+          AND COALESCE(
+            NULLIF(
+              p.metadata #>> '{catalog,availability}',
+              ''
+            ),
+            CASE
+              WHEN COALESCE(p.stock_quantity, 0) > 0
+              THEN 'available'
+              ELSE 'unavailable'
+            END
+          ) = 'available'
+        LEFT JOIN LATERAL (
+          SELECT pi.url
+          FROM products cp
+          INNER JOIN product_images pi
+            ON pi.product_id = cp.id
+            AND pi.shop_id = cp.shop_id
+          WHERE cp.shop_id = c.shop_id
+            AND cp.category_id = c.id
+            AND cp.status = 'active'
+            AND COALESCE(
+            NULLIF(
+              cp.metadata #>> '{catalog,availability}',
+              ''
+            ),
+            CASE
+              WHEN COALESCE(cp.stock_quantity, 0) > 0
+              THEN 'available'
+              ELSE 'unavailable'
+            END
+          ) = 'available'
+          ORDER BY
+            cp.is_featured DESC,
+            cp.sort_order ASC,
+            pi.is_main DESC,
+            pi.sort_order ASC,
+            pi.created_at ASC
+          LIMIT 1
+        ) cover ON true
         WHERE c.shop_id = ${shop.id}
           AND c.is_active = true
         GROUP BY
@@ -957,11 +1004,22 @@ export async function publicRoutes(app: FastifyInstance) {
           c.name,
           c.description,
           c.image_url,
-          c.sort_order
+          c.sort_order,
+          cover.url
         ORDER BY
+          CASE
+            WHEN LOWER(c.name) = 'букеты' THEN 1
+            WHEN LOWER(c.name) LIKE '%авторск%' THEN 2
+            WHEN LOWER(c.name) = 'розы' THEN 3
+            WHEN LOWER(c.name) LIKE '%короб%' THEN 4
+            WHEN LOWER(c.name) LIKE '%подар%' THEN 5
+            WHEN LOWER(c.name) LIKE '%шар%' THEN 6
+            ELSE 50
+          END ASC,
           c.sort_order ASC,
+          COUNT(p.id) DESC,
           c.name ASC
-        LIMIT 6
+        LIMIT 8
       `;
 
       const productRows = await client<
@@ -977,6 +1035,7 @@ export async function publicRoutes(app: FastifyInstance) {
           price: number;
           old_price: number | null;
           is_featured: boolean;
+          product_type: string;
           image_url: string | null;
           image_alt: string | null;
         }[]
@@ -993,6 +1052,13 @@ export async function publicRoutes(app: FastifyInstance) {
           p.price,
           p.old_price,
           p.is_featured,
+          COALESCE(
+            NULLIF(
+              p.metadata #>> '{catalog,productType}',
+              ''
+            ),
+            'bouquet'
+          ) AS product_type,
           image.url AS image_url,
           image.alt AS image_alt
         FROM products p
@@ -1015,7 +1081,17 @@ export async function publicRoutes(app: FastifyInstance) {
         ) image ON true
         WHERE p.shop_id = ${shop.id}
           AND p.status = 'active'
-          AND COALESCE(p.stock_quantity, 0) > 0
+          AND COALESCE(
+            NULLIF(
+              p.metadata #>> '{catalog,availability}',
+              ''
+            ),
+            CASE
+              WHEN COALESCE(p.stock_quantity, 0) > 0
+              THEN 'available'
+              ELSE 'unavailable'
+            END
+          ) = 'available'
           AND (
             p.category_id IS NULL
             OR c.id IS NOT NULL
@@ -1026,6 +1102,66 @@ export async function publicRoutes(app: FastifyInstance) {
           p.created_at DESC
         LIMIT 8
       `;
+
+      const collectionCountRows = await client<{
+        under_5000: number;
+        between_5000_10000: number;
+        over_10000: number;
+        featured: number;
+        sale: number;
+        newest: number;
+      }[]>`
+        SELECT
+          COUNT(*) FILTER (
+            WHERE p.price < 5000
+          )::int AS under_5000,
+          COUNT(*) FILTER (
+            WHERE p.price >= 5000
+              AND p.price <= 10000
+          )::int AS between_5000_10000,
+          COUNT(*) FILTER (
+            WHERE p.price > 10000
+          )::int AS over_10000,
+          COUNT(*) FILTER (
+            WHERE p.is_featured = true
+          )::int AS featured,
+          COUNT(*) FILTER (
+            WHERE p.old_price IS NOT NULL
+              AND p.old_price > p.price
+          )::int AS sale,
+          LEAST(COUNT(*)::int, 12) AS newest
+        FROM products p
+        LEFT JOIN categories c
+          ON c.id = p.category_id
+          AND c.shop_id = p.shop_id
+          AND c.is_active = true
+        WHERE p.shop_id = ${shop.id}
+          AND p.status = 'active'
+          AND COALESCE(
+            NULLIF(
+              p.metadata #>> '{catalog,availability}',
+              ''
+            ),
+            CASE
+              WHEN COALESCE(p.stock_quantity, 0) > 0
+              THEN 'available'
+              ELSE 'unavailable'
+            END
+          ) = 'available'
+          AND (
+            p.category_id IS NULL
+            OR c.id IS NOT NULL
+          )
+      `;
+
+      const collectionCounts = collectionCountRows[0] ?? {
+        under_5000: 0,
+        between_5000_10000: 0,
+        over_10000: 0,
+        featured: 0,
+        sale: 0,
+        newest: 0
+      };
 
       const featuredProducts = productRows.map((product) => ({
         id: product.id,
@@ -1039,6 +1175,7 @@ export async function publicRoutes(app: FastifyInstance) {
         price: Number(product.price),
         oldPrice: product.old_price === null ? null : Number(product.old_price),
         isFeatured: product.is_featured,
+        productType: product.product_type,
         availability: "available" as const,
         primaryImage: product.image_url
           ? {
@@ -1086,6 +1223,16 @@ export async function publicRoutes(app: FastifyInstance) {
             imageUrl: category.image_url,
             productCount: Number(category.product_count),
           })),
+          quickCollections: {
+            under5000: Number(collectionCounts.under_5000),
+            between5000And10000: Number(
+              collectionCounts.between_5000_10000
+            ),
+            over10000: Number(collectionCounts.over_10000),
+            featured: Number(collectionCounts.featured),
+            sale: Number(collectionCounts.sale),
+            newest: Number(collectionCounts.newest)
+          },
           featuredProducts,
         },
       };
@@ -1095,19 +1242,117 @@ export async function publicRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/public/categories", async () => {
-    const { db, client, shop } = await getShopContext();
+    const { client, shop } = await getShopContext();
 
     try {
-      const result = await db
-        .select()
-        .from(categories)
-        .where(
-          and(eq(categories.shopId, shop.id), eq(categories.isActive, true)),
-        )
-        .orderBy(asc(categories.sortOrder), asc(categories.name));
+      const items = await client<{
+        id: string;
+        shop_id: string;
+        parent_id: string | null;
+        slug: string;
+        name: string;
+        description: string | null;
+        image_url: string | null;
+        sort_order: number;
+        is_active: boolean;
+        public_count: number;
+      }[]>`
+        SELECT
+          c.id,
+          c.shop_id,
+          c.parent_id,
+          c.slug,
+          c.name,
+          c.description,
+          COALESCE(
+            NULLIF(TRIM(c.image_url), ''),
+            cover.url
+          ) AS image_url,
+          c.sort_order,
+          c.is_active,
+          COUNT(p.id)::int AS public_count
+        FROM categories c
+        INNER JOIN products p
+          ON p.category_id = c.id
+          AND p.shop_id = c.shop_id
+          AND p.status = 'active'
+          AND COALESCE(
+            NULLIF(
+              p.metadata #>> '{catalog,availability}',
+              ''
+            ),
+            CASE
+              WHEN COALESCE(p.stock_quantity, 0) > 0
+              THEN 'available'
+              ELSE 'unavailable'
+            END
+          ) = 'available'
+        LEFT JOIN LATERAL (
+          SELECT pi.url
+          FROM products cp
+          INNER JOIN product_images pi
+            ON pi.product_id = cp.id
+            AND pi.shop_id = cp.shop_id
+          WHERE cp.shop_id = c.shop_id
+            AND cp.category_id = c.id
+            AND cp.status = 'active'
+            AND COALESCE(
+              NULLIF(
+                cp.metadata #>> '{catalog,availability}',
+                ''
+              ),
+              CASE
+                WHEN COALESCE(cp.stock_quantity, 0) > 0
+                THEN 'available'
+                ELSE 'unavailable'
+              END
+            ) = 'available'
+          ORDER BY
+            cp.is_featured DESC,
+            cp.sort_order ASC,
+            pi.is_main DESC,
+            pi.sort_order ASC,
+            pi.created_at ASC
+          LIMIT 1
+        ) cover ON true
+        WHERE c.shop_id = ${shop.id}
+          AND c.is_active = true
+          AND LOWER(c.slug) NOT IN (
+            'podpiska-na-cvety',
+            'podpiska-na-tsvety',
+            'subscription'
+          )
+          AND LOWER(BTRIM(c.name)) <> LOWER('Подписка на цветы')
+        GROUP BY
+          c.id,
+          c.shop_id,
+          c.parent_id,
+          c.slug,
+          c.name,
+          c.description,
+          c.image_url,
+          c.sort_order,
+          c.is_active,
+          cover.url
+        ORDER BY
+          COUNT(p.id) DESC,
+          c.sort_order ASC,
+          c.name ASC
+      `;
 
       return {
-        items: result,
+        items: items.map((item) => ({
+          id: item.id,
+          shopId: item.shop_id,
+          parentId: item.parent_id,
+          slug: item.slug,
+          name: item.name,
+          description: item.description,
+          imageUrl: item.image_url,
+          sortOrder: Number(item.sort_order),
+          isActive: item.is_active,
+          publicCount: Number(item.public_count)
+        }))
       };
     } finally {
       await client.end();
@@ -1130,7 +1375,7 @@ export async function publicRoutes(app: FastifyInstance) {
         category: z.string().trim().max(120).optional().default(""),
 
         availability: z
-          .enum(["all", "available", "unavailable"])
+          .enum(["all", "available", "preorder", "unavailable"])
           .optional()
           .default("all"),
 
@@ -1145,6 +1390,8 @@ export async function publicRoutes(app: FastifyInstance) {
         featured: z.enum(["true"]).optional(),
 
         sale: z.enum(["true"]).optional(),
+
+        productType: z.enum(productTypeValues).optional(),
 
         page: z.coerce.number().int().min(1).max(100_000).optional().default(1),
 
@@ -1169,6 +1416,8 @@ export async function publicRoutes(app: FastifyInstance) {
 
       const saleOnly = query.sale === "true";
 
+      const productTypeFilter = query.productType ?? "";
+
       const page = query.page;
 
       const pageSize = query.pageSize;
@@ -1188,7 +1437,8 @@ export async function publicRoutes(app: FastifyInstance) {
         careText: string | null;
         price: number;
         oldPrice: number | null;
-        availability: "available" | "unavailable";
+        availability: "available" | "preorder" | "unavailable";
+        productType: string;
         isFeatured: boolean;
       };
 
@@ -1207,14 +1457,76 @@ export async function publicRoutes(app: FastifyInstance) {
           p.care_text AS "careText",
           p.price,
           p.old_price AS "oldPrice",
+          COALESCE(
+            NULLIF(
+              p.metadata #>> '{catalog,availability}',
+              ''
+            ),
+            CASE
+              WHEN COALESCE(p.stock_quantity, 0) > 0
+              THEN 'available'
+              ELSE 'unavailable'
+            END
+          ) AS "availability",
           CASE
-            WHEN COALESCE(
-              p.stock_quantity,
-              0
-            ) > 0
-            THEN 'available'
-            ELSE 'unavailable'
-          END AS "availability",
+            WHEN (
+              COALESCE(c.name, '') ~* 'открытк|конверт'
+              OR COALESCE(c.slug, '') ~* 'otkrytk|otkryt|konvert|card'
+            )
+            THEN 'card'
+            WHEN (
+              COALESCE(c.name, '') ~* 'конфет|шоколад|сладост'
+              OR COALESCE(c.slug, '') ~* 'konfet|shokolad|sladost|candy|sweet'
+            )
+            THEN 'sweets'
+            WHEN (
+              COALESCE(c.name, '') ~* 'игруш'
+              OR COALESCE(c.slug, '') ~* 'igrush|toy'
+            )
+            THEN 'toy'
+            WHEN (
+              COALESCE(c.name, '') ~* 'воздушн.*шар|шарик|^шары?$'
+              OR COALESCE(c.slug, '') ~* 'vozdushn.*shar|sharik|^shary?$|balloon'
+            )
+            THEN 'balloon'
+            WHEN (
+              COALESCE(c.name, '') ~* 'ваз'
+              OR COALESCE(c.slug, '') ~* 'vaz|vase'
+            )
+            THEN 'vase'
+            WHEN (
+              COALESCE(c.name, '') ~* 'парфюм|духи'
+              OR COALESCE(c.slug, '') ~* 'parfyum|parfum|duhi|perfume'
+            )
+            THEN 'perfume'
+            WHEN (
+              COALESCE(c.name, '') ~* '^подар'
+              OR COALESCE(c.slug, '') ~* '^podark|^gift'
+            )
+            THEN 'gift'
+            WHEN (
+              COALESCE(c.name, '') ~* 'композиц|шляпн.*короб|цвет.*короб|роз.*короб|букет.*корзин|цвет.*корзин|^корзины?$'
+              OR COALESCE(c.slug, '') ~* 'kompoz|shlyap.*korob|tsvet.*korob|cvet.*korob|roz.*korob|buket.*korzin|tsvet.*korzin|cvet.*korzin|^korziny?$'
+            )
+            THEN 'arrangement'
+            WHEN (
+              COALESCE(c.name, '') ~* 'поштуч|срезанн|отдельн.*цвет'
+              OR COALESCE(c.slug, '') ~* 'poshtuch|srez|single|stem'
+            )
+            THEN 'flowers'
+            WHEN (
+              COALESCE(c.name, '') ~* 'букет|цвет|роз|пион|тюльпан|гортенз|гвоздик|эустом|ирис|хризант|лили|орхиде|ромаш|альстромер|ранункул'
+              OR COALESCE(c.slug, '') ~* 'buket|bouquet|flower|tsvet|cvet|roz|pion|tulip|gorten|gvozd|eustom|iris|hrizant|lili|orchid|romash|alstromer|ranunk'
+            )
+            THEN 'bouquet'
+            ELSE COALESCE(
+              NULLIF(
+                p.metadata #>> '{catalog,productType}',
+                ''
+              ),
+              'bouquet'
+            )
+          END AS "productType",
           p.is_featured AS "isFeatured"
         FROM products p
         LEFT JOIN categories c
@@ -1254,22 +1566,17 @@ export async function publicRoutes(app: FastifyInstance) {
           )
           AND (
             ${query.availability} = 'all'
-            OR (
-              ${query.availability}
-                = 'available'
-              AND COALESCE(
-                p.stock_quantity,
-                0
-              ) > 0
-            )
-            OR (
-              ${query.availability}
-                = 'unavailable'
-              AND COALESCE(
-                p.stock_quantity,
-                0
-              ) <= 0
-            )
+            OR COALESCE(
+              NULLIF(
+                p.metadata #>> '{catalog,availability}',
+                ''
+              ),
+              CASE
+                WHEN COALESCE(p.stock_quantity, 0) > 0
+                THEN 'available'
+                ELSE 'unavailable'
+              END
+            ) = ${query.availability}
           )
           AND (
             ${minPrice}::integer IS NULL
@@ -1289,6 +1596,68 @@ export async function publicRoutes(app: FastifyInstance) {
               p.old_price IS NOT NULL
               AND p.old_price > p.price
             )
+          )
+          AND (
+            ${productTypeFilter} = ''
+            OR CASE
+              WHEN (
+                COALESCE(c.name, '') ~* 'открытк|конверт'
+                OR COALESCE(c.slug, '') ~* 'otkrytk|otkryt|konvert|card'
+              )
+              THEN 'card'
+              WHEN (
+                COALESCE(c.name, '') ~* 'конфет|шоколад|сладост'
+                OR COALESCE(c.slug, '') ~* 'konfet|shokolad|sladost|candy|sweet'
+              )
+              THEN 'sweets'
+              WHEN (
+                COALESCE(c.name, '') ~* 'игруш'
+                OR COALESCE(c.slug, '') ~* 'igrush|toy'
+              )
+              THEN 'toy'
+              WHEN (
+                COALESCE(c.name, '') ~* 'воздушн.*шар|шарик|^шары?$'
+                OR COALESCE(c.slug, '') ~* 'vozdushn.*shar|sharik|^shary?$|balloon'
+              )
+              THEN 'balloon'
+              WHEN (
+                COALESCE(c.name, '') ~* 'ваз'
+                OR COALESCE(c.slug, '') ~* 'vaz|vase'
+              )
+              THEN 'vase'
+              WHEN (
+                COALESCE(c.name, '') ~* 'парфюм|духи'
+                OR COALESCE(c.slug, '') ~* 'parfyum|parfum|duhi|perfume'
+              )
+              THEN 'perfume'
+              WHEN (
+                COALESCE(c.name, '') ~* '^подар'
+                OR COALESCE(c.slug, '') ~* '^podark|^gift'
+              )
+              THEN 'gift'
+              WHEN (
+                COALESCE(c.name, '') ~* 'композиц|шляпн.*короб|цвет.*короб|роз.*короб|букет.*корзин|цвет.*корзин|^корзины?$'
+                OR COALESCE(c.slug, '') ~* 'kompoz|shlyap.*korob|tsvet.*korob|cvet.*korob|roz.*korob|buket.*korzin|tsvet.*korzin|cvet.*korzin|^korziny?$'
+              )
+              THEN 'arrangement'
+              WHEN (
+                COALESCE(c.name, '') ~* 'поштуч|срезанн|отдельн.*цвет'
+                OR COALESCE(c.slug, '') ~* 'poshtuch|srez|single|stem'
+              )
+              THEN 'flowers'
+              WHEN (
+                COALESCE(c.name, '') ~* 'букет|цвет|роз|пион|тюльпан|гортенз|гвоздик|эустом|ирис|хризант|лили|орхиде|ромаш|альстромер|ранункул'
+                OR COALESCE(c.slug, '') ~* 'buket|bouquet|flower|tsvet|cvet|roz|pion|tulip|gorten|gvozd|eustom|iris|hrizant|lili|orchid|romash|alstromer|ranunk'
+              )
+              THEN 'bouquet'
+              ELSE COALESCE(
+                NULLIF(
+                  p.metadata #>> '{catalog,productType}',
+                  ''
+                ),
+                'bouquet'
+              )
+            END = ${productTypeFilter}
           )
         ORDER BY
           CASE
@@ -1377,22 +1746,17 @@ export async function publicRoutes(app: FastifyInstance) {
           )
           AND (
             ${query.availability} = 'all'
-            OR (
-              ${query.availability}
-                = 'available'
-              AND COALESCE(
-                p.stock_quantity,
-                0
-              ) > 0
-            )
-            OR (
-              ${query.availability}
-                = 'unavailable'
-              AND COALESCE(
-                p.stock_quantity,
-                0
-              ) <= 0
-            )
+            OR COALESCE(
+              NULLIF(
+                p.metadata #>> '{catalog,availability}',
+                ''
+              ),
+              CASE
+                WHEN COALESCE(p.stock_quantity, 0) > 0
+                THEN 'available'
+                ELSE 'unavailable'
+              END
+            ) = ${query.availability}
           )
           AND (
             ${minPrice}::integer IS NULL
@@ -1413,6 +1777,68 @@ export async function publicRoutes(app: FastifyInstance) {
               AND p.old_price > p.price
             )
           )
+          AND (
+            ${productTypeFilter} = ''
+            OR CASE
+              WHEN (
+                COALESCE(c.name, '') ~* 'открытк|конверт'
+                OR COALESCE(c.slug, '') ~* 'otkrytk|otkryt|konvert|card'
+              )
+              THEN 'card'
+              WHEN (
+                COALESCE(c.name, '') ~* 'конфет|шоколад|сладост'
+                OR COALESCE(c.slug, '') ~* 'konfet|shokolad|sladost|candy|sweet'
+              )
+              THEN 'sweets'
+              WHEN (
+                COALESCE(c.name, '') ~* 'игруш'
+                OR COALESCE(c.slug, '') ~* 'igrush|toy'
+              )
+              THEN 'toy'
+              WHEN (
+                COALESCE(c.name, '') ~* 'воздушн.*шар|шарик|^шары?$'
+                OR COALESCE(c.slug, '') ~* 'vozdushn.*shar|sharik|^shary?$|balloon'
+              )
+              THEN 'balloon'
+              WHEN (
+                COALESCE(c.name, '') ~* 'ваз'
+                OR COALESCE(c.slug, '') ~* 'vaz|vase'
+              )
+              THEN 'vase'
+              WHEN (
+                COALESCE(c.name, '') ~* 'парфюм|духи'
+                OR COALESCE(c.slug, '') ~* 'parfyum|parfum|duhi|perfume'
+              )
+              THEN 'perfume'
+              WHEN (
+                COALESCE(c.name, '') ~* '^подар'
+                OR COALESCE(c.slug, '') ~* '^podark|^gift'
+              )
+              THEN 'gift'
+              WHEN (
+                COALESCE(c.name, '') ~* 'композиц|шляпн.*короб|цвет.*короб|роз.*короб|букет.*корзин|цвет.*корзин|^корзины?$'
+                OR COALESCE(c.slug, '') ~* 'kompoz|shlyap.*korob|tsvet.*korob|cvet.*korob|roz.*korob|buket.*korzin|tsvet.*korzin|cvet.*korzin|^korziny?$'
+              )
+              THEN 'arrangement'
+              WHEN (
+                COALESCE(c.name, '') ~* 'поштуч|срезанн|отдельн.*цвет'
+                OR COALESCE(c.slug, '') ~* 'poshtuch|srez|single|stem'
+              )
+              THEN 'flowers'
+              WHEN (
+                COALESCE(c.name, '') ~* 'букет|цвет|роз|пион|тюльпан|гортенз|гвоздик|эустом|ирис|хризант|лили|орхиде|ромаш|альстромер|ранункул'
+                OR COALESCE(c.slug, '') ~* 'buket|bouquet|flower|tsvet|cvet|roz|pion|tulip|gorten|gvozd|eustom|iris|hrizant|lili|orchid|romash|alstromer|ranunk'
+              )
+              THEN 'bouquet'
+              ELSE COALESCE(
+                NULLIF(
+                  p.metadata #>> '{catalog,productType}',
+                  ''
+                ),
+                'bouquet'
+              )
+            END = ${productTypeFilter}
+          )
       `;
 
       const globalCountRows = await client<
@@ -1428,6 +1854,17 @@ export async function publicRoutes(app: FastifyInstance) {
           AND c.is_active = true
         WHERE p.shop_id = ${shop.id}
           AND p.status = 'active'
+          AND COALESCE(
+            NULLIF(
+              p.metadata #>> '{catalog,availability}',
+              ''
+            ),
+            CASE
+              WHEN COALESCE(p.stock_quantity, 0) > 0
+              THEN 'available'
+              ELSE 'unavailable'
+            END
+          ) = 'available'
           AND (
             p.category_id IS NULL
             OR c.id IS NOT NULL
@@ -1450,6 +1887,17 @@ export async function publicRoutes(app: FastifyInstance) {
           AND c.is_active = true
         WHERE p.shop_id = ${shop.id}
           AND p.status = 'active'
+          AND COALESCE(
+            NULLIF(
+              p.metadata #>> '{catalog,availability}',
+              ''
+            ),
+            CASE
+              WHEN COALESCE(p.stock_quantity, 0) > 0
+              THEN 'available'
+              ELSE 'unavailable'
+            END
+          ) = 'available'
         GROUP BY p.category_id
       `;
 
@@ -1464,7 +1912,7 @@ export async function publicRoutes(app: FastifyInstance) {
                 alt: string | null;
               }[]
             >`
-              SELECT DISTINCT ON (product_id)
+              SELECT
                 product_id,
                 url,
                 alt
@@ -1481,15 +1929,28 @@ export async function publicRoutes(app: FastifyInstance) {
             `
           : [];
 
-      const imagesByProductId = new Map(
-        imageRows.map((image) => [
-          image.product_id,
-          {
-            url: image.url,
-            alt: image.alt,
-          },
-        ]),
-      );
+      const imagesByProductId = new Map<
+        string,
+        Array<{
+          url: string;
+          alt: string | null;
+        }>
+      >();
+
+      for (const image of imageRows) {
+        const current = imagesByProductId.get(image.product_id) ?? [];
+
+        if (current.length >= 2) {
+          continue;
+        }
+
+        current.push({
+          url: image.url,
+          alt: image.alt,
+        });
+
+        imagesByProductId.set(image.product_id, current);
+      }
 
       const total = Number(countRows[0]?.total ?? 0);
 
@@ -1507,7 +1968,20 @@ export async function publicRoutes(app: FastifyInstance) {
           ...product,
           price: Number(product.price),
           oldPrice: product.oldPrice === null ? null : Number(product.oldPrice),
-          primaryImage: imagesByProductId.get(product.id) ?? null,
+          productType: inferProductType(
+            {
+              catalog: {
+                productType: product.productType
+              }
+            },
+            product.categoryName,
+            product.categorySlug,
+            product.name,
+            product.shortDescription,
+            product.description
+          ),
+          primaryImage: imagesByProductId.get(product.id)?.[0] ?? null,
+          secondaryImage: imagesByProductId.get(product.id)?.[1] ?? null,
         })),
 
         meta: {
@@ -1564,7 +2038,7 @@ export async function publicRoutes(app: FastifyInstance) {
         slug: string;
         name: string;
         price: number;
-        availability: "available" | "unavailable";
+        availability: "available" | "preorder" | "unavailable";
         imageUrl: string | null;
         imageAlt: string | null;
       };
@@ -1575,11 +2049,17 @@ export async function publicRoutes(app: FastifyInstance) {
             p.slug,
             p.name,
             p.price,
-            CASE
-              WHEN COALESCE(p.stock_quantity, 0) > 0
-              THEN 'available'
-              ELSE 'unavailable'
-            END AS availability,
+            COALESCE(
+              NULLIF(
+                p.metadata #>> '{catalog,availability}',
+                ''
+              ),
+              CASE
+                WHEN COALESCE(p.stock_quantity, 0) > 0
+                THEN 'available'
+                ELSE 'unavailable'
+              END
+            ) AS availability,
             image.url AS "imageUrl",
             image.alt AS "imageAlt"
           FROM products p
@@ -1662,6 +2142,7 @@ export async function publicRoutes(app: FastifyInstance) {
           price: products.price,
           oldPrice: products.oldPrice,
           stockQuantity: products.stockQuantity,
+          metadata: products.metadata,
         })
         .from(products)
         .where(
@@ -1678,6 +2159,22 @@ export async function publicRoutes(app: FastifyInstance) {
       if (!product) {
         throw new HttpError(404, "Product not found");
       }
+
+      const categoryRows = product.categoryId
+        ? await client<{
+            name: string;
+            slug: string;
+          }[]>`
+            SELECT name, slug
+            FROM categories
+            WHERE shop_id = ${shop.id}
+              AND id = ${product.categoryId}
+              AND is_active = true
+            LIMIT 1
+          `
+        : [];
+
+      const category = categoryRows[0] ?? null;
 
       const images = await db
         .select({
@@ -1698,6 +2195,8 @@ export async function publicRoutes(app: FastifyInstance) {
         product: {
           id: product.id,
           categoryId: product.categoryId,
+          categoryName: category?.name ?? null,
+          categorySlug: category?.slug ?? null,
           slug: product.slug,
           name: product.name,
           shortDescription: product.shortDescription,
@@ -1706,10 +2205,18 @@ export async function publicRoutes(app: FastifyInstance) {
           careText: product.careText,
           price: Number(product.price),
           oldPrice: product.oldPrice === null ? null : Number(product.oldPrice),
-          availability:
-            product.stockQuantity !== null && Number(product.stockQuantity) > 0
-              ? "available"
-              : "unavailable",
+          availability: resolveProductAvailability(
+            product.metadata,
+            product.stockQuantity
+          ),
+          productType: inferProductType(
+            product.metadata,
+            category?.name,
+            category?.slug,
+            product.name,
+            product.shortDescription,
+            product.description
+          ),
         },
         images,
       };

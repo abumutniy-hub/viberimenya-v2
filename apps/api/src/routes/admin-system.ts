@@ -35,6 +35,8 @@ type SystemRequest = FastifyRequest & {
 
 const monitoringSettingsSchema = z.object({
   alertsEnabled: z.boolean(),
+  operationalAlertsEnabled: z.boolean(),
+  alertRepeatHours: z.number().int().min(6).max(72),
   dailySummaryEnabled: z.boolean(),
   autoRestartEnabled: z.boolean(),
   backupRetentionDays: z.number().int().min(7).max(90),
@@ -190,6 +192,8 @@ async function monitoringSettings(client: ReturnType<typeof createDb>["client"],
 
   return {
     alertsEnabled: raw.alertsEnabled !== false,
+    operationalAlertsEnabled: raw.operationalAlertsEnabled === true,
+    alertRepeatHours: Math.min(72, Math.max(6, Number(raw.alertRepeatHours ?? 24) || 24)),
     dailySummaryEnabled: raw.dailySummaryEnabled === true,
     autoRestartEnabled: raw.autoRestartEnabled !== false,
     backupRetentionDays: Math.min(90, Math.max(7, Number(raw.backupRetentionDays ?? 30) || 30)),

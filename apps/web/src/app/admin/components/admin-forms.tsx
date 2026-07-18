@@ -20,6 +20,41 @@ type ProductOption = {
   imagesCount?: number;
 };
 
+type CatalogProductAvailability =
+  | "available"
+  | "preorder"
+  | "unavailable";
+
+type CatalogProductType =
+  | "bouquet"
+  | "arrangement"
+  | "flowers"
+  | "card"
+  | "gift"
+  | "sweets"
+  | "toy"
+  | "vase"
+  | "balloon"
+  | "perfume"
+  | "other";
+
+const catalogProductTypeOptions: Array<{
+  value: CatalogProductType;
+  label: string;
+}> = [
+  { value: "bouquet", label: "Букет" },
+  { value: "arrangement", label: "Композиция / корзина / коробка" },
+  { value: "flowers", label: "Цветы / монобукет" },
+  { value: "card", label: "Открытка / конверт" },
+  { value: "gift", label: "Подарок" },
+  { value: "sweets", label: "Конфеты / сладости" },
+  { value: "toy", label: "Мягкая игрушка" },
+  { value: "vase", label: "Ваза" },
+  { value: "balloon", label: "Воздушные шары" },
+  { value: "perfume", label: "Парфюм" },
+  { value: "other", label: "Другое" }
+];
+
 type SettingsData = {
   phone?: unknown;
   whatsapp?: unknown;
@@ -532,6 +567,12 @@ export function ProductForm({
   const [isSaving, setIsSaving] =
     useState(false);
 
+  const [availability, setAvailability] =
+    useState<CatalogProductAvailability>("unavailable");
+
+  const [productType, setProductType] =
+    useState<CatalogProductType>("bouquet");
+
   const [selectedPhoto, setSelectedPhoto] =
     useState<File | null>(null);
 
@@ -608,6 +649,8 @@ export function ProductForm({
                   : null,
               stockQuantity:
                 form.get("stockQuantity"),
+              availability,
+              productType,
               status:
                 form.get("status"),
               isFeatured:
@@ -760,6 +803,46 @@ export function ProductForm({
         </label>
 
         <label>
+          <span>Тип товара</span>
+          <select
+            name="productType"
+            value={productType}
+            onChange={(event) => {
+              setProductType(
+                event.target.value as CatalogProductType
+              );
+            }}
+          >
+            {catalogProductTypeOptions.map((option) => (
+              <option
+                key={option.value}
+                value={option.value}
+              >
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label>
+          <span>Наличие для покупателя</span>
+          <select
+            name="availability"
+            value={availability}
+            onChange={(event) => {
+              setAvailability(
+                event.target.value as CatalogProductAvailability
+              );
+            }}
+          >
+            <option value="available">Есть в наличии</option>
+            <option value="preorder">Под заказ</option>
+            <option value="unavailable">Нет в наличии</option>
+          </select>
+          <small>Точное количество покупателю не показывается.</small>
+        </label>
+
+        <label>
           <span>Цена, ₽</span>
           <input
             name="price"
@@ -796,20 +879,24 @@ export function ProductForm({
           />
         </label>
 
-        <label>
-          <span>Внутренний остаток</span>
-          <input
-            name="stockQuantity"
-            type="number"
-            min="0"
-            step="1"
-            defaultValue="0"
-          />
-          <small>
-            Клиент увидит только «В наличии»
-            или «Нет в наличии».
-          </small>
-        </label>
+        <details className="admin-product-stock-details wide">
+          <summary>Расширенный складской учёт</summary>
+          <div>
+            <label>
+              <span>Внутренний остаток</span>
+              <input
+                name="stockQuantity"
+                type="number"
+                min="0"
+                step="1"
+                defaultValue="0"
+              />
+              <small>
+                Для букетов достаточно статуса наличия. Количество пригодится для штучных подарков и будущих вариантов.
+              </small>
+            </label>
+          </div>
+        </details>
 
         <label>
           <span>Статус</span>

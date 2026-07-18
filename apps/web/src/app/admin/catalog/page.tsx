@@ -24,6 +24,58 @@ type Response = {
   products: AdminRow[];
 };
 
+type CatalogAvailability = "available" | "preorder" | "unavailable";
+
+const availabilityLabels: Record<CatalogAvailability, string> = {
+  available: "Есть в наличии",
+  preorder: "Под заказ",
+  unavailable: "Нет в наличии"
+};
+
+const productTypeLabels: Record<string, string> = {
+  bouquet: "Букет",
+  arrangement: "Композиция",
+  flowers: "Цветы",
+  card: "Открытка",
+  gift: "Подарок",
+  sweets: "Сладости",
+  toy: "Игрушка",
+  vase: "Ваза",
+  balloon: "Шары",
+  perfume: "Парфюм",
+  other: "Другое"
+};
+
+function catalogMetadata(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {} as Record<string, unknown>;
+  }
+
+  const root = value as Record<string, unknown>;
+  const catalog = root.catalog;
+
+  return catalog && typeof catalog === "object" && !Array.isArray(catalog)
+    ? catalog as Record<string, unknown>
+    : {} as Record<string, unknown>;
+}
+
+function productAvailability(product: AdminRow): CatalogAvailability {
+  const raw = String(catalogMetadata(product.metadata).availability ?? "").trim();
+
+  if (raw === "available" || raw === "preorder" || raw === "unavailable") {
+    return raw;
+  }
+
+  return Number(product.stock_quantity ?? 0) > 0
+    ? "available"
+    : "unavailable";
+}
+
+function productTypeLabel(product: AdminRow) {
+  const raw = String(catalogMetadata(product.metadata).productType ?? "").trim();
+  return productTypeLabels[raw] || "Не указан";
+}
+
 const statusLabels: Record<string, string> = {
   active: "Опубликован",
   draft: "Черновик",
@@ -58,11 +110,28 @@ function money(value: unknown) {
 
 function safeProductImageUrl(value: unknown) {
   const url = String(value ?? "").trim();
+  const prefix = "/uploads/products/";
 
   if (
-    !url.startsWith("/uploads/products/")
+    !url.startsWith(prefix)
     || url.includes("..")
-    || !/^\/uploads\/products\/[a-zA-Z0-9._-]+$/.test(url)
+    || url.includes("\\")
+    || url.includes("?")
+    || url.includes("#")
+  ) {
+    return "";
+  }
+
+  const relativePath = url.slice(prefix.length);
+  const segments = relativePath.split("/");
+
+  if (
+    !relativePath
+    || segments.some(
+      (segment) =>
+        !segment
+        || !/^[a-zA-Z0-9._-]+$/.test(segment)
+    )
   ) {
     return "";
   }
@@ -188,6 +257,9 @@ export default async function AdminCatalogPage() {
             stock: Number(
               product.stock_quantity ?? 0
             ),
+            availability: productAvailability(product),
+            availabilityLabel: availabilityLabels[productAvailability(product)],
+            productTypeLabel: productTypeLabel(product),
             price: Number.isFinite(numericPrice)
               ? numericPrice
               : 0,
@@ -229,7 +301,7 @@ export default async function AdminCatalogPage() {
   const outOfStockCount = products.filter(
     (product) =>
       String(product.status) === "active"
-      && Number(product.stock_quantity ?? 0) <= 0
+      && productAvailability(product) !== "available"
   ).length;
 
   const lowStockCount = products.filter(

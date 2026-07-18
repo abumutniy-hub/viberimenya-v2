@@ -6,6 +6,13 @@ import { z } from "zod";
 import { createDb } from "@viberimenya/db";
 import { env } from "../lib/env";
 import { HttpError } from "../lib/http-error";
+import {
+  inferProductType,
+  mergeCatalogMetadata,
+  productAvailabilityValues,
+  productTypeValues,
+  resolveProductAvailability
+} from "../lib/catalog-product";
 import { markOrderPaid } from "../modules/orders/order-payment.service";
 import {
   recordFullOrderRefund,
@@ -895,6 +902,8 @@ const productSchema = z.object({
     z.null()
   ]).optional().default(null),
   stockQuantity: z.coerce.number().int().min(0).optional().default(0),
+  availability: z.enum(productAvailabilityValues).optional().default("unavailable"),
+  productType: z.enum(productTypeValues).optional(),
   status: z.enum(["draft", "active", "hidden", "archived"]).optional().default("active"),
   isFeatured: z.coerce.boolean().optional().default(false),
   sortOrder: z.coerce.number().int().min(0).max(100000).optional().default(100)
@@ -931,8 +940,11 @@ const productUpdateSchema = z.object({
     z.null()
   ]).optional().default(null),
   stockQuantity: z.coerce.number().int().min(0)
-    .optional()
-    .default(0),
+    .optional(),
+  availability: z.enum(productAvailabilityValues)
+    .optional(),
+  productType: z.enum(productTypeValues)
+    .optional(),
   status: z.enum([
     "draft",
     "active",
@@ -6262,6 +6274,8 @@ export async function adminRoutes(app: FastifyInstance) {
                 AS products_total,
               COALESCE(pc.active_products, 0)
                 AS active_products,
+              COALESCE(pc.available_products, 0)
+                AS available_products,
               COALESCE(pc.draft_products, 0)
                 AS draft_products,
               COALESCE(pc.hidden_products, 0)
@@ -6275,6 +6289,20 @@ export async function adminRoutes(app: FastifyInstance) {
                 COUNT(*) FILTER (
                   WHERE p.status = 'active'
                 )::int AS active_products,
+                COUNT(*) FILTER (
+                  WHERE p.status = 'active'
+                    AND COALESCE(
+                      NULLIF(
+                        p.metadata #>> '{catalog,availability}',
+                        ''
+                      ),
+                      CASE
+                        WHEN COALESCE(p.stock_quantity, 0) > 0
+                        THEN 'available'
+                        ELSE 'unavailable'
+                      END
+                    ) = 'available'
+                )::int AS available_products,
                 COUNT(*) FILTER (
                   WHERE p.status = 'draft'
                 )::int AS draft_products,
@@ -6290,33 +6318,52 @@ export async function adminRoutes(app: FastifyInstance) {
             ) pc ON true
             WHERE c.shop_id = ${shop.id}
             ORDER BY
+              c.is_active DESC,
+              COALESCE(pc.available_products, 0) DESC,
+              COALESCE(pc.products_total, 0) DESC,
               c.sort_order ASC,
               c.name ASC
           `,
-        client`
-          SELECT
-            p.*,
-            pi.url AS primary_image_url,
-            COALESCE(pic.images_count, 0) AS images_count
-          FROM products p
-          LEFT JOIN LATERAL (
-            SELECT url
-            FROM product_images
-            WHERE shop_id = p.shop_id
-              AND product_id = p.id
-            ORDER BY is_main DESC, sort_order ASC, created_at ASC
-            LIMIT 1
-          ) pi ON true
-          LEFT JOIN LATERAL (
-            SELECT COUNT(*)::int AS images_count
-            FROM product_images
-            WHERE shop_id = p.shop_id
-              AND product_id = p.id
-          ) pic ON true
-          WHERE p.shop_id = ${shop.id}
-          ORDER BY p.created_at DESC
-          LIMIT 500
-        `
+          client`
+            SELECT
+              p.id,
+              p.category_id,
+              p.slug,
+              p.name,
+              p.short_description,
+              p.price,
+              p.stock_quantity,
+              p.metadata,
+              p.status,
+              p.is_featured,
+              p.sort_order,
+              p.created_at,
+              p.updated_at,
+              image_summary.primary_image_url,
+              COALESCE(
+                image_summary.images_count,
+                0
+              ) AS images_count
+            FROM products p
+            LEFT JOIN LATERAL (
+              SELECT
+                (
+                  ARRAY_AGG(
+                    pi.url
+                    ORDER BY
+                      pi.is_main DESC,
+                      pi.sort_order ASC,
+                      pi.created_at ASC
+                  )
+                )[1] AS primary_image_url,
+                COUNT(*)::int AS images_count
+              FROM product_images pi
+              WHERE pi.shop_id = p.shop_id
+                AND pi.product_id = p.id
+            ) image_summary ON true
+            WHERE p.shop_id = ${shop.id}
+            ORDER BY p.created_at DESC
+          `
       ]);
 
       return { shop, categories, products };
@@ -9822,7 +9869,10 @@ export async function adminRoutes(app: FastifyInstance) {
         SELECT
           id,
           slug,
-          status
+          status,
+          metadata,
+          stock_quantity,
+          category_id
         FROM products
         WHERE shop_id = ${shop.id}
           AND id = ${params.id}
@@ -9856,6 +9906,49 @@ export async function adminRoutes(app: FastifyInstance) {
           });
         }
       }
+
+      const categoryNameRows = categoryId
+        ? await client<{ name: string }[]>`
+            SELECT name
+            FROM categories
+            WHERE shop_id = ${shop.id}
+              AND id = ${categoryId}
+            LIMIT 1
+          `
+        : [];
+
+      const resolvedProductType = body.productType
+        || inferProductType(
+          existing.metadata,
+          categoryNameRows[0]?.name,
+          body.name,
+          body.shortDescription,
+          body.description
+        );
+
+      const resolvedAvailability = body.availability
+        ?? resolveProductAvailability(
+          existing.metadata,
+          existing.stock_quantity
+        );
+
+      const requestedStockQuantity = body.stockQuantity
+        ?? Number(existing.stock_quantity ?? 0);
+
+      const normalizedStockQuantity =
+        resolvedAvailability === "available"
+          ? Math.max(1, requestedStockQuantity)
+          : resolvedAvailability === "unavailable"
+            ? 0
+            : Math.max(0, requestedStockQuantity);
+
+      const normalizedMetadata = mergeCatalogMetadata(
+        existing.metadata,
+        {
+          availability: resolvedAvailability,
+          productType: resolvedProductType
+        }
+      );
 
       const slug = (
         body.slug.trim()
@@ -9897,6 +9990,7 @@ export async function adminRoutes(app: FastifyInstance) {
 
       if (
         body.oldPrice !== null
+        && body.oldPrice > 0
         && body.oldPrice <= body.price
       ) {
         return reply.status(400).send({
@@ -9917,9 +10011,15 @@ export async function adminRoutes(app: FastifyInstance) {
           composition = ${body.composition},
           care_text = ${body.careText},
           price = ${body.price},
-          old_price = ${body.oldPrice},
+          old_price = ${
+            body.oldPrice !== null
+            && body.oldPrice > 0
+              ? body.oldPrice
+              : null
+          },
           cost_price = ${body.costPrice},
-          stock_quantity = ${body.stockQuantity},
+          stock_quantity = ${normalizedStockQuantity},
+          metadata = ${JSON.stringify(normalizedMetadata)}::jsonb,
           is_stock_visible = false,
           status = ${body.status},
           is_featured = ${body.isFeatured},
@@ -9934,9 +10034,11 @@ export async function adminRoutes(app: FastifyInstance) {
         ok: true,
         product: rows[0] ?? null,
         customerAvailability:
-          body.stockQuantity > 0
+          resolvedAvailability === "available"
             ? "В наличии"
-            : "Нет в наличии"
+            : resolvedAvailability === "preorder"
+              ? "Под заказ"
+              : "Нет в наличии"
       };
     } finally {
       await client.end();
@@ -10262,6 +10364,7 @@ export async function adminRoutes(app: FastifyInstance) {
       );
 
       const categoryId = body.categoryId || null;
+      let categoryName: string | null = null;
 
       if (!name) {
         return reply.status(400).send({
@@ -10290,8 +10393,9 @@ export async function adminRoutes(app: FastifyInstance) {
       if (categoryId) {
         const categoryRows = await client<{
           id: string;
+          name: string;
         }[]>`
-          SELECT id
+          SELECT id, name
           FROM categories
           WHERE shop_id = ${shop.id}
             AND id = ${categoryId}
@@ -10304,6 +10408,8 @@ export async function adminRoutes(app: FastifyInstance) {
             message: "Выбранная категория не найдена"
           });
         }
+
+        categoryName = categoryRows[0].name;
       }
 
       const duplicateRows = await client<{
@@ -10326,6 +10432,7 @@ export async function adminRoutes(app: FastifyInstance) {
 
       if (
         body.oldPrice !== null
+        && body.oldPrice > 0
         && body.oldPrice <= body.price
       ) {
         return reply.status(400).send({
@@ -10334,6 +10441,30 @@ export async function adminRoutes(app: FastifyInstance) {
             "Старая цена должна быть выше текущей цены"
         });
       }
+
+      const resolvedProductType = body.productType
+        || inferProductType(
+          {},
+          categoryName,
+          body.name,
+          body.shortDescription,
+          body.description
+        );
+
+      const normalizedStockQuantity =
+        body.availability === "available"
+          ? Math.max(1, body.stockQuantity)
+          : body.availability === "unavailable"
+            ? 0
+            : Math.max(0, body.stockQuantity);
+
+      const normalizedMetadata = mergeCatalogMetadata(
+        {},
+        {
+          availability: body.availability,
+          productType: resolvedProductType
+        }
+      );
 
       const rows = await client`
         INSERT INTO products (
@@ -10350,6 +10481,7 @@ export async function adminRoutes(app: FastifyInstance) {
           cost_price,
           status,
           stock_quantity,
+          metadata,
           is_stock_visible,
           is_featured,
           sort_order,
@@ -10366,10 +10498,16 @@ export async function adminRoutes(app: FastifyInstance) {
           ${body.composition},
           ${body.careText},
           ${body.price},
-          ${body.oldPrice},
+          ${
+            body.oldPrice !== null
+            && body.oldPrice > 0
+              ? body.oldPrice
+              : null
+          },
           ${body.costPrice},
           ${body.status},
-          ${body.stockQuantity},
+          ${normalizedStockQuantity},
+          ${JSON.stringify(normalizedMetadata)}::jsonb,
           false,
           ${body.isFeatured},
           ${body.sortOrder},

@@ -18,6 +18,10 @@ import {
   CatalogLiveSearch
 } from "./catalog-live-search";
 
+import {
+  ProductQuickView
+} from "./product-quick-view";
+
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
@@ -39,6 +43,8 @@ type Category = {
   name: string;
   description?: string | null;
   imageUrl?: string | null;
+  publicCount?: number;
+  public_count?: number;
 };
 
 type Product = {
@@ -52,9 +58,14 @@ type Product = {
   description?: string | null;
   price: number;
   oldPrice?: number | null;
-  availability?: "available" | "unavailable" | null;
+  availability?: "available" | "preorder" | "unavailable" | null;
+  productType?: string | null;
   isFeatured?: boolean | null;
   primaryImage?: {
+    url: string;
+    alt?: string | null;
+  } | null;
+  secondaryImage?: {
     url: string;
     alt?: string | null;
   } | null;
@@ -105,6 +116,7 @@ type SortValue =
 const availabilityValues = [
   "all",
   "available",
+  "preorder",
   "unavailable"
 ] as const;
 
@@ -191,9 +203,15 @@ function positivePage(
 function productAvailabilityText(
   product: Product
 ) {
-  return product.availability === "available"
-    ? "В наличии"
-    : "Нет в наличии";
+  if (product.availability === "available") {
+    return "Есть в наличии";
+  }
+
+  if (product.availability === "preorder") {
+    return "Под заказ";
+  }
+
+  return "Нет в наличии";
 }
 
 function hasOldPrice(
@@ -259,8 +277,16 @@ function ProductCard({
               product.primaryImage?.url
               ?? null
             }
+            secondarySrc={
+              product.secondaryImage?.url
+              ?? null
+            }
             alt={
               product.primaryImage?.alt
+              || product.name
+            }
+            secondaryAlt={
+              product.secondaryImage?.alt
               || product.name
             }
           />
@@ -268,6 +294,19 @@ function ProductCard({
 
         <FavoriteButton
           productId={product.id}
+        />
+
+        <ProductQuickView
+          product={{
+            id: product.id,
+            slug: product.slug,
+            name: product.name,
+            price: product.price,
+            oldPrice: product.oldPrice ?? null,
+            imageUrl: product.primaryImage?.url ?? "",
+            imageAlt: product.primaryImage?.alt || product.name,
+            available
+          }}
         />
       </div>
 
@@ -342,7 +381,9 @@ function ProductCard({
                 className="product-cart-button is-disabled"
                 disabled
               >
-                Нет в наличии
+                {product.availability === "preorder"
+                  ? "Под заказ"
+                  : "Нет в наличии"}
               </button>
             )}
           </div>
@@ -371,13 +412,16 @@ export default async function CatalogPage({
   const rawAvailability =
     getFirstParam(params.availability);
 
+  const explicitAvailability =
+    typeof rawAvailability === "string";
+
   const availability:
     AvailabilityValue =
       availabilityValues.includes(
         rawAvailability as AvailabilityValue
       )
         ? rawAvailability as AvailabilityValue
-        : "all";
+        : "available";
 
   const rawSort =
     getFirstParam(params.sort);
@@ -507,7 +551,7 @@ export default async function CatalogPage({
     ?? products.length;
 
   const hasAdvancedFilters = (
-    availability !== "all"
+    (explicitAvailability && availability !== "all")
     || sort !== "recommended"
     || minPrice !== null
     || maxPrice !== null
@@ -559,14 +603,24 @@ export default async function CatalogPage({
   }
 
   if (
-    availability === "available"
+    explicitAvailability
+    && availability === "available"
   ) {
     activeFilterLabels.push(
       "В наличии"
     );
   }
 
-  if (availability === "unavailable") {
+  if (
+    explicitAvailability
+    && availability === "preorder"
+  ) {
+    activeFilterLabels.push(
+      "Под заказ"
+    );
+  }
+
+  if (explicitAvailability && availability === "unavailable") {
     activeFilterLabels.push(
       "Нет в наличии"
     );
@@ -707,7 +761,6 @@ export default async function CatalogPage({
 
           <details
             className="public-filter-details"
-            open={hasAdvancedFilters}
           >
             <summary>
               <span>
@@ -761,7 +814,11 @@ export default async function CatalogPage({
                     </option>
 
                     <option value="available">
-                      В наличии
+                      Есть в наличии
+                    </option>
+
+                    <option value="preorder">
+                      Под заказ
                     </option>
 
                     <option value="unavailable">
@@ -937,12 +994,12 @@ export default async function CatalogPage({
               </a>
 
               {categories.map((category) => {
-                const productsCount =
-                  Number(
-                    categoryCounts[
-                      category.id
-                    ] ?? 0
-                  );
+                const productsCount = Number(
+                  category.publicCount
+                  ?? category.public_count
+                  ?? categoryCounts[category.id]
+                  ?? 0
+                );
 
                 const iconKey =
                   categoryIconKeyFromImageUrl(
@@ -957,9 +1014,9 @@ export default async function CatalogPage({
                     className={[
                       "public-category-card",
                       `accent-${iconKey}`,
-                      productsCount > 0
-                        ? ""
-                        : "is-empty",
+                      category.imageUrl
+                        ? "has-photo"
+                        : "",
                       category.slug === "bukety"
                         ? "is-primary"
                         : ""
@@ -968,28 +1025,27 @@ export default async function CatalogPage({
                       `/catalog?category=${category.slug}`
                     }
                     key={category.id}
-                    aria-disabled={
-                      productsCount === 0
-                    }
-                    tabIndex={
-                      productsCount > 0
-                        ? 0
-                        : -1
-                    }
                   >
-                    <span className="public-category-icon">
-                      <CategoryIcon
-                        iconKey={iconKey}
-                      />
-                    </span>
+                    {category.imageUrl ? (
+                      <span className="public-category-photo">
+                        <ProductTileImage
+                          src={category.imageUrl}
+                          alt={category.name}
+                        />
+                      </span>
+                    ) : (
+                      <span className="public-category-icon">
+                        <CategoryIcon
+                          iconKey={iconKey}
+                        />
+                      </span>
+                    )}
 
                     <div className="public-category-content">
                       <span>
                         {category.slug === "bukety"
                           ? "Основной раздел"
-                          : productsCount > 0
-                            ? "Раздел каталога"
-                            : "Скоро в каталоге"}
+                          : "Раздел каталога"}
                       </span>
 
                       <h2>{category.name}</h2>
@@ -1002,17 +1058,11 @@ export default async function CatalogPage({
 
                     <div className="public-category-footer">
                       <strong>
-                        {productsCount > 0
-                          ? productsCountLabel(
-                              productsCount
-                            )
-                          : "Скоро"}
+                        {productsCountLabel(productsCount)}
                       </strong>
 
                       <span>
-                        {productsCount > 0
-                          ? "Открыть →"
-                          : "Готовим"}
+                        Открыть →
                       </span>
                     </div>
                   </a>

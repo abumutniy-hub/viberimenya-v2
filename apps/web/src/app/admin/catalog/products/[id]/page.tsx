@@ -31,6 +31,93 @@ type CatalogResponse = {
   categories: AdminRow[];
 };
 
+
+type ProductAvailability = "available" | "preorder" | "unavailable";
+type ProductType =
+  | "bouquet"
+  | "arrangement"
+  | "flowers"
+  | "card"
+  | "gift"
+  | "sweets"
+  | "toy"
+  | "vase"
+  | "balloon"
+  | "perfume"
+  | "other";
+
+const productTypeLabels: Record<ProductType, string> = {
+  bouquet: "Букет",
+  arrangement: "Композиция / корзина / коробка",
+  flowers: "Цветы / монобукет",
+  card: "Открытка / конверт",
+  gift: "Подарок",
+  sweets: "Конфеты / сладости",
+  toy: "Мягкая игрушка",
+  vase: "Ваза",
+  balloon: "Воздушные шары",
+  perfume: "Парфюм",
+  other: "Другое"
+};
+
+const availabilityLabels: Record<ProductAvailability, string> = {
+  available: "Есть в наличии",
+  preorder: "Под заказ",
+  unavailable: "Нет в наличии"
+};
+
+function metadataCatalog(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {} as Record<string, unknown>;
+  }
+
+  const root = value as Record<string, unknown>;
+  const catalog = root.catalog;
+
+  return catalog && typeof catalog === "object" && !Array.isArray(catalog)
+    ? catalog as Record<string, unknown>
+    : {} as Record<string, unknown>;
+}
+
+function productTypeFromProduct(product: AdminRow): ProductType {
+  const raw = String(metadataCatalog(product.metadata).productType ?? "").trim();
+  const allowed = Object.keys(productTypeLabels) as ProductType[];
+
+  if (allowed.includes(raw as ProductType)) {
+    return raw as ProductType;
+  }
+
+  const haystack = [
+    product.category_name,
+    product.name
+  ].map((item) => String(item ?? "").toLowerCase()).join(" ");
+
+  if (/открытк|конверт/.test(haystack)) return "card";
+  if (/конфет|шоколад|сладост/.test(haystack)) return "sweets";
+  if (/игруш/.test(haystack)) return "toy";
+  if (/шар/.test(haystack)) return "balloon";
+  if (/ваз/.test(haystack)) return "vase";
+  if (/парфюм|духи/.test(haystack)) return "perfume";
+  if (/подар/.test(haystack)) return "gift";
+  if (/корзин|короб|композиц/.test(haystack)) return "arrangement";
+  if (/монобукет|поштуч/.test(haystack)) return "flowers";
+  if (/букет/.test(haystack)) return "bouquet";
+  if (/цветы|роза|розы|пион|тюльпан|гортенз|гвоздик|эустом|ирис|хризант/.test(haystack)) return "flowers";
+  return "other";
+}
+
+function availabilityFromProduct(product: AdminRow): ProductAvailability {
+  const raw = String(metadataCatalog(product.metadata).availability ?? "").trim();
+
+  if (raw === "available" || raw === "preorder" || raw === "unavailable") {
+    return raw;
+  }
+
+  return Number(product.stock_quantity ?? 0) > 0
+    ? "available"
+    : "unavailable";
+}
+
 const statusLabels: Record<string, string> = {
   active: "Опубликован",
   draft: "Черновик",
@@ -81,11 +168,28 @@ function yesNo(value: unknown) {
 
 function safeProductImageUrl(value: unknown) {
   const url = String(value ?? "").trim();
+  const prefix = "/uploads/products/";
 
   if (
-    !url.startsWith("/uploads/products/")
+    !url.startsWith(prefix)
     || url.includes("..")
-    || !/^\/uploads\/products\/[a-zA-Z0-9._-]+$/.test(url)
+    || url.includes("\\")
+    || url.includes("?")
+    || url.includes("#")
+  ) {
+    return "";
+  }
+
+  const relativePath = url.slice(prefix.length);
+  const segments = relativePath.split("/");
+
+  if (
+    !relativePath
+    || segments.some(
+      (segment) =>
+        !segment
+        || !/^[a-zA-Z0-9._-]+$/.test(segment)
+    )
   ) {
     return "";
   }
@@ -167,6 +271,13 @@ export default async function AdminProductDetailPage({
   const status = String(product.status ?? "draft");
   const slug = text(product.slug, "");
   const name = text(product.name);
+  const productType = productTypeFromProduct(product);
+  const availability = availabilityFromProduct(product);
+  const flowerLike = [
+    "bouquet",
+    "arrangement",
+    "flowers"
+  ].includes(productType);
 
   const images = rawImages
     .map((image) => ({
@@ -199,11 +310,17 @@ export default async function AdminProductDetailPage({
     issues.push("Не заполнено полное описание.");
   }
 
-  if (!String(product.composition ?? "").trim()) {
+  if (
+    flowerLike
+    && !String(product.composition ?? "").trim()
+  ) {
     issues.push("Не заполнен состав.");
   }
 
-  if (!String(product.care_text ?? "").trim()) {
+  if (
+    flowerLike
+    && !String(product.care_text ?? "").trim()
+  ) {
     issues.push("Не заполнены рекомендации по уходу.");
   }
 
@@ -345,6 +462,16 @@ export default async function AdminProductDetailPage({
           />
 
           <InfoRow
+            label="Тип товара"
+            value={productTypeLabels[productType]}
+          />
+
+          <InfoRow
+            label="Наличие"
+            value={availabilityLabels[availability]}
+          />
+
+          <InfoRow
             label="Slug"
             value={text(product.slug)}
           />
@@ -380,14 +507,10 @@ export default async function AdminProductDetailPage({
           />
 
           <InfoRow
-            label="Остаток"
+            label="Внутренний остаток"
             value={text(product.stock_quantity, "0")}
           />
 
-          <InfoRow
-            label="Показывать остаток"
-            value={yesNo(product.is_stock_visible)}
-          />
 
           <InfoRow
             label="Хит продаж"
@@ -506,6 +629,8 @@ export default async function AdminProductDetailPage({
             stockQuantity: Number(
               product.stock_quantity ?? 0
             ),
+            availability,
+            productType,
             status:
               status === "active"
               || status === "hidden"

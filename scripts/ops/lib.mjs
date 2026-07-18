@@ -225,6 +225,8 @@ export async function queryJson(databaseUrl, sql) {
 export async function monitoringSettings(databaseUrl) {
   const defaults = {
     alertsEnabled: true,
+    operationalAlertsEnabled: false,
+    alertRepeatHours: 24,
     dailySummaryEnabled: false,
     autoRestartEnabled: true,
     backupRetentionDays: 30,
@@ -238,6 +240,8 @@ export async function monitoringSettings(databaseUrl) {
       SELECT COALESCE(
         jsonb_build_object(
           'alertsEnabled', COALESCE((ss.settings #>> '{systemMonitoring,alertsEnabled}')::boolean, true),
+          'operationalAlertsEnabled', COALESCE((ss.settings #>> '{systemMonitoring,operationalAlertsEnabled}')::boolean, false),
+          'alertRepeatHours', COALESCE(NULLIF(ss.settings #>> '{systemMonitoring,alertRepeatHours}', '')::int, 24),
           'dailySummaryEnabled', COALESCE((ss.settings #>> '{systemMonitoring,dailySummaryEnabled}')::boolean, false),
           'autoRestartEnabled', COALESCE((ss.settings #>> '{systemMonitoring,autoRestartEnabled}')::boolean, true),
           'backupRetentionDays', COALESCE(NULLIF(ss.settings #>> '{systemMonitoring,backupRetentionDays}', '')::int, 30),
@@ -254,6 +258,8 @@ export async function monitoringSettings(databaseUrl) {
     `);
     return {
       alertsEnabled: parseBoolean(data.alertsEnabled, defaults.alertsEnabled),
+      operationalAlertsEnabled: parseBoolean(data.operationalAlertsEnabled, defaults.operationalAlertsEnabled),
+      alertRepeatHours: clampNumber(data.alertRepeatHours, 6, 72, defaults.alertRepeatHours),
       dailySummaryEnabled: parseBoolean(data.dailySummaryEnabled, defaults.dailySummaryEnabled),
       autoRestartEnabled: parseBoolean(data.autoRestartEnabled, defaults.autoRestartEnabled),
       backupRetentionDays: clampNumber(data.backupRetentionDays, 7, 90, defaults.backupRetentionDays),

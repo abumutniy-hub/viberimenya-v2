@@ -6,6 +6,8 @@ type ActionName = "diagnostics" | "backup" | "restore-check";
 
 type Settings = {
   alertsEnabled: boolean;
+  operationalAlertsEnabled: boolean;
+  alertRepeatHours: number;
   dailySummaryEnabled: boolean;
   autoRestartEnabled: boolean;
   backupRetentionDays: number;
@@ -83,6 +85,8 @@ export function MonitoringSettingsForm({ initial }: { initial: Settings }) {
     const form = new FormData(event.currentTarget);
     const body: Settings = {
       alertsEnabled: form.get("alertsEnabled") === "on",
+      operationalAlertsEnabled: form.get("operationalAlertsEnabled") === "on",
+      alertRepeatHours: Number(form.get("alertRepeatHours") || 24),
       dailySummaryEnabled: form.get("dailySummaryEnabled") === "on",
       autoRestartEnabled: form.get("autoRestartEnabled") === "on",
       backupRetentionDays: Number(form.get("backupRetentionDays") || 30),
@@ -128,6 +132,10 @@ export function MonitoringSettingsForm({ initial }: { initial: Settings }) {
           <span><strong>Telegram-предупреждения</strong><small>Владелец получает сообщение только при проблеме или изменении уровня опасности.</small></span>
         </label>
         <label>
+          <input type="checkbox" name="operationalAlertsEnabled" defaultChecked={initial.operationalAlertsEnabled} />
+          <span><strong>Напоминания по заказам</strong><small>Сообщать о старых тестовых заказах, проблемных заказах, фото доставки и ошибках уведомлений. До финальной очистки лучше оставить выключенным.</small></span>
+        </label>
+        <label>
           <input type="checkbox" name="autoRestartEnabled" defaultChecked={initial.autoRestartEnabled} />
           <span><strong>Автоматический перезапуск</strong><small>Если API, WEB или BOT остановился, монитор попробует поднять процесс через PM2.</small></span>
         </label>
@@ -138,6 +146,16 @@ export function MonitoringSettingsForm({ initial }: { initial: Settings }) {
       </div>
 
       <div className="admin-system-settings-grid">
+        <label>
+          <span>Повтор одинакового предупреждения</span>
+          <select name="alertRepeatHours" defaultValue={String(initial.alertRepeatHours)}>
+            <option value="6">раз в 6 часов</option>
+            <option value="12">раз в 12 часов</option>
+            <option value="24">раз в сутки</option>
+            <option value="48">раз в 2 суток</option>
+            <option value="72">раз в 3 суток</option>
+          </select>
+        </label>
         <label>
           <span>Хранить резервные копии</span>
           <select name="backupRetentionDays" defaultValue={String(initial.backupRetentionDays)}>

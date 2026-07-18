@@ -40,3 +40,6 @@ backups/*
 
 # TypeScript cache
 *.tsbuildinfo
+
+# local assistant runtime
+.claude/*.lock

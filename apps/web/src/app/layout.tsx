@@ -20,8 +20,16 @@ export async function generateMetadata(): Promise<Metadata> {
     },
     description,
     alternates: { canonical: "/" },
+    applicationName: settings.site.brandName || "Выбери Меня",
+    manifest: "/manifest.webmanifest",
     icons: {
-      icon: [{ url: "/icon.svg", type: "image/svg+xml" }],
+      icon: [
+        { url: "/icon.svg", type: "image/svg+xml" },
+        { url: "/brand-icon-192.png", sizes: "192x192", type: "image/png" },
+        { url: "/brand-icon-512.png", sizes: "512x512", type: "image/png" }
+      ],
+      shortcut: [{ url: "/icon.svg", type: "image/svg+xml" }],
+      apple: [{ url: "/apple-icon.png", sizes: "180x180", type: "image/png" }]
     },
     openGraph: {
       type: "website",
@@ -50,7 +58,7 @@ export async function generateMetadata(): Promise<Metadata> {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#fff9f4",
+  themeColor: "#fffaf6",
   colorScheme: "light",
 };
 

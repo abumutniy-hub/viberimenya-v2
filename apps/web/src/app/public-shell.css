@@ -810,3 +810,877 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Release 16I-A — persistent mobile navigation and menu sheet */
+@media (max-width: 760px) {
+  .vm-clean-mobile-nav {
+    z-index: 1200;
+  }
+
+  .vm-clean-mobile-nav > a,
+  .vm-clean-mobile-nav > button {
+    display: grid;
+    min-width: 0;
+    min-height: 54px;
+    place-items: center;
+    align-content: center;
+    gap: 3px;
+    padding: 5px 2px;
+    border: 0;
+    border-radius: 18px;
+    color: #88787b;
+    background: transparent;
+    font: inherit;
+    font-size: 9px;
+    font-weight: 800;
+    line-height: 1.1;
+    text-align: center;
+    text-decoration: none;
+    cursor: pointer;
+  }
+
+  .vm-clean-mobile-nav > a.is-active,
+  .vm-clean-mobile-nav > button.is-active {
+    color: var(--vm-clean-wine);
+    background: var(--vm-clean-rose);
+  }
+}
+
+.vm-mobile-menu-layer {
+  position: fixed;
+  z-index: 1300;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: stretch;
+  padding: 18px 12px calc(94px + env(safe-area-inset-bottom));
+  background: rgba(24, 17, 19, 0.56);
+  backdrop-filter: blur(9px);
+  animation: vm-mobile-menu-fade 160ms ease-out;
+}
+
+.vm-mobile-menu-sheet {
+  width: min(100%, 520px);
+  max-height: min(76dvh, 760px);
+  margin-inline: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 10px 16px calc(20px + env(safe-area-inset-bottom));
+  border: 1px solid rgba(106, 50, 70, 0.12);
+  border-radius: 28px;
+  color: #21191b;
+  background: rgba(255, 252, 249, 0.99);
+  box-shadow: 0 32px 100px rgba(31, 17, 22, 0.34);
+  overscroll-behavior: contain;
+  animation: vm-mobile-menu-up 190ms ease-out;
+}
+
+.vm-mobile-menu-handle {
+  width: 42px;
+  height: 4px;
+  margin: 1px auto 10px;
+  border-radius: 999px;
+  background: #d8c9c7;
+}
+
+.vm-mobile-menu-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 2px 2px 14px;
+}
+
+.vm-mobile-menu-header > div {
+  display: grid;
+  gap: 3px;
+}
+
+.vm-mobile-menu-header span {
+  color: var(--vm-clean-wine);
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.vm-mobile-menu-header strong {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 27px;
+  line-height: 1;
+}
+
+.vm-mobile-menu-close {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid rgba(83, 46, 57, 0.12);
+  border-radius: 50%;
+  color: #241a1d;
+  background: #fff;
+  font-size: 27px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.vm-mobile-account-card {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 14px;
+  padding: 18px;
+  border-radius: 22px;
+  background:
+    radial-gradient(circle at 92% 10%, rgba(154, 70, 97, 0.17), transparent 34%),
+    linear-gradient(145deg, #f9e9e9, #fff8f4);
+}
+
+.vm-mobile-account-main,
+.vm-mobile-account-guest,
+.vm-mobile-account-loading {
+  display: grid;
+  gap: 5px;
+}
+
+.vm-mobile-account-main span,
+.vm-mobile-account-guest span {
+  color: #8b3d59;
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.vm-mobile-account-main strong,
+.vm-mobile-account-guest strong {
+  font-size: 19px;
+  line-height: 1.2;
+}
+
+.vm-mobile-account-main small,
+.vm-mobile-account-loading,
+.vm-mobile-account-guest p {
+  margin: 0;
+  color: #75696a;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.vm-mobile-account-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.vm-mobile-account-stats > div {
+  display: grid;
+  gap: 2px;
+  padding: 11px 12px;
+  border: 1px solid rgba(118, 60, 79, 0.09);
+  border-radius: 15px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.vm-mobile-account-stats small {
+  color: #827576;
+  font-size: 10px;
+}
+
+.vm-mobile-account-stats strong {
+  font-size: 15px;
+}
+
+.vm-mobile-menu-primary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.vm-mobile-menu-primary a {
+  display: grid;
+  min-height: 86px;
+  align-content: space-between;
+  gap: 9px;
+  padding: 14px;
+  border: 1px solid rgba(81, 50, 57, 0.1);
+  border-radius: 18px;
+  color: #21191b;
+  background: #fff;
+  text-decoration: none;
+}
+
+.vm-mobile-menu-primary span {
+  font-size: 14px;
+  font-weight: 850;
+  line-height: 1.25;
+}
+
+.vm-mobile-menu-primary small {
+  color: #887b7c;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.vm-mobile-menu-contact-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.vm-mobile-menu-contact-row::-webkit-scrollbar {
+  display: none;
+}
+
+.vm-mobile-menu-contact-row a {
+  flex: 1 0 auto;
+  min-width: 98px;
+  padding: 12px 14px;
+  border-radius: 15px;
+  color: #fff;
+  background: #1b1718;
+  font-size: 11px;
+  font-weight: 800;
+  text-align: center;
+  text-decoration: none;
+}
+
+.vm-mobile-menu-secondary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px 16px;
+  padding: 17px 4px 4px;
+}
+
+.vm-mobile-menu-secondary a {
+  color: #776b6d;
+  font-size: 10px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.vm-mobile-menu-logout {
+  width: 100%;
+  margin-top: 14px;
+  padding: 13px 16px;
+  border: 1px solid rgba(121, 48, 70, 0.18);
+  border-radius: 15px;
+  color: #8b2f4d;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+@keyframes vm-mobile-menu-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes vm-mobile-menu-up {
+  from { opacity: 0; transform: translateY(18px) scale(0.99); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (min-width: 761px) {
+  .vm-mobile-menu-layer {
+    display: none;
+  }
+}
+
+@media (max-width: 380px) {
+  .vm-mobile-menu-primary {
+    grid-template-columns: 1fr;
+  }
+
+  .vm-mobile-menu-primary a {
+    min-height: 70px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vm-mobile-menu-layer,
+  .vm-mobile-menu-sheet {
+    animation: none;
+  }
+}
+/* Release 16I-A.1 — right-side mobile menu correction */
+.vm-mobile-menu-layer {
+  align-items: stretch;
+  justify-content: flex-end;
+  padding: 0;
+  background: rgba(24, 17, 19, 0.46);
+  backdrop-filter: blur(7px);
+  animation: vm-mobile-menu-fade 150ms ease-out;
+}
+
+.vm-mobile-menu-sheet {
+  width: min(88vw, 390px);
+  height: 100dvh;
+  max-height: none;
+  margin: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding:
+    calc(16px + env(safe-area-inset-top))
+    18px
+    calc(22px + env(safe-area-inset-bottom));
+  border: 0;
+  border-left: 1px solid rgba(106, 50, 70, 0.12);
+  border-radius: 28px 0 0 28px;
+  background: rgba(255, 252, 249, 0.995);
+  box-shadow: -26px 0 80px rgba(31, 17, 22, 0.28);
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  animation: vm-mobile-menu-from-right 190ms ease-out;
+}
+
+.vm-mobile-menu-handle {
+  display: none;
+}
+
+.vm-mobile-menu-header {
+  position: sticky;
+  z-index: 2;
+  top: calc(-16px - env(safe-area-inset-top));
+  margin:
+    calc(-16px - env(safe-area-inset-top))
+    -18px
+    16px;
+  padding:
+    calc(17px + env(safe-area-inset-top))
+    18px
+    15px;
+  border-bottom: 1px solid rgba(83, 46, 57, 0.08);
+  background: rgba(255, 252, 249, 0.96);
+  backdrop-filter: blur(14px);
+}
+
+.vm-mobile-menu-header strong {
+  font-size: 25px;
+}
+
+.vm-mobile-account-link {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 14px;
+  padding: 17px;
+  border: 1px solid rgba(118, 60, 79, 0.09);
+  border-radius: 21px;
+  color: #21191b;
+  background:
+    radial-gradient(circle at 92% 10%, rgba(154, 70, 97, 0.16), transparent 35%),
+    linear-gradient(145deg, #f9e9e9, #fff8f4);
+  text-decoration: none;
+}
+
+.vm-mobile-account-copy {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.vm-mobile-account-copy span {
+  color: #8b3d59;
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.vm-mobile-account-copy strong {
+  overflow: hidden;
+  font-size: 17px;
+  line-height: 1.22;
+  text-overflow: ellipsis;
+}
+
+.vm-mobile-account-copy small {
+  overflow: hidden;
+  color: #75696a;
+  font-size: 11px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+}
+
+.vm-mobile-account-link > b {
+  flex: 0 0 auto;
+  color: #8b3d59;
+  font-size: 22px;
+  font-weight: 500;
+}
+
+.vm-mobile-account-bonus {
+  display: grid;
+  flex: 0 0 auto;
+  gap: 2px;
+  padding: 9px 10px;
+  border: 1px solid rgba(118, 60, 79, 0.09);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
+  text-align: right;
+}
+
+.vm-mobile-account-bonus small {
+  color: #827576;
+  font-size: 9px;
+}
+
+.vm-mobile-account-bonus strong {
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.vm-mobile-account-card,
+.vm-mobile-account-stats {
+  display: none;
+}
+
+.vm-mobile-menu-primary {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.vm-mobile-menu-primary a {
+  display: flex;
+  min-height: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 15px 16px;
+  border: 1px solid rgba(81, 50, 57, 0.1);
+  border-radius: 17px;
+  color: #21191b;
+  background: #fff;
+  text-decoration: none;
+}
+
+.vm-mobile-menu-primary a > span {
+  display: grid;
+  gap: 4px;
+}
+
+.vm-mobile-menu-primary strong {
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.vm-mobile-menu-primary small {
+  color: #887b7c;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.vm-mobile-menu-primary a > b {
+  color: #8b3d59;
+  font-size: 20px;
+  font-weight: 500;
+}
+
+.vm-mobile-menu-about,
+.vm-mobile-menu-contacts {
+  display: grid;
+  gap: 9px;
+  margin-top: 17px;
+  padding-top: 17px;
+  border-top: 1px solid rgba(83, 46, 57, 0.09);
+}
+
+.vm-mobile-menu-about > span,
+.vm-mobile-menu-contacts > span {
+  color: #8b3d59;
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.vm-mobile-menu-about p {
+  margin: 0;
+  color: #5f5557;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.vm-mobile-menu-about dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.vm-mobile-menu-about dl > div {
+  display: grid;
+  gap: 2px;
+}
+
+.vm-mobile-menu-about dt {
+  color: #8b7d7f;
+  font-size: 9px;
+}
+
+.vm-mobile-menu-about dd {
+  margin: 0;
+  color: #2a2224;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.vm-mobile-menu-contact-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+  gap: 7px;
+  margin-top: 0;
+  overflow: visible;
+}
+
+.vm-mobile-menu-contact-row a {
+  min-width: 0;
+  padding: 11px 10px;
+  border-radius: 14px;
+  font-size: 10px;
+}
+
+.vm-mobile-menu-secondary {
+  gap: 9px 14px;
+  padding: 18px 1px 3px;
+}
+
+.vm-mobile-menu-secondary a {
+  font-size: 9px;
+}
+
+.vm-mobile-menu-logout {
+  margin-top: 16px;
+}
+
+@keyframes vm-mobile-menu-from-right {
+  from {
+    opacity: 0.8;
+    transform: translateX(100%);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@media (max-width: 380px) {
+  .vm-mobile-menu-sheet {
+    width: 92vw;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vm-mobile-menu-sheet {
+    animation: none;
+  }
+}
+/* Release 16I-B.2 — mobile side menu information hierarchy */
+.vm-mobile-menu-sheet {
+  display: flex;
+  flex-direction: column;
+}
+
+.vm-mobile-menu-main {
+  display: grid;
+  gap: 13px;
+}
+
+.vm-mobile-menu-quick-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.vm-mobile-menu-quick-actions a {
+  position: relative;
+  display: grid;
+  min-height: 108px;
+  align-content: space-between;
+  gap: 6px;
+  padding: 15px;
+  border: 1px solid rgba(81, 50, 57, 0.1);
+  border-radius: 18px;
+  color: #21191b;
+  background: #fff;
+  box-shadow: 0 10px 26px rgba(74, 45, 44, 0.045);
+  text-decoration: none;
+}
+
+.vm-mobile-menu-quick-actions a:nth-child(2) {
+  background:
+    radial-gradient(circle at 92% 8%, rgba(154, 70, 97, 0.14), transparent 38%),
+    #fff8f5;
+}
+
+.vm-mobile-menu-quick-actions span {
+  color: #8b3d59;
+  font-size: 9px;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.vm-mobile-menu-quick-actions strong {
+  max-width: 120px;
+  font-size: 14px;
+  line-height: 1.3;
+}
+
+.vm-mobile-menu-quick-actions b {
+  position: absolute;
+  right: 14px;
+  bottom: 13px;
+  color: #8b3d59;
+  font-size: 18px;
+  font-weight: 500;
+}
+
+.vm-mobile-menu-primary {
+  display: none;
+}
+
+.vm-mobile-menu-bottom {
+  display: grid;
+  gap: 0;
+  margin-top: auto;
+  padding-top: 28px;
+}
+
+.vm-mobile-menu-about {
+  display: block;
+  margin: 0;
+  padding: 14px 0 0;
+  border-top: 1px solid rgba(83, 46, 57, 0.09);
+}
+
+.vm-mobile-menu-about > summary {
+  position: relative;
+  padding: 0 25px 13px 0;
+  color: #8b3d59;
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0.11em;
+  list-style: none;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.vm-mobile-menu-about > summary::-webkit-details-marker {
+  display: none;
+}
+
+.vm-mobile-menu-about > summary::after {
+  position: absolute;
+  top: -2px;
+  right: 2px;
+  content: "+";
+  color: #8b3d59;
+  font-size: 18px;
+  font-weight: 500;
+}
+
+.vm-mobile-menu-about[open] > summary::after {
+  content: "−";
+}
+
+.vm-mobile-menu-about > div {
+  display: grid;
+  gap: 9px;
+  padding-bottom: 2px;
+}
+
+.vm-mobile-menu-contacts {
+  margin-top: 15px;
+  padding-top: 15px;
+}
+
+.vm-mobile-menu-secondary {
+  padding-top: 17px;
+}
+
+@media (max-width: 350px) {
+  .vm-mobile-menu-quick-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .vm-mobile-menu-quick-actions a {
+    min-height: 82px;
+  }
+}
+/* Release 16I-B.2 — mobile side menu information hierarchy: end */
+
+/* Release 16I-C — floral brand identity */
+.vm-clean-brand { align-items: center; flex-direction: row; gap: 11px; }
+.vm-brand-logo { display: inline-flex; min-width: 0; align-items: center; gap: 11px; color: #21191b; }
+.vm-brand-logo-mark { display: grid; width: 46px; height: 46px; flex: 0 0 auto; place-items: center; color: #c6a45f; }
+.vm-brand-logo-mark svg { display: block; width: 100%; height: 100%; }
+.vm-brand-logo-copy { display: grid; min-width: 0; gap: 4px; }
+.vm-brand-logo-name { display: block; white-space: nowrap; font-family: var(--font-public-display), Georgia, "Times New Roman", serif; font-size: 30px; font-weight: 600; line-height: .9; letter-spacing: -.046em; }
+.vm-brand-logo-subtitle { display: block; margin: 0; color: #6f6265; font-size: 7px; font-weight: 760; line-height: 1; letter-spacing: .28em; text-transform: uppercase; white-space: nowrap; }
+.vm-brand-logo.is-compact .vm-brand-logo-mark { width: 42px; height: 42px; }
+.vm-brand-logo.is-compact .vm-brand-logo-name { font-size: 26px; }
+.vm-brand-logo.is-compact .vm-brand-logo-subtitle { font-size: 6.5px; }
+.vm-clean-brand-line, .vm-clean-brand-subtitle { display: none; }
+@media (max-width: 820px) {
+  .vm-clean-header-inner { min-height: 72px; }
+  .vm-clean-brand, .vm-brand-logo { gap: 8px; }
+  .vm-brand-logo-mark { width: 38px; height: 38px; }
+  .vm-brand-logo-name { font-size: 24px; }
+  .vm-brand-logo-subtitle { max-width: 150px; overflow: hidden; font-size: 6px; letter-spacing: .22em; text-overflow: ellipsis; }
+  .vm-clean-footer-brand .vm-brand-logo-mark { width: 42px; height: 42px; }
+  .vm-clean-footer-brand .vm-brand-logo-name { font-size: 26px; }
+}
+@media (max-width: 380px) {
+  .vm-brand-logo-name { font-size: 22px; }
+  .vm-brand-logo-subtitle { display: none; }
+}
+/* Release 16I-C — floral brand identity: end */
+
+/* Release 16J-A.3 — single animated header logo */
+.vm-clean-header .vm-clean-brand.is-home-brand-checking .vm-brand-logo {
+  opacity: 0;
+}
+
+.vm-clean-header .vm-clean-brand.is-home-brand-animate .vm-brand-logo-mark {
+  animation:
+    vm-header-brand-mark-enter 720ms
+    cubic-bezier(.2, .8, .2, 1)
+    both;
+}
+
+.vm-clean-header
+  .vm-clean-brand.is-home-brand-animate
+  .vm-brand-logo-mark circle:first-of-type {
+  stroke-dasharray: 280;
+  stroke-dashoffset: 280;
+  animation:
+    vm-header-brand-ring-draw 860ms
+    ease-out
+    70ms
+    forwards;
+}
+
+.vm-clean-header
+  .vm-clean-brand.is-home-brand-animate
+  .vm-brand-logo-mark ellipse {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation:
+    vm-header-brand-petal-open 520ms
+    cubic-bezier(.2, .9, .25, 1.2)
+    both;
+}
+
+.vm-clean-header
+  .vm-clean-brand.is-home-brand-animate
+  .vm-brand-logo-mark ellipse:nth-of-type(1) {
+  animation-delay: 130ms;
+}
+
+.vm-clean-header
+  .vm-clean-brand.is-home-brand-animate
+  .vm-brand-logo-mark ellipse:nth-of-type(2) {
+  animation-delay: 175ms;
+}
+
+.vm-clean-header
+  .vm-clean-brand.is-home-brand-animate
+  .vm-brand-logo-mark ellipse:nth-of-type(3) {
+  animation-delay: 220ms;
+}
+
+.vm-clean-header
+  .vm-clean-brand.is-home-brand-animate
+  .vm-brand-logo-mark ellipse:nth-of-type(4) {
+  animation-delay: 265ms;
+}
+
+.vm-clean-header
+  .vm-clean-brand.is-home-brand-animate
+  .vm-brand-logo-mark ellipse:nth-of-type(5) {
+  animation-delay: 310ms;
+}
+
+.vm-clean-header
+  .vm-clean-brand.is-home-brand-animate
+  .vm-brand-logo-copy {
+  animation:
+    vm-header-brand-copy-enter 540ms
+    ease-out
+    260ms
+    both;
+}
+
+@keyframes vm-header-brand-ring-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes vm-header-brand-mark-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(.9);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes vm-header-brand-petal-open {
+  from {
+    opacity: 0;
+    transform: scale(.22) rotate(-8deg);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1) rotate(0);
+  }
+}
+
+@keyframes vm-header-brand-copy-enter {
+  from {
+    opacity: 0;
+    transform: translateX(-5px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vm-clean-header
+    .vm-clean-brand.is-home-brand-checking
+    .vm-brand-logo {
+    opacity: 1;
+  }
+
+  .vm-clean-header
+    .vm-clean-brand.is-home-brand-animate
+    .vm-brand-logo-mark,
+  .vm-clean-header
+    .vm-clean-brand.is-home-brand-animate
+    .vm-brand-logo-mark circle:first-of-type,
+  .vm-clean-header
+    .vm-clean-brand.is-home-brand-animate
+    .vm-brand-logo-mark ellipse,
+  .vm-clean-header
+    .vm-clean-brand.is-home-brand-animate
+    .vm-brand-logo-copy {
+    animation: none;
+  }
+}
+/* Release 16J-A.3 — single animated header logo: end */

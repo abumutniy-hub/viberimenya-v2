@@ -4,6 +4,7 @@ export type ShellIconName =
   | "cart"
   | "orders"
   | "profile"
+  | "menu"
   | "search";
 
 type ShellIconProps = {
@@ -74,6 +75,16 @@ export function ShellIcon({
       <svg {...common}>
         <circle cx="12" cy="8" r="3.2" />
         <path d="M5.5 20c.7-4 3-6 6.5-6s5.8 2 6.5 6" />
+      </svg>
+    );
+  }
+
+  if (name === "menu") {
+    return (
+      <svg {...common}>
+        <path d="M4 7h16" />
+        <path d="M4 12h16" />
+        <path d="M4 17h16" />
       </svg>
     );
   }

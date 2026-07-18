@@ -243,8 +243,24 @@ try {
   ));
 
   const overall = worstStatus(checks);
+  const problems = checks.filter((item) => item.status !== "ok");
+  const notificationProblems = problems.filter((item) => (
+    item.key !== "operations" || settings.operationalAlertsEnabled
+  ));
+  const notificationOverall = notificationProblems.length
+    ? worstStatus(notificationProblems)
+    : "ok";
+  const notificationFingerprint = notificationProblems
+    .map((item) => `${item.key}:${item.status}`)
+    .sort()
+    .join("|");
+  const eventFingerprint = problems
+    .map((item) => `${item.key}:${item.status}`)
+    .sort()
+    .join("|");
+
   const status = {
-    version: 1,
+    version: 2,
     generatedAt,
     overall,
     manual,
@@ -255,40 +271,66 @@ try {
     disk,
     ssl,
     lastBackup,
+    lastNotificationAt: previous?.lastNotificationAt || null,
+    lastNotificationFingerprint: previous?.lastNotificationFingerprint || "",
+    lastNotifiedOverall: previous?.lastNotifiedOverall || "ok",
+    lastEventAt: previous?.lastEventAt || null,
+    lastEventFingerprint: previous?.lastEventFingerprint || "",
     checks,
   };
-  await writeJsonAtomic(STATUS_PATH, status);
 
-  const problems = checks.filter((item) => item.status !== "ok");
-  if (problems.length) {
+  const previousEventAt = previous?.lastEventAt
+    ? new Date(previous.lastEventAt).getTime()
+    : 0;
+  const shouldAppendEvent = problems.length > 0 && (
+    previous?.lastEventFingerprint !== eventFingerprint
+    || Date.now() - previousEventAt >= 6 * 60 * 60 * 1000
+  );
+
+  if (shouldAppendEvent) {
     await appendEvent({
       type: "health.warning",
       severity: overall,
       message: problems.map((item) => `${item.label}: ${item.message}`).join("; "),
     });
+    status.lastEventAt = new Date().toISOString();
+    status.lastEventFingerprint = eventFingerprint;
   }
 
-  const previousOverall = previous?.overall || "unknown";
-  const previousNotificationAt = previous?.lastNotificationAt ? new Date(previous.lastNotificationAt).getTime() : 0;
+  const previousNotificationAt = previous?.lastNotificationAt
+    ? new Date(previous.lastNotificationAt).getTime()
+    : 0;
+  const repeatMilliseconds = settings.alertRepeatHours * 60 * 60 * 1000;
+  const notificationChanged = previous?.lastNotificationFingerprint !== notificationFingerprint;
+  const severityIncreased = (
+    notificationOverall === "critical"
+    && previous?.lastNotifiedOverall !== "critical"
+  );
+  const repeatExpired = Date.now() - previousNotificationAt >= repeatMilliseconds;
   const shouldNotify = settings.alertsEnabled
-    && overall !== "ok"
-    && (previousOverall !== overall || Date.now() - previousNotificationAt > 6 * 60 * 60 * 1000);
+    && !manual
+    && notificationProblems.length > 0
+    && (notificationChanged || severityIncreased || repeatExpired);
 
   if (shouldNotify) {
-    const icon = overall === "critical" ? "🚨" : "⚠️";
-    const lines = problems.slice(0, 8).map((item) => `• ${item.label}: ${item.message}`);
+    const icon = notificationOverall === "critical" ? "🚨" : "⚠️";
+    const lines = notificationProblems.slice(0, 8).map((item) => `• ${item.label}: ${item.message}`);
     const sent = await sendOwnerTelegram(envValues, databaseUrl, [
       `${icon} ВЫБЕРИ МЕНЯ — проверка системы`,
-      `Статус: ${overall === "critical" ? "критично" : "требует внимания"}`,
+      `Статус: ${notificationOverall === "critical" ? "критично" : "требует внимания"}`,
       ...lines,
+      `Повтор одинакового сообщения: не чаще одного раза в ${settings.alertRepeatHours} ч.`,
       `Время: ${new Date(generatedAt).toLocaleString("ru-RU", { timeZone: "Europe/Moscow" })}`,
     ].join("\n"));
+
     if (sent.sent) {
       status.lastNotificationAt = new Date().toISOString();
-      await writeJsonAtomic(STATUS_PATH, status);
+      status.lastNotificationFingerprint = notificationFingerprint;
+      status.lastNotifiedOverall = notificationOverall;
     }
   }
 
+  await writeJsonAtomic(STATUS_PATH, status);
   console.log(JSON.stringify(status));
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);

@@ -1,21 +1,14 @@
 import styles from "./home-redesign.module.css";
 
-import {
-  ProcessCarousel
-} from "./components/process-carousel";
-
+import { ProcessCarousel } from "./components/process-carousel";
 import {
   AddToCartButton,
   FavoriteButton
 } from "./components/add-to-cart-button";
+import { ProductTileImage } from "./components/product-tile-image";
+import { HomeFeaturedCarousel } from "./components/home-featured-carousel";
 
-import {
-  ProductTileImage
-} from "./components/product-tile-image";
-
-
-export const dynamic =
-  "force-dynamic";
+export const dynamic = "force-dynamic";
 
 type ShopSettings = {
   phone?: string | null;
@@ -43,7 +36,8 @@ type HomeProduct = {
   description?: string | null;
   price: number;
   oldPrice?: number | null;
-  availability: "available" | "unavailable";
+  availability: "available" | "preorder" | "unavailable";
+  productType?: string | null;
   isFeatured?: boolean;
   primaryImage?: {
     url: string;
@@ -66,8 +60,15 @@ type HomeResponse = {
         text: string;
       }>;
     };
-    occasions: string[];
     categories: Category[];
+    quickCollections?: {
+      under5000?: number;
+      between5000And10000?: number;
+      over10000?: number;
+      featured?: number;
+      sale?: number;
+      newest?: number;
+    };
     featuredProducts: HomeProduct[];
   };
 };
@@ -104,93 +105,107 @@ type FeatureIconName =
   | "time"
   | "support";
 
-const fallbackCategories:
-  Category[] = [
-    {
-      slug: "bukety",
-      name: "Букеты",
-      description:
-        "Готовые композиции для важных событий и тёплых слов."
-    },
-    {
-      slug: "tsvety-po-shtuchno",
-      name: "Цветы поштучно",
-      description:
-        "Соберите индивидуальный букет из любимых цветов."
-    },
-    {
-      slug: "korziny",
-      name: "Корзины",
-      description:
-        "Объёмные цветочные композиции для особенных случаев."
-    },
-    {
-      slug: "podarki",
-      name: "Подарки",
-      description:
-        "Красивые дополнения к букету и приятные детали."
-    },
-    {
-      slug: "otkrytki",
-      name: "Открытки",
-      description:
-        "Добавьте к заказу личное пожелание."
-    },
-    {
-      slug: "aktsii",
-      name: "Акции",
-      description:
-        "Сезонные подборки и специальные предложения."
-    }
-  ];
+const fallbackCategories: Category[] = [
+  {
+    slug: "bukety",
+    name: "Букеты",
+    description: "Готовые композиции для важных событий и тёплых слов."
+  },
+  {
+    slug: "avtorskie-bukety",
+    name: "Авторские букеты",
+    description: "Уникальные композиции, собранные флористами вручную."
+  },
+  {
+    slug: "rozy",
+    name: "Розы",
+    description: "Классические и необычные букеты из роз."
+  },
+  {
+    slug: "bukety-v-korobkakh",
+    name: "Букеты в коробках",
+    description: "Композиции в декоративных коробках и формах."
+  },
+  {
+    slug: "podarki",
+    name: "Подарки",
+    description: "Дополнения к букету и приятные детали."
+  },
+  {
+    slug: "vozdushnye-shary",
+    name: "Воздушные шары",
+    description: "Яркое дополнение к поздравлению и празднику."
+  }
+];
 
-const heroImageUrl =
+const fallbackHeroImage =
   "/uploads/products/"
   + "product-6ba05e24-075c-4217-b448-eb96aa0c49b3-"
   + "728ad608-1e78-43e8-b0e0-ebb0ec0813dc.webp";
 
-async function fetchJson<T>(
-  path: string
-): Promise<T | null> {
-  const baseUrl =
-    process.env.API_INTERNAL_URL
-    ?? "http://127.0.0.1:4001";
+const budgetLinks = [
+  {
+    key: "under5000",
+    label: "До 5 000 ₽",
+    text: "Небольшие букеты и приятные знаки внимания.",
+    href: "/catalog?availability=available&maxPrice=5000&sort=recommended"
+  },
+  {
+    key: "between5000And10000",
+    label: "5 000–10 000 ₽",
+    text: "Популярный диапазон для дня рождения и свидания.",
+    href: "/catalog?availability=available&minPrice=5000&maxPrice=10000&sort=recommended"
+  },
+  {
+    key: "over10000",
+    label: "От 10 000 ₽",
+    text: "Объёмные и премиальные композиции.",
+    href: "/catalog?availability=available&minPrice=10000&sort=recommended"
+  },
+  {
+    key: "featured",
+    label: "Хиты",
+    text: "Букеты, которые покупатели выбирают чаще всего.",
+    href: "/catalog?availability=available&featured=true&sort=recommended"
+  },
+  {
+    key: "sale",
+    label: "Со скидкой",
+    text: "Товары с действующей выгодной ценой.",
+    href: "/catalog?availability=available&sale=true&sort=recommended"
+  },
+  {
+    key: "newest",
+    label: "Новинки",
+    text: "Свежие позиции и новые сезонные композиции.",
+    href: "/catalog?availability=available&sort=newest"
+  }
+] as const;
+
+async function fetchJson<T>(path: string): Promise<T | null> {
+  const baseUrl = process.env.API_INTERNAL_URL ?? "http://127.0.0.1:4001";
 
   try {
-    const response =
-      await fetch(
-        `${baseUrl}${path}`,
-        {
-          cache: "no-store"
-        }
-      );
+    const response = await fetch(`${baseUrl}${path}`, { cache: "no-store" });
 
     if (!response.ok) {
       return null;
     }
 
-    return (
-      await response.json()
-    ) as T;
+    return (await response.json()) as T;
   } catch {
     return null;
   }
 }
 
-function FeatureIcon({
-  name
-}: {
-  name: FeatureIconName;
-}) {
+function FeatureIcon({ name }: { name: FeatureIconName }) {
   const common = {
     viewBox: "0 0 24 24",
     fill: "none",
     stroke: "currentColor",
     strokeWidth: 1.7,
-    strokeLinecap:
-      "round" as const,
-    strokeLinejoin:
-      "round" as const,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
     "aria-hidden": true
   };
 
@@ -264,252 +279,130 @@ function FeatureIcon({
   );
 }
 
-function formatMoney(
-  value: number
-) {
-  return value.toLocaleString(
-    "ru-RU"
-  );
+function formatMoney(value: number) {
+  return value.toLocaleString("ru-RU");
 }
 
-function hasOldPrice(
-  product: HomeProduct
-) {
+function hasOldPrice(product: HomeProduct) {
   return (
     product.oldPrice !== null
     && product.oldPrice !== undefined
-    && Number(product.oldPrice)
-      > Number(product.price)
+    && Number(product.oldPrice) > Number(product.price)
   );
 }
 
+function categoryCountLabel(count: number | undefined) {
+  const value = Number(count ?? 0);
+
+  if (value <= 0) {
+    return "Смотреть подборку";
+  }
+
+  return `${value.toLocaleString("ru-RU")} ${value === 1 ? "товар" : "товаров"}`;
+}
+
 export default async function HomePage() {
-  const [
-    home,
-    delivery
-  ] = await Promise.all([
-    fetchJson<HomeResponse>(
-      "/api/public/home"
-    ),
-    fetchJson<DeliveryResponse>(
-      "/api/public/delivery"
-    )
+  const [home, delivery] = await Promise.all([
+    fetchJson<HomeResponse>("/api/public/home"),
+    fetchJson<DeliveryResponse>("/api/public/delivery")
   ]);
 
-  const title =
-    home?.sections.hero.title
-    ?? "Цветы, которые говорят за вас";
+  const title = home?.sections.hero.title ?? "Цветы, которые говорят за вас";
+  const subtitle = home?.sections.hero.subtitle
+    ?? "Собираем букеты вручную, показываем готовую работу и бережно доставляем получателю.";
+  const eyebrow = home?.sections.hero.eyebrow ?? "Цветочная мастерская";
+  const primaryCtaLabel = home?.sections.hero.primaryCtaLabel ?? "Выбрать букет";
 
-  const subtitle =
-    home?.sections.hero.subtitle
-    ?? (
-      "Собираем стильные букеты, "
-      + "отправляем фото перед доставкой "
-      + "и бережно доставляем получателю."
-    );
+  const benefits = home?.sections.hero.benefits?.length === 3
+    ? home.sections.hero.benefits
+    : [
+        {
+          title: "Свежая сборка",
+          text: "Каждую композицию собираем к выбранной дате."
+        },
+        {
+          title: "Фото перед доставкой",
+          text: "Покажем готовый букет до передачи курьеру."
+        },
+        {
+          title: "Бережная доставка",
+          text: "Надёжно упакуем и привезём в выбранный интервал."
+        }
+      ];
 
-  const eyebrow =
-    home?.sections.hero.eyebrow
-    ?? "Цветочная мастерская";
-
-  const primaryCtaLabel =
-    home?.sections.hero.primaryCtaLabel
-    ?? "Выбрать букет";
-
-  const secondaryCtaLabel =
-    home?.sections.hero.secondaryCtaLabel
-    ?? "Условия доставки";
-
-  const benefits =
-    home?.sections.hero.benefits
-    && home.sections.hero.benefits.length === 3
-      ? home.sections.hero.benefits
-      : [
-          {
-            title: "Стильные букеты",
-            text:
-              "Авторские композиции из свежих цветов на любой случай."
-          },
-          {
-            title: "Фото перед доставкой",
-            text:
-              "Покажем готовый букет, чтобы вы были уверены в результате."
-          },
-          {
-            title: "Бережная доставка",
-            text:
-              "Аккуратно упакуем и доставим в выбранный интервал."
-          }
-        ];
-
-  const categories =
-    home?.sections.categories
-    && home.sections.categories.length > 0
-      ? home.sections.categories
-      : fallbackCategories;
-
-  const occasions =
-    home?.sections.occasions
-    && home.sections.occasions.length > 0
-      ? home.sections.occasions.slice(
-          0,
-          8
-        )
-      : [
-          "Любимой",
-          "Маме",
-          "День рождения",
-          "Извиниться",
-          "Без повода",
-          "Свадьба",
-          "Выписка",
-          "Учителю"
-        ];
-
-  const featuredProducts =
-    home?.sections.featuredProducts
-    ?? [];
-
-  const heroProduct =
-    featuredProducts[0]
-    ?? null;
-
-  const heroProductHref =
-    heroProduct
-      ? `/product/${heroProduct.slug}`
-      : "/catalog";
-
-  const heroProductName =
-    heroProduct?.name
-    ?? "Нежные розы";
-
-  const heroProductImage =
-    home?.sections.hero.imageUrl
+  const categories = home
+    ? home.sections.categories
+    : fallbackCategories;
+  const featuredProducts = home?.sections.featuredProducts ?? [];
+  const visibleCategories = categories.slice(0, 5);
+  const quickCollections = home?.sections.quickCollections ?? {};
+  const visibleBudgetLinks = budgetLinks.filter((item) => (
+    Number(quickCollections[item.key] ?? 0) > 0
+  ));
+  const showBudgetSelector = visibleBudgetLinks.length >= 2;
+  const showFeaturedSection = featuredProducts.length >= 2;
+  const heroProduct = featuredProducts[0] ?? null;
+  const heroProductHref = heroProduct ? `/product/${heroProduct.slug}` : "/catalog";
+  const heroProductName = heroProduct?.name ?? "Выбор флориста";
+  const heroProductImage = home?.sections.hero.imageUrl
     || heroProduct?.primaryImage?.url
-    || heroImageUrl;
-
-  const zones =
-    delivery?.zones ?? [];
-
-  const intervals =
-    delivery?.intervals ?? [];
-
-  const firstZone =
-    zones[0];
-
-  const firstInterval =
-    intervals[0];
+    || fallbackHeroImage;
+  const zones = delivery?.zones ?? [];
+  const intervals = delivery?.intervals ?? [];
+  const firstZone = zones[0];
+  const firstInterval = intervals[0];
 
   return (
     <div className={styles.page}>
       <section className={styles.hero}>
         <div className={styles.heroCopy}>
-          <span className={styles.eyebrow}>
-            {eyebrow}
-          </span>
-
+          <span className={styles.eyebrow}>{eyebrow}</span>
           <h1>{title}</h1>
-
-          <p>
-            {subtitle}
-          </p>
+          <p>{subtitle}</p>
 
           <div className={styles.heroActions}>
-            <a
-              href="/catalog"
-              className={styles.primaryButton}
-            >
+            <a href="/catalog?availability=available" className={styles.primaryButton}>
               {primaryCtaLabel}
             </a>
-
-            <a
-              href="#delivery"
-              className={styles.secondaryButton}
-            >
-              {secondaryCtaLabel}
+            <a href="#help" className={styles.secondaryButton}>
+              Помощь с выбором
             </a>
           </div>
 
-          <div
-            className={styles.heroFacts}
-            aria-label="Условия заказа"
-          >
+          <div className={styles.heroFacts} aria-label="Условия заказа">
             <span>
               <FeatureIcon name="camera" />
               Фото перед доставкой
             </span>
-
             <span>
               <FeatureIcon name="time" />
-
-              {firstInterval
-                ? (
-                  `Ближайший интервал: ${
-                    firstInterval.name
-                  }`
-                )
-                : "Удобные интервалы"}
+              {firstInterval ? `Ближайший интервал: ${firstInterval.name}` : "Удобные интервалы"}
             </span>
-
             <span>
               <FeatureIcon name="delivery" />
-
-              {firstZone
-                ? (
-                  `Доставка от ${
-                    formatMoney(
-                      firstZone.price
-                    )
-                  } ₽`
-                )
-                : "Доставка по городу"}
+              {firstZone ? `Доставка от ${formatMoney(firstZone.price)} ₽` : "Доставка по городу"}
             </span>
           </div>
         </div>
 
-        <a
-          href={heroProductHref}
-          className={styles.heroVisual}
-          aria-label={
-            `Посмотреть ${heroProductName}`
-          }
-        >
-          <ProductTileImage
-            src={heroProductImage}
-            alt={heroProductName}
-            priority
-          />
-
+        <a href={heroProductHref} className={styles.heroVisual} aria-label={`Посмотреть ${heroProductName}`}>
+          <ProductTileImage src={heroProductImage} alt={heroProductName} priority />
           <span className={styles.heroOverlay}>
-            <strong>
-              {heroProductName}
-            </strong>
-
-            <em>
-              Смотреть
-            </em>
+            <span>
+              <small>Выбор флориста</small>
+              <strong>{heroProductName}</strong>
+            </span>
+            <em>Смотреть</em>
           </span>
         </a>
       </section>
 
-      <section
-        className={styles.primaryBenefits}
-        aria-label="Преимущества магазина"
-      >
+      <section className={styles.trustGrid} aria-label="Преимущества магазина">
         {benefits.map((benefit, index) => (
           <article key={`${benefit.title}-${index}`}>
-            <span className={styles.benefitIcon}>
-              <FeatureIcon
-                name={
-                  index === 0
-                    ? "flower"
-                    : index === 1
-                      ? "camera"
-                      : "delivery"
-                }
-              />
+            <span className={styles.trustIcon}>
+              <FeatureIcon name={index === 0 ? "fresh" : index === 1 ? "camera" : "delivery"} />
             </span>
-
             <div>
               <strong>{benefit.title}</strong>
               <p>{benefit.text}</p>
@@ -518,426 +411,193 @@ export default async function HomePage() {
         ))}
       </section>
 
-      <section
-        className={styles.serviceStrip}
-        aria-label="Наш сервис"
-      >
-        <article>
-          <FeatureIcon name="fresh" />
-
-          <div>
-            <strong>
-              Свежие цветы
-            </strong>
-
-            <span>
-              Бережно отбираем
-              каждую композицию
-            </span>
+      <section className={styles.section} id="catalog">
+        <div className={styles.sectionTopline}>
+          <div className={styles.sectionHeading}>
+            <span>Каталог</span>
+            <h2>Выберите раздел</h2>
+            <p>Показываем только разделы, в которых есть доступные товары.</p>
           </div>
-        </article>
-
-        <article>
-          <FeatureIcon name="personal" />
-
-          <div>
-            <strong>
-              Индивидуальный подход
-            </strong>
-
-            <span>
-              Учитываем пожелания
-              и бюджет
-            </span>
-          </div>
-        </article>
-
-        <article>
-          <FeatureIcon name="time" />
-
-          <div>
-            <strong>
-              Удобное время
-            </strong>
-
-            <span>
-              Выбирайте подходящий
-              интервал доставки
-            </span>
-          </div>
-        </article>
-
-        <article>
-          <FeatureIcon name="support" />
-
-          <div>
-            <strong>
-              Всегда на связи
-            </strong>
-
-            <span>
-              Поможем с выбором
-              и заказом
-            </span>
-          </div>
-        </article>
-      </section>
-
-      <section className={styles.section}>
-        <div className={styles.sectionHeading}>
-          <span>
-            Быстрый выбор
-          </span>
-
-          <h2>
-            По поводу
-          </h2>
+          <a href="/catalog?availability=available" className={styles.textLink}>
+            Весь каталог →
+          </a>
         </div>
 
-        <div className={styles.occasionGrid}>
-          {occasions.map(
-            occasion => (
-              <a
-                key={occasion}
-                href={
-                  "/catalog?occasion="
-                  + encodeURIComponent(
-                    occasion
-                  )
-                }
-              >
-                {occasion}
-              </a>
-            )
-          )}
-        </div>
-      </section>
-
-      <section
-        className={styles.section}
-        id="catalog"
-      >
-        <div className={styles.sectionHeading}>
-          <span>
-            Каталог
-          </span>
-
-          <h2>
-            Разделы
-          </h2>
-
-          <p>
-            Букеты, цветы поштучно,
-            подарки и сезонные подборки.
-          </p>
-        </div>
-
-        <div className={styles.categoryGrid}>
-          {categories
-            .slice(0, 6)
-            .map(
-              (
-                category,
-                index
-              ) => (
-                <a
-                  key={category.slug}
-                  href={
-                    "/catalog?category="
-                    + category.slug
-                  }
-                  className={
-                    index === 0
-                      ? styles.categoryPrimary
-                      : undefined
-                  }
-                >
-                  <span>
-                    {String(
-                      index + 1
-                    ).padStart(
-                      2,
-                      "0"
-                    )}
-                  </span>
-
-                  <strong>
-                    {category.name}
-                  </strong>
-
-                  <p>
-                    {category.description
-                      ?? (
-                        "Подборка цветов "
-                        + "и композиций"
-                      )}
-                  </p>
-
-                  <em>
-                    Смотреть
-                  </em>
-                </a>
-              )
-            )}
-        </div>
-      </section>
-
-      {featuredProducts.length > 0 ? (
-        <section
-          className={`${styles.section} ${styles.featuredSection}`}
-          id="popular"
+        <div
+          className={`${styles.categoryGrid} ${
+            visibleCategories.length === 1
+              ? styles.categoryGridSingle
+              : visibleCategories.length === 2
+                ? styles.categoryGridDouble
+                : ""
+          }`}
         >
-          <div className={styles.featuredHeadingRow}>
-            <div className={styles.sectionHeading}>
-              <span>
-                Выбор покупателей
-              </span>
-
-              <h2>
-                Популярные букеты
-              </h2>
-
-              <p>
-                Готовые композиции,
-                которые можно добавить
-                в корзину сразу с главной.
-              </p>
-            </div>
-
+          {visibleCategories.map((category, index) => (
             <a
-              href="/catalog?sort=recommended"
-              className={styles.featuredAllLink}
+              key={category.slug}
+              href={`/catalog?category=${encodeURIComponent(category.slug)}&availability=available`}
+              className={index === 0 ? styles.categoryPrimary : styles.categoryCard}
             >
-              Смотреть весь каталог
+              {category.imageUrl ? (
+                <ProductTileImage src={category.imageUrl} alt={category.name} />
+              ) : null}
+              <span className={styles.categoryShade} aria-hidden="true" />
+              <span className={styles.categoryNumber}>{String(index + 1).padStart(2, "0")}</span>
+              <span className={styles.categoryBody}>
+                <strong>{category.name}</strong>
+                <p>{category.description || "Подборка цветов и композиций."}</p>
+                <em>{categoryCountLabel(category.productCount)} →</em>
+              </span>
             </a>
-          </div>
+          ))}
+        </div>
+      </section>
 
-          <div className={styles.featuredGrid}>
-            {featuredProducts.map(
-              (product) => {
-                const available =
-                  product.availability
-                  === "available";
-
-                return (
-                  <article
-                    key={product.id}
-                    className={styles.featuredCard}
-                  >
-                    <div className={styles.featuredMedia}>
-                      <a
-                        href={`/product/${product.slug}`}
-                        aria-label={product.name}
-                      >
-                        <ProductTileImage
-                          src={
-                            product.primaryImage?.url
-                            ?? null
-                          }
-                          alt={
-                            product.primaryImage?.alt
-                            || product.name
-                          }
-                        />
-                      </a>
-
-                      <FavoriteButton
-                        productId={product.id}
-                        className={styles.featuredFavorite!}
-                      />
-
-                      {hasOldPrice(product) ? (
-                        <span className={styles.featuredSaleBadge}>
-                          Выгодно
-                        </span>
-                      ) : null}
-                    </div>
-
-                    <div className={styles.featuredBody}>
-                      <div className={styles.featuredMeta}>
-                        <span>
-                          {product.categoryName
-                            || "Букет"}
-                        </span>
-
-                        <em
-                          className={
-                            available
-                              ? styles.available
-                              : styles.unavailable
-                          }
-                        >
-                          {available
-                            ? "В наличии"
-                            : "Нет в наличии"}
-                        </em>
-                      </div>
-
-                      <h3>
-                        <a href={`/product/${product.slug}`}>
-                          {product.name}
-                        </a>
-                      </h3>
-
-                      <p>
-                        {product.shortDescription
-                          || product.description
-                          || "Свежая композиция для красивого повода."}
-                      </p>
-
-                      <div className={styles.featuredPriceRow}>
-                        <strong>
-                          {formatMoney(product.price)} ₽
-                        </strong>
-
-                        {hasOldPrice(product) ? (
-                          <span>
-                            {formatMoney(
-                              Number(product.oldPrice)
-                            )} ₽
-                          </span>
-                        ) : null}
-                      </div>
-
-                      <div className={styles.featuredActions}>
-                        <a
-                          href={`/product/${product.slug}`}
-                          className={styles.featuredOpenButton}
-                        >
-                          Подробнее
-                        </a>
-
-                        {available ? (
-                          <AddToCartButton
-                            className={styles.featuredCartButton!}
-                            label="В корзину"
-                            product={{
-                              id: product.id,
-                              slug: product.slug,
-                              name: product.name,
-                              price: product.price,
-                              imageUrl:
-                                product.primaryImage?.url
-                                ?? "",
-                              imageAlt:
-                                product.primaryImage?.alt
-                                || product.name
-                            }}
-                          />
-                        ) : (
-                          <button
-                            type="button"
-                            className={`${styles.featuredCartButton} ${styles.disabled}`}
-                            disabled
-                          >
-                            Недоступно
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  </article>
-                );
-              }
-            )}
-          </div>
+      {showBudgetSelector ? (
+        <section className={`${styles.section} ${styles.selectorSection}`} id="quick-selection">
+        <div className={styles.selectorIntro}>
+          <span>Быстрый выбор</span>
+          <h2>Подберём по бюджету</h2>
+          <p>Все кнопки открывают уже отфильтрованный каталог — без пустых переходов.</p>
+        </div>
+        <div className={styles.selectorGrid}>
+          {visibleBudgetLinks.map((item) => (
+            <a key={item.label} href={item.href}>
+              <strong>{item.label}</strong>
+              <span>{item.text}</span>
+              <em>Показать товары →</em>
+            </a>
+          ))}
+        </div>
         </section>
       ) : null}
 
-      <section
-        className={styles.deliverySection}
-        id="delivery"
-      >
-        <div className={styles.sectionHeading}>
-          <span>
-            Доставка
-          </span>
-
-          <h2>
-            Привезём аккуратно
-          </h2>
-
-          <p>
-            Выберите зону и подходящий
-            интервал при оформлении заказа.
-          </p>
-        </div>
-
-        {delivery?.notice ? (
-          <div className={styles.deliveryNotice}>
-            {delivery.notice}
+      {showFeaturedSection ? (
+        <section className={`${styles.section} ${styles.featuredSection}`} id="popular">
+          <div className={styles.sectionTopline}>
+            <div className={styles.sectionHeading}>
+              <span>Выбор покупателей</span>
+              <h2>Популярные товары</h2>
+              <p>Доступные композиции, которые можно добавить в корзину сразу.</p>
+            </div>
+            <a href="/catalog?availability=available&sort=recommended" className={styles.textLink}>
+              Смотреть все →
+            </a>
           </div>
-        ) : null}
 
-        <div className={styles.deliveryPanel}>
-          {zones
-            .slice(0, 3)
-            .map(
-              zone => (
-                <div
-                  className={styles.deliveryRow}
-                  key={zone.name}
-                >
-                  <div>
-                    <strong>
-                      {zone.name}
-                    </strong>
+          <HomeFeaturedCarousel
+            className={styles.featuredCarouselTrack}
+            pageClassName={styles.featuredGrid}
+            controlsClassName={styles.featuredCarouselControls}
+            arrowClassName={styles.featuredCarouselArrow}
+            dotsClassName={styles.featuredCarouselDots}
+            hintClassName={styles.featuredCarouselHint}
+          >
+            {featuredProducts.slice(0, 8).map((product) => {
+              const available = product.availability === "available";
 
-                    <span>
-                      {zone.description
-                        ?? "Доступная зона доставки"}
-                    </span>
+              return (
+                <article key={product.id} className={styles.featuredCard}>
+                  <div className={styles.featuredMedia}>
+                    <a href={`/product/${product.slug}`} aria-label={product.name}>
+                      <ProductTileImage
+                        src={product.primaryImage?.url ?? null}
+                        alt={product.primaryImage?.alt || product.name}
+                      />
+                    </a>
+                    <FavoriteButton productId={product.id} className={styles.featuredFavorite!} />
+                    {hasOldPrice(product) ? <span className={styles.featuredSaleBadge}>Выгодно</span> : null}
                   </div>
 
-                  <b>
-                    {zone.price === 0
-                      ? "Бесплатно"
-                      : (
-                        `${formatMoney(
-                          zone.price
-                        )} ₽`
+                  <div className={styles.featuredBody}>
+                    <div className={styles.featuredMeta}>
+                      <span>{product.categoryName || "Товар"}</span>
+                      <em className={available ? styles.available : styles.unavailable}>
+                        {available ? "Доступен" : "Нет в наличии"}
+                      </em>
+                    </div>
+                    <h3><a href={`/product/${product.slug}`}>{product.name}</a></h3>
+                    <p>{product.shortDescription || "Композиция, собранная флористом к выбранной дате."}</p>
+                    <div className={styles.featuredPriceRow}>
+                      <strong>{formatMoney(product.price)} ₽</strong>
+                      {hasOldPrice(product) ? <span>{formatMoney(Number(product.oldPrice))} ₽</span> : null}
+                    </div>
+                    <div className={styles.featuredActions}>
+                      <a href={`/product/${product.slug}`} className={styles.featuredOpenButton}>Подробнее</a>
+                      {available ? (
+                        <AddToCartButton
+                          className={styles.featuredCartButton!}
+                          label="В корзину"
+                          product={{
+                            id: product.id,
+                            slug: product.slug,
+                            name: product.name,
+                            price: product.price,
+                            imageUrl: product.primaryImage?.url ?? "",
+                            imageAlt: product.primaryImage?.alt || product.name
+                          }}
+                        />
+                      ) : (
+                        <button type="button" className={`${styles.featuredCartButton} ${styles.disabled}`} disabled>
+                          Недоступно
+                        </button>
                       )}
-                  </b>
-                </div>
-              )
-            )}
+                    </div>
+                  </div>
+                </article>
+              );
+            })}
+          </HomeFeaturedCarousel>
+        </section>
+      ) : null}
 
-          {Number(
-            delivery?.minimumOrderAmount
-            ?? 0
-          ) > 0 ? (
+      <section className={styles.assistanceSection} id="help">
+        <div>
+          <span>Нужна помощь?</span>
+          <h2>Не знаете, что выбрать?</h2>
+          <p>Выберите подходящий бюджет или откройте подборку популярных композиций — каталог сразу покажет доступные варианты.</p>
+        </div>
+        <div className={styles.assistanceActions}>
+          <a href={showBudgetSelector ? "#quick-selection" : "/catalog?availability=available&sort=recommended"} className={styles.primaryButton}>Подобрать по бюджету</a>
+          <a href={showFeaturedSection ? "#popular" : "/catalog?availability=available&featured=true"} className={styles.secondaryButton}>Посмотреть хиты</a>
+        </div>
+      </section>
+
+      <section className={styles.deliverySection} id="delivery">
+        <div className={styles.deliveryCopy}>
+          <span>Доставка</span>
+          <h2>Привезём аккуратно и в выбранный интервал</h2>
+          <p>Стоимость рассчитывается по зоне после указания адреса. Доступные интервалы показываются при оформлении заказа.</p>
+          {delivery?.notice ? <div className={styles.deliveryNotice}>{delivery.notice}</div> : null}
+        </div>
+
+        <div className={styles.deliveryPanel}>
+          {zones.slice(0, 3).map((zone) => (
+            <div className={styles.deliveryRow} key={zone.name}>
+              <div>
+                <strong>{zone.name}</strong>
+                <span>{zone.description ?? "Доступная зона доставки"}</span>
+              </div>
+              <b>{zone.price === 0 ? "Бесплатно" : `${formatMoney(zone.price)} ₽`}</b>
+            </div>
+          ))}
+
+          {Number(delivery?.minimumOrderAmount ?? 0) > 0 ? (
             <div className={styles.deliveryRule}>
               <span>Минимальная сумма заказа</span>
-              <strong>
-                {formatMoney(
-                  Number(
-                    delivery?.minimumOrderAmount
-                    ?? 0
-                  )
-                )} ₽
-              </strong>
+              <strong>{formatMoney(Number(delivery?.minimumOrderAmount ?? 0))} ₽</strong>
             </div>
           ) : null}
 
-          {delivery?.pickup?.enabled
-          && delivery.pickup.address ? (
+          {delivery?.pickup?.enabled && delivery.pickup.address ? (
             <div className={styles.deliveryRule}>
               <span>Самовывоз</span>
-              <strong>
-                {delivery.pickup.address}
-              </strong>
+              <strong>{delivery.pickup.address}</strong>
             </div>
           ) : null}
 
           <div className={styles.intervalGrid}>
-            {intervals
-              .slice(0, 6)
-              .map(
-                interval => (
-                  <span key={interval.name}>
-                    {interval.name}
-                  </span>
-                )
-              )}
+            {intervals.slice(0, 6).map((interval) => <span key={interval.name}>{interval.name}</span>)}
           </div>
         </div>
       </section>
@@ -948,25 +608,11 @@ export default async function HomePage() {
 
       <section className={styles.closingBanner}>
         <div>
-          <span>
-            Выбери Меня
-          </span>
-
-          <h2>
-            Букет, который
-            запомнится
-          </h2>
-
-          <p>
-            Выберите композицию,
-            укажите получателя
-            и удобное время доставки.
-          </p>
+          <span>Выбери Меня</span>
+          <h2>Букет, который запомнится</h2>
+          <p>Выберите композицию, укажите получателя и удобное время доставки.</p>
         </div>
-
-        <a href="/catalog">
-          Перейти в каталог
-        </a>
+        <a href="/catalog?availability=available">Перейти в каталог</a>
       </section>
     </div>
   );

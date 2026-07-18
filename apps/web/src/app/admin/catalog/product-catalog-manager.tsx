@@ -24,6 +24,9 @@ export type ProductCatalogItem = {
   imageUrl: string;
   imagesCount: number;
   stock: number;
+  availability: "available" | "preorder" | "unavailable";
+  availabilityLabel: string;
+  productTypeLabel: string;
   price: number;
   priceLabel: string;
   isFeatured: boolean;
@@ -111,15 +114,22 @@ export function ProductCatalogManager({
       }
 
       if (
-        availability === "in-stock"
-        && product.stock <= 0
+        availability === "available"
+        && product.availability !== "available"
       ) {
         return false;
       }
 
       if (
-        availability === "out-of-stock"
-        && product.stock > 0
+        availability === "preorder"
+        && product.availability !== "preorder"
+      ) {
+        return false;
+      }
+
+      if (
+        availability === "unavailable"
+        && product.availability !== "unavailable"
       ) {
         return false;
       }
@@ -357,10 +367,13 @@ export function ProductCatalogManager({
             <option value="all">
               Любое
             </option>
-            <option value="in-stock">
-              В наличии
+            <option value="available">
+              Есть в наличии
             </option>
-            <option value="out-of-stock">
+            <option value="preorder">
+              Под заказ
+            </option>
+            <option value="unavailable">
               Нет в наличии
             </option>
           </select>
@@ -536,8 +549,13 @@ export function ProductCatalogManager({
                   </div>
 
                   <div>
-                    <dt>Остаток</dt>
-                    <dd>{product.stock}</dd>
+                    <dt>Наличие</dt>
+                    <dd>{product.availabilityLabel}</dd>
+                  </div>
+
+                  <div>
+                    <dt>Тип</dt>
+                    <dd>{product.productTypeLabel}</dd>
                   </div>
 
                   <div>
@@ -556,9 +574,9 @@ export function ProductCatalogManager({
                     <span>Хит продаж</span>
                   ) : null}
 
-                  {product.stock <= 0 ? (
+                  {product.availability !== "available" ? (
                     <span className="warning">
-                      Нет в наличии
+                      {product.availabilityLabel}
                     </span>
                   ) : null}
 
