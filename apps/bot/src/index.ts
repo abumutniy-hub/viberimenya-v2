@@ -20,6 +20,36 @@ type NotificationEvent = {
   updated_at: string;
 };
 
+
+type NotificationOutboxEvent = NotificationEvent & {
+  source_notification_event_id: string | null;
+  recipient_user_id: string | null;
+  recipient_customer_id: string | null;
+  recipient_role: string | null;
+  max_attempts: number;
+  next_attempt_at: string;
+  locked_at: string | null;
+  locked_by: string | null;
+  last_error: string | null;
+};
+
+type NotificationDelivery = {
+  id: string;
+  outbox_id: string;
+  recipient_address: string;
+  status: string;
+  attempts: number;
+  max_attempts: number;
+  next_attempt_at: string;
+};
+
+type ResolvedNotificationRecipient = {
+  address: string;
+  userId: string | null;
+  customerId: string | null;
+  role: string | null;
+};
+
 type TelegramUser = {
   id: number;
   is_bot?: boolean;
@@ -86,6 +116,9 @@ const INTERNAL_ORDER_TOKEN = TELEGRAM_BOT_TOKEN
   : "";
 const DEFAULT_SHOP_SLUG = process.env.DEFAULT_SHOP_SLUG || "viberimenya";
 const UPLOADS_DIR = process.env.UPLOADS_DIR || resolve(process.cwd(), "../../storage/uploads");
+const NOTIFICATION_SOURCE = (process.env.BOT_NOTIFICATION_SOURCE || "outbox").trim().toLowerCase();
+const NOTIFICATION_SELF_TEST = process.env.BOT_NOTIFICATION_SELF_TEST === "true";
+const NOTIFICATION_WORKER_ID = `telegram-outbox:${process.pid}:${randomUUID().slice(0, 8)}`;
 
 const pendingBouquetPhotoRequests = new Map<number, {
   orderId: string;
@@ -8340,7 +8373,7 @@ async function getRecipients(event: NotificationEvent): Promise<string[]> {
   return [];
 }
 
-async function processNotificationEvents() {
+async function processLegacyNotificationEvents() {
   await sql`
     UPDATE notification_events
     SET status = 'pending',
@@ -8693,14 +8726,769 @@ async function processNotificationEvents() {
   }
 }
 
-async function loop() {
-  console.log(
-    `[bot-worker] started dryRun=${DRY_RUN} runOnce=${RUN_ONCE} tokenSet=${Boolean(TELEGRAM_BOT_TOKEN)} poll=${POLL_INTERVAL_MS}ms updatesTimeout=${TELEGRAM_UPDATES_TIMEOUT_SECONDS}s`
+
+function outboxRetryDelayMs(attempt: number) {
+  const delays = [30_000, 120_000, 600_000, 1_800_000, 3_600_000];
+  return delays[Math.max(0, Math.min(delays.length - 1, attempt - 1))] || 30_000;
+}
+
+function nextOutboxAttemptAt(attempt: number) {
+  return new Date(Date.now() + outboxRetryDelayMs(attempt)).toISOString();
+}
+
+async function recoverStaleOutboxWork() {
+  await sql`
+    UPDATE notification_deliveries
+    SET status = 'pending',
+        locked_at = NULL,
+        locked_by = NULL,
+        last_error = COALESCE(last_error, 'Восстановлено после зависшего Telegram worker'),
+        next_attempt_at = NOW(),
+        updated_at = NOW()
+    WHERE channel = 'telegram'
+      AND status = 'processing'
+      AND locked_at < NOW() - INTERVAL '10 minutes'
+  `;
+
+  await sql`
+    UPDATE notification_outbox
+    SET status = 'pending',
+        locked_at = NULL,
+        locked_by = NULL,
+        last_error = COALESCE(last_error, 'Восстановлено после зависшего Telegram worker'),
+        next_attempt_at = NOW(),
+        updated_at = NOW()
+    WHERE channel = 'telegram'
+      AND status = 'processing'
+      AND locked_at < NOW() - INTERVAL '10 minutes'
+  `;
+}
+
+async function claimNextNotificationOutbox() {
+  const rows = await sql<NotificationOutboxEvent[]>`
+    WITH candidate AS (
+      SELECT id
+      FROM notification_outbox
+      WHERE channel = 'telegram'
+        AND status = 'pending'
+        AND attempts < max_attempts
+        AND next_attempt_at <= NOW()
+      ORDER BY priority ASC, created_at ASC
+      FOR UPDATE SKIP LOCKED
+      LIMIT 1
+    )
+    UPDATE notification_outbox outbox
+    SET status = 'processing',
+        attempts = LEAST(outbox.max_attempts, outbox.attempts + 1),
+        locked_at = NOW(),
+        locked_by = ${NOTIFICATION_WORKER_ID},
+        last_error = NULL,
+        updated_at = NOW()
+    FROM candidate
+    WHERE outbox.id = candidate.id
+    RETURNING
+      outbox.id,
+      outbox.shop_id,
+      outbox.order_id,
+      outbox.template_key AS type,
+      outbox.channel,
+      outbox.recipient_type,
+      outbox.recipient_address AS recipient_telegram_id,
+      outbox.payload,
+      outbox.attempts,
+      outbox.created_at,
+      outbox.updated_at,
+      outbox.source_notification_event_id,
+      outbox.recipient_user_id,
+      outbox.recipient_customer_id,
+      outbox.recipient_role,
+      outbox.max_attempts,
+      outbox.next_attempt_at,
+      outbox.locked_at,
+      outbox.locked_by,
+      outbox.last_error
+  `;
+
+  return rows[0] || null;
+}
+
+async function resolveOutboxRecipients(
+  event: NotificationOutboxEvent
+): Promise<ResolvedNotificationRecipient[]> {
+  const addresses = await getRecipients(event);
+  const uniqueAddresses = [...new Set(addresses.map((value) => String(value).trim()).filter(Boolean))];
+  const recipients: ResolvedNotificationRecipient[] = [];
+
+  for (const address of uniqueAddresses) {
+    const rows = await sql<{
+      user_id: string | null;
+      customer_id: string | null;
+      role: string | null;
+    }[]>`
+      SELECT
+        ta.user_id,
+        ta.customer_id,
+        su.role::text AS role
+      FROM telegram_accounts ta
+      LEFT JOIN shop_users su
+        ON su.shop_id = ta.shop_id
+       AND su.user_id = ta.user_id
+       AND su.is_active = true
+      WHERE ta.shop_id = ${event.shop_id}
+        AND ta.telegram_id = ${address}
+        AND ta.is_active = true
+      ORDER BY ta.linked_at DESC
+      LIMIT 1
+    `;
+
+    const resolved = rows[0];
+    recipients.push({
+      address,
+      userId: resolved?.user_id || event.recipient_user_id,
+      customerId: resolved?.customer_id || event.recipient_customer_id,
+      role: resolved?.role || event.recipient_role
+    });
+  }
+
+  return recipients;
+}
+
+async function ensureOutboxDelivery(
+  event: NotificationOutboxEvent,
+  recipient: ResolvedNotificationRecipient
+) {
+  await sql`
+    INSERT INTO notification_deliveries (
+      shop_id,
+      outbox_id,
+      channel,
+      recipient_type,
+      recipient_user_id,
+      recipient_customer_id,
+      recipient_role,
+      recipient_address,
+      status,
+      attempts,
+      max_attempts,
+      next_attempt_at,
+      metadata,
+      created_at,
+      updated_at
+    )
+    VALUES (
+      ${event.shop_id},
+      ${event.id},
+      'telegram',
+      ${event.recipient_type},
+      ${recipient.userId},
+      ${recipient.customerId},
+      ${recipient.role},
+      ${recipient.address},
+      'pending',
+      0,
+      ${event.max_attempts},
+      NOW(),
+      ${JSON.stringify({
+        source: 'telegram_outbox_worker',
+        workerId: NOTIFICATION_WORKER_ID
+      })}::jsonb,
+      NOW(),
+      NOW()
+    )
+    ON CONFLICT (outbox_id, channel, recipient_address)
+    DO NOTHING
+  `;
+}
+
+async function claimOutboxDelivery(deliveryId: string) {
+  const rows = await sql<NotificationDelivery[]>`
+    UPDATE notification_deliveries
+    SET status = 'processing',
+        attempts = LEAST(max_attempts, attempts + 1),
+        locked_at = NOW(),
+        locked_by = ${NOTIFICATION_WORKER_ID},
+        last_error = NULL,
+        updated_at = NOW()
+    WHERE id = ${deliveryId}
+      AND channel = 'telegram'
+      AND status = 'pending'
+      AND attempts < max_attempts
+      AND next_attempt_at <= NOW()
+    RETURNING id, outbox_id, recipient_address, status, attempts, max_attempts, next_attempt_at
+  `;
+
+  return rows[0] || null;
+}
+
+async function sendOutboxEventToRecipient(
+  event: NotificationOutboxEvent,
+  chatId: string
+) {
+  const message = formatEvent(event);
+  const payload = eventPayload(event);
+  const productImageUrl = absoluteUrl(payloadValue(payload, "productImageUrl", "product_image_url"));
+  const bouquetPhotoUrl = absoluteUrl(payloadValue(payload, "bouquetPhotoUrl", "bouquet_photo_url"));
+  const deliveryProofPhotoUrl = absoluteUrl(
+    payloadValue(payload, "deliveryProofPhotoUrl", "delivery_proof_photo_url")
   );
+  const orderId = payloadText(payload, "orderId", "order_id");
+  const crmUrl = absoluteUrl(payloadValue(payload, "crmUrl", "crm_url"));
+  const trackingUrl = absoluteUrl(payloadValue(payload, "trackingUrl", "tracking_url"));
+  const deliveryAddressText = payloadText(payload, "deliveryAddressText", "delivery_address_text");
+  const actionButtonRows: TelegramInlineKeyboardButton[][] = [];
+
+  if (event.recipient_type === "customer" && event.type === "bouquet_approval_requested" && orderId) {
+    actionButtonRows.push([
+      { text: "✅ Одобряю", callback_data: `bouquet:approve:${orderId}` },
+      { text: "🔄 Нужна правка", callback_data: `bouquet:revision:${orderId}` }
+    ]);
+  }
+
+  if (event.type === "bouquet_approved" && orderId) {
+    actionButtonRows.push([{ text: "✅ Завершить сборку", callback_data: `florist:ready:${orderId}` }]);
+  }
+
+  if (event.type === "bouquet_revision_requested" && orderId) {
+    actionButtonRows.push([{ text: "📸 Загрузить новое фото", callback_data: `florist:photo:${orderId}` }]);
+  }
+
+  if (event.type === "florist_order_assigned" && orderId) {
+    actionButtonRows.push([{ text: "💐 Взять в работу", callback_data: `florist:take:${orderId}` }]);
+  }
+
+  if (event.type === "courier_order_assigned" && orderId) {
+    actionButtonRows.push([{ text: "🚚 Принять доставку", callback_data: `courier:accept:${orderId}` }]);
+
+    if (deliveryAddressText) {
+      actionButtonRows.push([{ text: "🗺 Маршрут", url: `https://yandex.ru/maps/?text=${encodeURIComponent(deliveryAddressText)}` }]);
+    }
+  }
+
+  if (
+    (
+      event.type === "florist_order_assigned"
+      || event.type === "courier_order_assigned"
+      || event.type === "bouquet_approved"
+      || event.type === "bouquet_revision_requested"
+    )
+    && crmUrl
+  ) {
+    actionButtonRows.push([{ text: "Открыть CRM", url: crmUrl }]);
+  }
+
+  if (event.recipient_type === "customer" && trackingUrl) {
+    actionButtonRows.push([{ text: "Открыть заказ", url: trackingUrl }]);
+  }
+
+  const actionReplyMarkup = actionButtonRows.length ? inlineKeyboard(actionButtonRows) : null;
+
+  if (event.type === "courier_order_assigned" && orderId) {
+    const courierOrder = await loadCourierOrderCard(event.shop_id, orderId);
+
+    if (!courierOrder) {
+      throw new Error("Courier order not found");
+    }
+
+    const courierChatId = Number(chatId);
+
+    if (!Number.isSafeInteger(courierChatId)) {
+      throw new Error("Invalid courier Telegram chat ID");
+    }
+
+    await sendCourierOrderCard(courierChatId, courierOrder);
+  } else if (event.type === "florist_order_assigned" && productImageUrl) {
+    await sendTelegramPhoto(chatId, productImageUrl, message);
+
+    if (actionReplyMarkup) {
+      await sendTelegramMessage(chatId, "Действие по заказу:", { reply_markup: actionReplyMarkup });
+    }
+  } else if (event.type === "bouquet_approval_requested" && bouquetPhotoUrl) {
+    await sendTelegramPhoto(
+      chatId,
+      bouquetPhotoUrl,
+      message,
+      actionReplyMarkup ? { reply_markup: actionReplyMarkup } : undefined
+    );
+  } else if (event.type === "order_ready" && bouquetPhotoUrl) {
+    await sendTelegramPhoto(
+      chatId,
+      bouquetPhotoUrl,
+      message,
+      actionReplyMarkup ? { reply_markup: actionReplyMarkup } : undefined
+    );
+  } else if (event.type === "order_delivered" && deliveryProofPhotoUrl) {
+    await sendTelegramPhoto(
+      chatId,
+      deliveryProofPhotoUrl,
+      message,
+      actionReplyMarkup ? { reply_markup: actionReplyMarkup } : undefined
+    );
+  } else if (actionReplyMarkup) {
+    await sendTelegramMessage(chatId, message, { reply_markup: actionReplyMarkup });
+  } else {
+    await sendTelegramMessage(chatId, message);
+  }
+}
+
+async function markLegacyNotificationFromOutbox(
+  event: NotificationOutboxEvent,
+  status: 'sent' | 'skipped' | 'failed',
+  error: string | null,
+  sentAt: string | null
+) {
+  if (!event.source_notification_event_id) {
+    return;
+  }
+
+  await sql`
+    UPDATE notification_events
+    SET status = ${status},
+        attempts = LEAST(5, GREATEST(attempts, ${event.attempts})),
+        error = ${error},
+        sent_at = ${sentAt},
+        updated_at = NOW()
+    WHERE id = ${event.source_notification_event_id}
+  `;
+}
+
+async function finalizeNotificationOutbox(event: NotificationOutboxEvent) {
+  const rows = await sql<{
+    total: number;
+    pending: number;
+    processing: number;
+    sent: number;
+    skipped: number;
+    failed: number;
+    next_attempt_at: string | null;
+  }[]>`
+    SELECT
+      COUNT(*)::int AS total,
+      COUNT(*) FILTER (WHERE status = 'pending')::int AS pending,
+      COUNT(*) FILTER (WHERE status = 'processing')::int AS processing,
+      COUNT(*) FILTER (WHERE status = 'sent')::int AS sent,
+      COUNT(*) FILTER (WHERE status = 'skipped')::int AS skipped,
+      COUNT(*) FILTER (WHERE status = 'failed')::int AS failed,
+      MIN(next_attempt_at) FILTER (WHERE status = 'pending') AS next_attempt_at
+    FROM notification_deliveries
+    WHERE outbox_id = ${event.id}
+  `;
+
+  const summary = rows[0];
+
+  if (!summary || summary.total === 0) {
+    const reason = event.recipient_type === 'customer'
+      ? 'Telegram покупателя не подключён или уведомления выключены'
+      : 'Нет активного подходящего сотрудника с включёнными Telegram-уведомлениями';
+
+    await sql`
+      UPDATE notification_outbox
+      SET status = 'skipped',
+          locked_at = NULL,
+          locked_by = NULL,
+          last_error = ${reason},
+          updated_at = NOW()
+      WHERE id = ${event.id}
+    `;
+
+    await markLegacyNotificationFromOutbox(event, 'skipped', reason, null);
+    return;
+  }
+
+  if (summary.pending > 0 || summary.processing > 0) {
+    await sql`
+      UPDATE notification_outbox
+      SET status = 'pending',
+          locked_at = NULL,
+          locked_by = NULL,
+          next_attempt_at = COALESCE(${summary.next_attempt_at}, NOW() + INTERVAL '30 seconds'),
+          last_error = ${summary.sent > 0 ? 'Часть получателей уже получила уведомление; остальные ожидают повторной попытки' : null},
+          updated_at = NOW()
+      WHERE id = ${event.id}
+    `;
+    return;
+  }
+
+  if (summary.sent > 0) {
+    const partialMessage = summary.skipped > 0 || summary.failed > 0
+      ? `Доставлено: ${summary.sent}; пропущено: ${summary.skipped}; ошибок: ${summary.failed}`
+      : null;
+    const sentAt = new Date().toISOString();
+
+    await sql`
+      UPDATE notification_outbox
+      SET status = 'sent',
+          locked_at = NULL,
+          locked_by = NULL,
+          last_error = ${partialMessage},
+          sent_at = ${sentAt},
+          updated_at = NOW()
+      WHERE id = ${event.id}
+    `;
+
+    await markLegacyNotificationFromOutbox(event, 'sent', partialMessage, sentAt);
+    return;
+  }
+
+  if (summary.failed > 0) {
+    const reason = `Telegram delivery исчерпала попытки: ${summary.failed}`;
+
+    await sql`
+      UPDATE notification_outbox
+      SET status = 'dead',
+          locked_at = NULL,
+          locked_by = NULL,
+          last_error = ${reason},
+          dead_at = NOW(),
+          updated_at = NOW()
+      WHERE id = ${event.id}
+    `;
+
+    await markLegacyNotificationFromOutbox(event, 'failed', reason, null);
+    return;
+  }
+
+  const reason = 'Все Telegram-получатели пропущены или отключены';
+
+  await sql`
+    UPDATE notification_outbox
+    SET status = 'skipped',
+        locked_at = NULL,
+        locked_by = NULL,
+        last_error = ${reason},
+        updated_at = NOW()
+    WHERE id = ${event.id}
+  `;
+
+  await markLegacyNotificationFromOutbox(event, 'skipped', reason, null);
+}
+
+async function processNotificationOutbox() {
+  if (DRY_RUN) {
+    const preview = await sql<NotificationOutboxEvent[]>`
+      SELECT
+        id,
+        shop_id,
+        order_id,
+        template_key AS type,
+        channel,
+        recipient_type,
+        recipient_address AS recipient_telegram_id,
+        payload,
+        attempts,
+        created_at,
+        updated_at,
+        source_notification_event_id,
+        recipient_user_id,
+        recipient_customer_id,
+        recipient_role,
+        max_attempts,
+        next_attempt_at,
+        locked_at,
+        locked_by,
+        last_error
+      FROM notification_outbox
+      WHERE channel = 'telegram'
+        AND status = 'pending'
+        AND attempts < max_attempts
+        AND next_attempt_at <= NOW()
+      ORDER BY priority ASC, created_at ASC
+      LIMIT 1
+    `;
+
+    if (preview[0]) {
+      console.log(`[bot-worker] dry-run outbox=${preview[0].id} type=${preview[0].type}`);
+      console.log(formatEvent(preview[0]));
+    }
+
+    return;
+  }
+
+  await recoverStaleOutboxWork();
+
+  const event = await claimNextNotificationOutbox();
+
+  if (!event) {
+    return;
+  }
+
+  console.log(`[bot-worker] claimed outbox=${event.id} type=${event.type} attempt=${event.attempts}`);
+
+  try {
+    const recipients = await resolveOutboxRecipients(event);
+
+    for (const recipient of recipients) {
+      await ensureOutboxDelivery(event, recipient);
+    }
+
+    const deliveries = await sql<NotificationDelivery[]>`
+      SELECT id, outbox_id, recipient_address, status, attempts, max_attempts, next_attempt_at
+      FROM notification_deliveries
+      WHERE outbox_id = ${event.id}
+        AND channel = 'telegram'
+        AND status = 'pending'
+        AND attempts < max_attempts
+        AND next_attempt_at <= NOW()
+      ORDER BY created_at ASC
+    `;
+
+    for (const candidate of deliveries) {
+      const delivery = await claimOutboxDelivery(candidate.id);
+
+      if (!delivery) {
+        continue;
+      }
+
+      try {
+        await sendOutboxEventToRecipient(event, delivery.recipient_address);
+
+        await sql`
+          UPDATE notification_deliveries
+          SET status = 'sent',
+              locked_at = NULL,
+              locked_by = NULL,
+              last_error = NULL,
+              sent_at = NOW(),
+              updated_at = NOW()
+          WHERE id = ${delivery.id}
+        `;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+
+        if (isPermanentTelegramRecipientError(message)) {
+          await deactivateTelegramRecipient(event.shop_id, delivery.recipient_address, message);
+
+          await sql`
+            UPDATE notification_deliveries
+            SET status = 'skipped',
+                locked_at = NULL,
+                locked_by = NULL,
+                last_error = ${message},
+                failed_at = NOW(),
+                updated_at = NOW()
+            WHERE id = ${delivery.id}
+          `;
+          continue;
+        }
+
+        if (delivery.attempts >= delivery.max_attempts) {
+          await sql`
+            UPDATE notification_deliveries
+            SET status = 'failed',
+                locked_at = NULL,
+                locked_by = NULL,
+                last_error = ${message},
+                failed_at = NOW(),
+                updated_at = NOW()
+            WHERE id = ${delivery.id}
+          `;
+        } else {
+          await sql`
+            UPDATE notification_deliveries
+            SET status = 'pending',
+                locked_at = NULL,
+                locked_by = NULL,
+                last_error = ${message},
+                next_attempt_at = ${nextOutboxAttemptAt(delivery.attempts)},
+                updated_at = NOW()
+            WHERE id = ${delivery.id}
+          `;
+        }
+
+        console.error(`[bot-worker] delivery failed outbox=${event.id} delivery=${delivery.id}`, error);
+      }
+    }
+
+    await finalizeNotificationOutbox(event);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const terminal = event.attempts >= event.max_attempts;
+
+    await sql`
+      UPDATE notification_outbox
+      SET status = ${terminal ? 'dead' : 'pending'},
+          locked_at = NULL,
+          locked_by = NULL,
+          last_error = ${message},
+          next_attempt_at = ${nextOutboxAttemptAt(event.attempts)},
+          dead_at = ${terminal ? new Date().toISOString() : null},
+          updated_at = NOW()
+      WHERE id = ${event.id}
+    `;
+
+    if (terminal) {
+      await markLegacyNotificationFromOutbox(event, 'failed', message, null);
+    }
+
+    console.error(`[bot-worker] outbox failed id=${event.id}`, error);
+  }
+}
+
+class NotificationSelfTestRollback extends Error {}
+
+async function runNotificationOutboxSelfTest() {
+  try {
+    await sql.begin(async (transaction) => {
+      const shops = await transaction<{ id: string }[]>`
+        SELECT id
+        FROM shops
+        ORDER BY created_at
+        LIMIT 1
+      `;
+      const shop = shops[0];
+
+      if (!shop) {
+        throw new Error('Outbox self-test: shop not found');
+      }
+
+      const events = await transaction<{ id: string }[]>`
+        INSERT INTO notification_events (
+          shop_id,
+          type,
+          channel,
+          recipient_type,
+          recipient_telegram_id,
+          status,
+          payload,
+          attempts,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          ${shop.id},
+          'outbox_worker_self_test',
+          'telegram',
+          'staff',
+          'self-test-recipient',
+          'pending',
+          ${JSON.stringify({ selfTest: true })}::jsonb,
+          0,
+          NOW(),
+          NOW()
+        )
+        RETURNING id
+      `;
+      const eventId = events[0]?.id;
+
+      if (!eventId) {
+        throw new Error('Outbox self-test: notification event was not created');
+      }
+
+      const outboxes = await transaction<{ id: string }[]>`
+        SELECT id
+        FROM notification_outbox
+        WHERE source_notification_event_id = ${eventId}
+        LIMIT 1
+      `;
+      const outboxId = outboxes[0]?.id;
+
+      if (!outboxId) {
+        throw new Error('Outbox self-test: mirror trigger did not create outbox row');
+      }
+
+      await transaction`
+        INSERT INTO notification_deliveries (
+          shop_id,
+          outbox_id,
+          channel,
+          recipient_type,
+          recipient_address,
+          status,
+          attempts,
+          max_attempts,
+          next_attempt_at,
+          metadata,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          ${shop.id},
+          ${outboxId},
+          'telegram',
+          'staff',
+          'self-test-recipient',
+          'pending',
+          0,
+          5,
+          NOW(),
+          '{}'::jsonb,
+          NOW(),
+          NOW()
+        )
+      `;
+
+      const claimed = await transaction<{ id: string }[]>`
+        UPDATE notification_deliveries
+        SET status = 'processing',
+            attempts = attempts + 1,
+            locked_at = NOW(),
+            locked_by = 'self-test',
+            updated_at = NOW()
+        WHERE outbox_id = ${outboxId}
+          AND recipient_address = 'self-test-recipient'
+          AND status = 'pending'
+        RETURNING id
+      `;
+
+      const claimedDelivery = claimed[0];
+
+      if (claimed.length !== 1 || !claimedDelivery) {
+        throw new Error('Outbox self-test: delivery claim failed');
+      }
+
+      await transaction`
+        UPDATE notification_deliveries
+        SET status = 'sent',
+            locked_at = NULL,
+            locked_by = NULL,
+            sent_at = NOW(),
+            updated_at = NOW()
+        WHERE id = ${claimedDelivery.id}
+      `;
+
+      const counts = await transaction<{ sent: number }[]>`
+        SELECT COUNT(*) FILTER (WHERE status = 'sent')::int AS sent
+        FROM notification_deliveries
+        WHERE outbox_id = ${outboxId}
+      `;
+
+      if (counts[0]?.sent !== 1) {
+        throw new Error('Outbox self-test: delivery status aggregation failed');
+      }
+
+      throw new NotificationSelfTestRollback('rollback');
+    });
+  } catch (error) {
+    if (!(error instanceof NotificationSelfTestRollback)) {
+      throw error;
+    }
+  }
+
+  console.log('[bot-worker] notification outbox self-test: OK');
+}
+
+async function loop() {
+  if (!['outbox', 'legacy'].includes(NOTIFICATION_SOURCE)) {
+    throw new Error(`Unsupported BOT_NOTIFICATION_SOURCE: ${NOTIFICATION_SOURCE}`);
+  }
+
+  console.log(
+    `[bot-worker] started dryRun=${DRY_RUN} runOnce=${RUN_ONCE} tokenSet=${Boolean(TELEGRAM_BOT_TOKEN)} poll=${POLL_INTERVAL_MS}ms updatesTimeout=${TELEGRAM_UPDATES_TIMEOUT_SECONDS}s notifications=${NOTIFICATION_SOURCE}`
+  );
+
+  if (NOTIFICATION_SELF_TEST) {
+    await runNotificationOutboxSelfTest();
+    await sql.end();
+    return;
+  }
 
   while (!isStopping) {
     await processTelegramUpdates();
-    await processNotificationEvents();
+
+    if (NOTIFICATION_SOURCE === 'legacy') {
+      await processLegacyNotificationEvents();
+    } else {
+      await processNotificationOutbox();
+    }
 
     if (RUN_ONCE) {
       break;
