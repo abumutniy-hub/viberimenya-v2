@@ -15942,3 +15942,63 @@ body {
 }
 @media (prefers-reduced-motion: reduce) { .vm-home-brand-signature, .vm-home-brand-signature * { animation: none !important; } }
 /* Release 16I-C — animated home brand signature: end */
+
+/* Identity Core: безопасная отвязка Telegram покупателя */
+.account-telegram-connected small {
+  display: inline-block;
+  margin-top: 5px;
+  color: #7a837b;
+  font-size: 12px;
+}
+
+.account-telegram-unlink-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid rgba(25, 23, 22, 0.1);
+}
+
+.account-telegram-unlink-row > div {
+  display: grid;
+  gap: 4px;
+}
+
+.account-telegram-unlink-row small {
+  color: #657066;
+}
+
+.account-danger-button {
+  flex: 0 0 auto;
+  min-height: 42px;
+  padding: 10px 16px;
+  border: 1px solid rgba(167, 45, 58, 0.3);
+  border-radius: 999px;
+  background: rgba(167, 45, 58, 0.07);
+  color: #922c38;
+  font: inherit;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.account-danger-button:hover {
+  background: rgba(167, 45, 58, 0.12);
+}
+
+.account-danger-button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+@media (max-width: 700px) {
+  .account-telegram-unlink-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .account-danger-button {
+    width: 100%;
+  }
+}

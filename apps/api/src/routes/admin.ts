@@ -42,6 +42,7 @@ import {
   currentYooKassaRuntimeSettings,
   persistYooKassaRuntimeSettings
 } from "../modules/payments/yookassa-settings.service";
+import { unlinkCustomerTelegramIdentity } from "../modules/customers/customer-telegram-identity.service";
 
 type ShopRow = {
   id: string;
@@ -7972,8 +7973,80 @@ export async function adminRoutes(app: FastifyInstance) {
         bonuses,
         topProducts,
         permissions: {
-          canAdjustBonus: Boolean(adminContext && OWNER_ADMIN_ROLES.includes(adminContext.role))
+          canAdjustBonus: Boolean(adminContext && OWNER_ADMIN_ROLES.includes(adminContext.role)),
+          canManageTelegram: Boolean(adminContext && OWNER_ADMIN_ROLES.includes(adminContext.role))
         }
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.delete("/api/admin/customers/:id/telegram-link", async (request, reply) => {
+    const params = z.object({ id: z.string().uuid() }).parse(request.params ?? {});
+    const adminContext = (request as AdminRequest).adminContext;
+
+    if (!adminContext?.userId) {
+      return reply.status(401).send({
+        ok: false,
+        message: "Требуется вход в CRM",
+      });
+    }
+
+    if (!OWNER_ADMIN_ROLES.includes(adminContext.role)) {
+      return reply.status(403).send({
+        ok: false,
+        message: "Отключать Telegram клиента может только владелец или администратор",
+      });
+    }
+
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+
+      const customerRows = await client<{ id: string; name: string | null; phone: string }[]>`
+        SELECT id, name, phone
+        FROM customers
+        WHERE shop_id = ${shop.id}
+          AND id = ${params.id}
+        LIMIT 1
+      `;
+
+      const customer = customerRows[0];
+
+      if (!customer) {
+        return reply.status(404).send({
+          ok: false,
+          message: "Клиент не найден",
+        });
+      }
+
+      const result = await client.begin(async (transaction) =>
+        unlinkCustomerTelegramIdentity(transaction, {
+          shopId: shop.id,
+          customerId: customer.id,
+          source: "admin_customer_card",
+          actorUserId: adminContext.userId,
+          actorRole: adminContext.role,
+          ip: request.ip || null,
+          userAgent: String(request.headers["user-agent"] ?? "") || null,
+        }),
+      );
+
+      if (!result.unlinked) {
+        return reply.status(409).send({
+          ok: false,
+          code: "telegram_not_connected",
+          message: "У клиента нет активной Telegram-привязки",
+        });
+      }
+
+      return {
+        ok: true,
+        customerId: customer.id,
+        disconnectedAccounts: result.disconnectedAccounts,
+        staffLinksPreserved: result.staffLinksPreserved,
       };
     } finally {
       await client.end();

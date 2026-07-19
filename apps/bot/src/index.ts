@@ -37,6 +37,8 @@ type NotificationDelivery = {
   id: string;
   outbox_id: string;
   recipient_address: string;
+  recipient_user_id: string | null;
+  recipient_customer_id: string | null;
   status: string;
   attempts: number;
   max_attempts: number;
@@ -809,6 +811,180 @@ async function ensureTelegramAccount(update: TelegramUpdate) {
   `;
 }
 
+type CustomerTelegramUnlinkResult = {
+  unlinked: boolean;
+  customerId: string | null;
+  staffLinkPreserved: boolean;
+  remainingCustomerLinks: number;
+};
+
+async function unlinkCustomerTelegramFromBot(
+  chatId: number,
+): Promise<CustomerTelegramUnlinkResult> {
+  const telegramId = String(chatId);
+  const shopId = await getDefaultShopId();
+
+  if (!shopId) {
+    return {
+      unlinked: false,
+      customerId: null,
+      staffLinkPreserved: false,
+      remainingCustomerLinks: 0,
+    };
+  }
+
+  return sql.begin(async (transaction) => {
+    const accountRows = await transaction<
+      {
+        id: string;
+        customer_id: string | null;
+        user_id: string | null;
+      }[]
+    >`
+      SELECT id, customer_id, user_id
+      FROM telegram_accounts
+      WHERE shop_id = ${shopId}
+        AND telegram_id = ${telegramId}
+        AND is_active = true
+      LIMIT 1
+      FOR UPDATE
+    `;
+
+    const account = accountRows[0];
+
+    if (!account?.customer_id) {
+      return {
+        unlinked: false,
+        customerId: null,
+        staffLinkPreserved: Boolean(account?.user_id),
+        remainingCustomerLinks: 0,
+      };
+    }
+
+    const customerId = account.customer_id;
+    const staffLinkPreserved = Boolean(account.user_id);
+
+    await transaction`
+      UPDATE telegram_accounts
+      SET
+        customer_id = NULL,
+        is_active = CASE
+          WHEN user_id IS NOT NULL THEN true
+          ELSE false
+        END,
+        notifications_enabled = CASE
+          WHEN user_id IS NOT NULL THEN notifications_enabled
+          ELSE false
+        END,
+        updated_at = NOW()
+      WHERE id = ${account.id}
+    `;
+
+    await transaction`
+      UPDATE customer_channel_links
+      SET
+        is_active = false,
+        updated_at = NOW()
+      WHERE shop_id = ${shopId}
+        AND customer_id = ${customerId}
+        AND provider = 'telegram'
+        AND provider_user_id = ${telegramId}
+        AND is_active = true
+    `;
+
+    await transaction`
+      UPDATE customer_link_tokens
+      SET
+        status = 'cancelled',
+        updated_at = NOW()
+      WHERE shop_id = ${shopId}
+        AND customer_id = ${customerId}
+        AND provider = 'telegram'
+        AND purpose = 'connect_channel'
+        AND status = 'pending'
+        AND consumed_at IS NULL
+    `;
+
+    await transaction`
+      UPDATE notification_deliveries
+      SET
+        status = 'skipped',
+        locked_at = NULL,
+        locked_by = NULL,
+        last_error = 'Telegram отвязан покупателем в боте',
+        failed_at = COALESCE(failed_at, NOW()),
+        updated_at = NOW()
+      WHERE shop_id = ${shopId}
+        AND channel = 'telegram'
+        AND recipient_customer_id = ${customerId}
+        AND recipient_address = ${telegramId}
+        AND status IN ('pending', 'processing')
+    `;
+
+    const remainingRows = await transaction<{ count: number }[]>`
+      SELECT COUNT(*)::int AS count
+      FROM telegram_accounts
+      WHERE shop_id = ${shopId}
+        AND customer_id = ${customerId}
+        AND is_active = true
+    `;
+
+    const remainingCustomerLinks = Number(remainingRows[0]?.count ?? 0);
+
+    if (remainingCustomerLinks === 0) {
+      await transaction`
+        UPDATE notification_outbox
+        SET
+          status = 'skipped',
+          locked_at = NULL,
+          locked_by = NULL,
+          last_error = 'Telegram отвязан от профиля покупателя',
+          updated_at = NOW()
+        WHERE shop_id = ${shopId}
+          AND channel = 'telegram'
+          AND recipient_customer_id = ${customerId}
+          AND status IN ('pending', 'processing')
+      `;
+    }
+
+    await transaction`
+      INSERT INTO admin_audit_log (
+        shop_id,
+        actor_role,
+        event_type,
+        entity_type,
+        entity_id,
+        severity,
+        summary,
+        metadata,
+        created_at
+      )
+      VALUES (
+        ${shopId},
+        'customer',
+        'customer.telegram_unlinked',
+        'customer',
+        ${customerId},
+        'warning',
+        'Telegram отвязан покупателем в боте',
+        ${JSON.stringify({
+          source: 'telegram_bot',
+          staffLinkPreserved,
+          remainingCustomerLinks,
+        })}::jsonb,
+        NOW()
+      )
+    `;
+
+    return {
+      unlinked: true,
+      customerId,
+      staffLinkPreserved,
+      remainingCustomerLinks,
+    };
+  });
+}
+
 function createCustomerMagicToken() {
   return randomUUID().replace(/-/g, "") + randomUUID().replace(/-/g, "");
 }
@@ -935,6 +1111,31 @@ async function handleCustomerLinkToken(message: TelegramMessage, payload: string
         consumed_at = NOW(),
         updated_at = NOW()
     WHERE id = ${linkToken.id}
+  `;
+
+  await sql`
+    INSERT INTO admin_audit_log (
+      shop_id,
+      actor_role,
+      event_type,
+      entity_type,
+      entity_id,
+      severity,
+      summary,
+      metadata,
+      created_at
+    )
+    VALUES (
+      ${shopId},
+      'customer',
+      'customer.telegram_linked',
+      'customer',
+      ${linkToken.customer_id},
+      'info',
+      'Telegram подключён к профилю покупателя',
+      ${JSON.stringify({ source: 'telegram_bot', mode: 'one_time_code' })}::jsonb,
+      NOW()
+    )
   `;
 
   const magicLoginUrl = await createCustomerMagicLoginUrl({
@@ -3207,6 +3408,24 @@ async function handleCustomerProfile(chatId: number) {
         reply_markup: replyMarkup
       }
     );
+
+    if (profile.customer_id) {
+      await sendTelegramMessage(
+        chatId,
+        "Этот Telegram также связан с профилем покупателя.",
+        {
+          reply_markup: inlineKeyboard([
+            [
+              {
+                text: "🔌 Отвязать профиль покупателя",
+                callback_data: "customer:telegram:unlink:confirm"
+              }
+            ]
+          ])
+        }
+      );
+    }
+
     return;
   }
 
@@ -3276,12 +3495,18 @@ async function handleCustomerProfile(chatId: number) {
     }
   );
 
-  await sendTelegramMessage(chatId, "Открыть личный кабинет:", {
+  await sendTelegramMessage(chatId, "Управление профилем:", {
     reply_markup: inlineKeyboard([
       [
         {
           text: "Личный кабинет",
           url: loginUrl
+        }
+      ],
+      [
+        {
+          text: "🔌 Отвязать Telegram",
+          callback_data: "customer:telegram:unlink:confirm"
         }
       ]
     ])
@@ -7346,6 +7571,73 @@ async function handleCallbackQuery(callbackQuery: TelegramCallbackQuery) {
     return;
   }
 
+  if (data === "customer:telegram:unlink:confirm") {
+    const profile = await getTelegramProfile(String(chatId));
+
+    if (!profile?.customer_id) {
+      await answerCallbackQuery(callbackQuery.id, "Профиль покупателя не привязан");
+      return;
+    }
+
+    await answerCallbackQuery(callbackQuery.id);
+    await sendTelegramMessage(
+      chatId,
+      [
+        "Отвязать Telegram от профиля покупателя?",
+        "",
+        "Заказы, бонусы и адреса сохранятся.",
+        "Текущая сессия сайта останется активной до выхода или окончания срока.",
+        profile.user_id
+          ? "Рабочая привязка сотрудника останется активной."
+          : "После отвязки можно подключить этот или другой Telegram новым кодом."
+      ].join("\n"),
+      {
+        reply_markup: inlineKeyboard([
+          [
+            {
+              text: "Да, отвязать",
+              callback_data: "customer:telegram:unlink"
+            }
+          ],
+          [
+            {
+              text: "Отмена",
+              callback_data: "msg:delete"
+            }
+          ]
+        ])
+      }
+    );
+    return;
+  }
+
+  if (data === "customer:telegram:unlink") {
+    const result = await unlinkCustomerTelegramFromBot(chatId);
+
+    await answerCallbackQuery(
+      callbackQuery.id,
+      result.unlinked ? "Telegram отвязан" : "Профиль уже не привязан"
+    );
+
+    await sendTelegramMessage(
+      chatId,
+      result.unlinked
+        ? [
+            "✅ Telegram отвязан от профиля покупателя.",
+            "",
+            "Заказы, бонусы, адреса и текущая сессия сайта сохранены.",
+            result.staffLinkPreserved
+              ? "Рабочая привязка сотрудника продолжает работать."
+              : "Подключить Telegram снова можно новым одноразовым кодом."
+          ].join("\n")
+        : "Telegram уже не связан с профилем покупателя.",
+      {
+        reply_markup: await mainKeyboardForChat(chatId)
+      }
+    );
+    return;
+  }
+
   if (data.startsWith("bouquet:approve:")) {
     const orderId = data.slice("bouquet:approve:".length);
     await handleCustomerBouquetApprove(callbackQuery, orderId);
@@ -8914,10 +9206,44 @@ async function claimOutboxDelivery(deliveryId: string) {
       AND status = 'pending'
       AND attempts < max_attempts
       AND next_attempt_at <= NOW()
-    RETURNING id, outbox_id, recipient_address, status, attempts, max_attempts, next_attempt_at
+    RETURNING
+      id,
+      outbox_id,
+      recipient_address,
+      recipient_user_id,
+      recipient_customer_id,
+      status,
+      attempts,
+      max_attempts,
+      next_attempt_at
   `;
 
   return rows[0] || null;
+}
+
+async function notificationDeliveryRecipientIsActive(
+  event: NotificationOutboxEvent,
+  delivery: NotificationDelivery,
+) {
+  const rows = await sql<{ active: boolean }[]>`
+    SELECT EXISTS (
+      SELECT 1
+      FROM telegram_accounts ta
+      WHERE ta.shop_id = ${event.shop_id}
+        AND ta.telegram_id = ${delivery.recipient_address}
+        AND ta.is_active = true
+        AND (
+          ${delivery.recipient_user_id}::uuid IS NULL
+          OR ta.user_id = ${delivery.recipient_user_id}
+        )
+        AND (
+          ${delivery.recipient_customer_id}::uuid IS NULL
+          OR ta.customer_id = ${delivery.recipient_customer_id}
+        )
+    ) AS active
+  `;
+
+  return rows[0]?.active === true;
 }
 
 async function sendOutboxEventToRecipient(
@@ -9221,7 +9547,16 @@ async function processNotificationOutbox() {
     }
 
     const deliveries = await sql<NotificationDelivery[]>`
-      SELECT id, outbox_id, recipient_address, status, attempts, max_attempts, next_attempt_at
+      SELECT
+        id,
+        outbox_id,
+        recipient_address,
+        recipient_user_id,
+        recipient_customer_id,
+        status,
+        attempts,
+        max_attempts,
+        next_attempt_at
       FROM notification_deliveries
       WHERE outbox_id = ${event.id}
         AND channel = 'telegram'
@@ -9239,6 +9574,25 @@ async function processNotificationOutbox() {
       }
 
       try {
+        const recipientActive = await notificationDeliveryRecipientIsActive(
+          event,
+          delivery,
+        );
+
+        if (!recipientActive) {
+          await sql`
+            UPDATE notification_deliveries
+            SET status = 'skipped',
+                locked_at = NULL,
+                locked_by = NULL,
+                last_error = 'Telegram-привязка получателя больше не активна',
+                failed_at = COALESCE(failed_at, NOW()),
+                updated_at = NOW()
+            WHERE id = ${delivery.id}
+          `;
+          continue;
+        }
+
         await sendOutboxEventToRecipient(event, delivery.recipient_address);
 
         await sql`

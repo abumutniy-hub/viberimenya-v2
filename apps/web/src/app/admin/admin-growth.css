@@ -104,3 +104,34 @@
 @media (max-width: 1250px) { .admin-growth-metrics { grid-template-columns: repeat(3,minmax(0,1fr)); } .admin-customer-row { grid-template-columns: minmax(220px,1.4fr) repeat(2,minmax(120px,1fr)); } .admin-customer-row > div:nth-child(4), .admin-customer-row > div:nth-child(5) { display: none; } .admin-promo-form-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } .admin-promo-form-grid .wide { grid-column: span 2; } }
 @media (max-width: 800px) { .admin-growth-metrics { grid-template-columns: repeat(2,minmax(0,1fr)); } .admin-growth-filters, .admin-report-period { grid-template-columns: 1fr; } .admin-growth-two-columns, .admin-growth-two-columns.wide-left { grid-template-columns: 1fr; } .admin-customer-row { grid-template-columns: 1fr 1fr; } .admin-customer-main { grid-column: 1 / -1; } .admin-customer-row > div:nth-child(4), .admin-customer-row > div:nth-child(5) { display: grid; } .admin-bonus-history article { grid-template-columns: 1fr auto; } .admin-bonus-history time { grid-column: 1 / -1; } .admin-customer-orders a { grid-template-columns: 1fr auto; } .admin-customer-orders a > div:last-child { grid-column: 1 / -1; } .admin-promo-facts { grid-template-columns: repeat(2,minmax(0,1fr)); } }
 @media (max-width: 520px) { .admin-growth-metrics { grid-template-columns: 1fr 1fr; } .admin-growth-metrics article { min-height: 108px; padding: 14px; } .admin-customer-row { grid-template-columns: 1fr; } .admin-customer-main { grid-column: auto; } .admin-promo-form-grid { grid-template-columns: 1fr; } .admin-promo-form-grid .wide { grid-column: auto; } .admin-promo-card-head { flex-direction: column; } .admin-promo-facts { grid-template-columns: 1fr; } .admin-customer-data-list > div { grid-template-columns: 1fr; gap: 4px; } }
+
+/* Identity Core: управление Telegram клиента */
+.admin-customer-telegram-actions {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(103, 28, 48, .1);
+}
+
+.admin-customer-telegram-actions .danger-button {
+  width: fit-content;
+  min-height: 40px;
+  padding: 9px 14px;
+  border: 0;
+  border-radius: 11px;
+  background: #a72d3a;
+  color: #fff;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.admin-customer-telegram-actions .danger-button:disabled {
+  opacity: .55;
+  cursor: default;
+}
+
+.admin-customer-telegram-actions small {
+  color: #857a76;
+}

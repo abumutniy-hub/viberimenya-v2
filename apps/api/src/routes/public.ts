@@ -21,6 +21,7 @@ import {
   resolveProductAvailability
 } from "../lib/catalog-product";
 import { isYooKassaConfigured } from "../modules/payments/yookassa.service";
+import { unlinkCustomerTelegramIdentity } from "../modules/customers/customer-telegram-identity.service";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -2650,10 +2651,12 @@ export async function publicRoutes(app: FastifyInstance) {
       const telegramRows = await client<
         {
           telegram_id: string;
+          username: string | null;
           notifications_enabled: boolean;
+          linked_at: string;
         }[]
       >`
-        SELECT telegram_id, notifications_enabled
+        SELECT telegram_id, username, notifications_enabled, linked_at
         FROM telegram_accounts
         WHERE shop_id = ${session.shop_id}
           AND customer_id = ${session.customer_id}
@@ -2679,7 +2682,9 @@ export async function publicRoutes(app: FastifyInstance) {
         addresses,
         telegram: {
           connected: Boolean(telegramAccount?.telegram_id),
+          username: telegramAccount?.username ?? null,
           notificationsEnabled: telegramAccount?.notifications_enabled ?? false,
+          linkedAt: telegramAccount?.linked_at ?? null,
         },
       };
     } finally {
@@ -2825,6 +2830,63 @@ export async function publicRoutes(app: FastifyInstance) {
       }
     },
   );
+
+  app.delete("/api/public/account/telegram-link", async (request, reply) => {
+    const body = z
+      .object({
+        confirm: z.literal(true),
+      })
+      .parse(request.body ?? {});
+
+    void body;
+
+    const { client } = createDb();
+
+    try {
+      const session = await getActiveCustomerSession(
+        client,
+        request.headers.cookie,
+      );
+
+      if (!session) {
+        return reply.status(401).send({
+          ok: false,
+          message: "Требуется вход",
+        });
+      }
+
+      const result = await client.begin(async (transaction) =>
+        unlinkCustomerTelegramIdentity(transaction, {
+          shopId: session.shop_id,
+          customerId: session.customer_id,
+          source: "customer_account",
+          actorRole: "customer",
+          ip: request.ip || null,
+          userAgent: String(request.headers["user-agent"] ?? "") || null,
+        }),
+      );
+
+      if (!result.unlinked) {
+        return reply.status(409).send({
+          ok: false,
+          code: "telegram_not_connected",
+          message: "Telegram уже не подключён",
+        });
+      }
+
+      return {
+        ok: true,
+        disconnectedAccounts: result.disconnectedAccounts,
+        staffLinksPreserved: result.staffLinksPreserved,
+        message:
+          result.staffLinksPreserved > 0
+            ? "Профиль покупателя отвязан. Рабочая привязка сотрудника сохранена."
+            : "Telegram отвязан. Данные и текущая сессия сайта сохранены.",
+      };
+    } finally {
+      await client.end();
+    }
+  });
 
   app.post("/api/public/account/addresses", async (request, reply) => {
     const body = customerAddressSchema.parse(request.body ?? {});

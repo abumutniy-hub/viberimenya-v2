@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { fetchAdmin } from "../../lib/admin-api";
 import { BonusAdjustmentForm } from "./bonus-adjustment-form";
+import { CustomerTelegramActions } from "./customer-telegram-actions";
 
 export const dynamic = "force-dynamic";
 
@@ -13,7 +14,10 @@ type Response = {
   addresses: Record<string, any>[];
   bonuses: Record<string, any>[];
   topProducts: Record<string, any>[];
-  permissions: { canAdjustBonus: boolean };
+  permissions: {
+    canAdjustBonus: boolean;
+    canManageTelegram: boolean;
+  };
 };
 
 const segmentLabels: Record<string, string> = { new: "Новый", regular: "Постоянный", vip: "VIP", inactive: "Неактивный" };
@@ -66,6 +70,12 @@ export default async function CustomerPage({ params }: PageProps) {
             <div><dt>Telegram</dt><dd>{c.telegram_is_active ? c.linked_telegram_username ? `@${c.linked_telegram_username}` : "Подключён" : "Не подключён"}</dd></div>
             <div><dt>Уведомления</dt><dd>{c.telegram_is_active ? c.notifications_enabled ? "Включены" : "Выключены" : "—"}</dd></div>
           </dl>
+          <CustomerTelegramActions
+            customerId={id}
+            connected={c.telegram_is_active === true}
+            username={c.linked_telegram_username || null}
+            canManage={data.permissions.canManageTelegram === true}
+          />
         </section>
 
         <section className="admin-panel">

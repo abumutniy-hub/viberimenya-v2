@@ -69,7 +69,9 @@ type AccountResponse = {
   addresses?: Address[];
   telegram?: {
     connected?: boolean;
+    username?: string | null;
     notificationsEnabled?: boolean;
+    linkedAt?: string | null;
   };
   message?: string;
 };
@@ -185,6 +187,8 @@ export function AccountClient() {
   const [profileEmail, setProfileEmail] = useState("");
   const [profileSaving, setProfileSaving] = useState(false);
   const [telegramConnected, setTelegramConnected] = useState(false);
+  const [telegramUsername, setTelegramUsername] = useState("");
+  const [telegramLinkedAt, setTelegramLinkedAt] = useState<string | null>(null);
   const [telegramNotificationsEnabled, setTelegramNotificationsEnabled] =
     useState(false);
   const [telegramCode, setTelegramCode] = useState("");
@@ -236,6 +240,8 @@ export function AccountClient() {
         setProfileEmail(data.customer.email || "");
         const connected = data.telegram?.connected === true;
         setTelegramConnected(connected);
+        setTelegramUsername(String(data.telegram?.username || ""));
+        setTelegramLinkedAt(data.telegram?.linkedAt || null);
         setTelegramNotificationsEnabled(
           data.telegram?.notificationsEnabled === true,
         );
@@ -248,6 +254,11 @@ export function AccountClient() {
         setOrders([]);
         setBonuses([]);
         setAddresses([]);
+        setTelegramConnected(false);
+        setTelegramUsername("");
+        setTelegramLinkedAt(null);
+        setTelegramNotificationsEnabled(false);
+        setTelegramCode("");
       }
     } catch {
       setCustomer(null);
@@ -446,6 +457,59 @@ export function AccountClient() {
       );
     } catch {
       showMessage("Не удалось изменить уведомления", "error");
+    } finally {
+      setTelegramSaving(false);
+    }
+  }
+
+  async function unlinkTelegram() {
+    const confirmed = window.confirm(
+      [
+        "Отвязать Telegram от профиля?",
+        "",
+        "Заказы, бонусы, адреса и текущая сессия сайта сохранятся.",
+        "Уведомления в этот Telegram больше приходить не будут.",
+        "После выхода для нового входа потребуется снова подключить Telegram.",
+      ].join("\n"),
+    );
+
+    if (!confirmed) return;
+
+    setTelegramSaving(true);
+
+    try {
+      const response = await fetch("/api/public/account/telegram-link", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ confirm: true }),
+      });
+
+      const data = await readJson(response);
+
+      if (!response.ok || data.ok !== true) {
+        showMessage(
+          String(data.message || "Не удалось отвязать Telegram"),
+          "error",
+        );
+        return;
+      }
+
+      setTelegramConnected(false);
+      setTelegramUsername("");
+      setTelegramLinkedAt(null);
+      setTelegramNotificationsEnabled(false);
+      setTelegramCode("");
+      showMessage(
+        String(
+          data.message ||
+            "Telegram отвязан. Данные и текущая сессия сайта сохранены.",
+        ),
+        "success",
+      );
+      await loadAccount();
+    } catch {
+      showMessage("Не удалось отвязать Telegram", "error");
     } finally {
       setTelegramSaving(false);
     }
@@ -822,8 +886,12 @@ export function AccountClient() {
             <div>
               <h2>Telegram подключён</h2>
               <p>
+                {telegramUsername ? `@${telegramUsername} · ` : ""}
                 Получайте уведомления о подтверждении, сборке и доставке заказа.
               </p>
+              {telegramLinkedAt ? (
+                <small>Подключён {dateText(telegramLinkedAt)}</small>
+              ) : null}
             </div>
           </div>
 
@@ -841,6 +909,23 @@ export function AccountClient() {
               onChange={() => void toggleTelegramNotifications()}
             />
           </label>
+
+          <div className="account-telegram-unlink-row">
+            <div>
+              <strong>Сменить Telegram</strong>
+              <small>
+                Сначала отвяжите текущий аккаунт, затем подключите новый кодом.
+              </small>
+            </div>
+            <button
+              type="button"
+              className="account-danger-button"
+              disabled={telegramSaving}
+              onClick={() => void unlinkTelegram()}
+            >
+              {telegramSaving ? "Отключаем…" : "Отвязать Telegram"}
+            </button>
+          </div>
         </section>
       ) : (
         <section className="account-card">
