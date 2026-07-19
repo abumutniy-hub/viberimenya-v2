@@ -1,6 +1,8 @@
 import { sql } from "drizzle-orm";
 import {
+  bigint,
   boolean,
+  check,
   index,
   integer,
   jsonb,
@@ -8,6 +10,7 @@ import {
   pgTable,
   text,
   timestamp,
+  unique,
   uniqueIndex,
   uuid,
   varchar
@@ -496,10 +499,286 @@ export const chatMessages = pgTable(
     attachmentUrl: text("attachment_url"),
     isReadByStaff: boolean("is_read_by_staff").notNull().default(false),
     isReadByCustomer: boolean("is_read_by_customer").notNull().default(false),
+    messageScope: varchar("message_scope", { length: 40 }).notNull().default("customer"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
   },
   (table) => [
     index("chat_messages_chat_idx").on(table.chatId),
-    index("chat_messages_order_idx").on(table.orderId)
+    index("chat_messages_order_idx").on(table.orderId),
+    index("chat_messages_order_scope_idx").on(
+      table.orderId,
+      table.messageScope,
+      table.createdAt
+    )
+  ]
+);
+
+export const adminAuditLog = pgTable(
+  "admin_audit_log",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    shopId: uuid("shop_id").notNull().references(() => shops.id, { onDelete: "cascade" }),
+    actorUserId: uuid("actor_user_id").references(() => users.id, { onDelete: "set null" }),
+    actorRole: varchar("actor_role", { length: 32 }),
+    eventType: varchar("event_type", { length: 100 }).notNull(),
+    entityType: varchar("entity_type", { length: 80 }),
+    entityId: text("entity_id"),
+    severity: varchar("severity", { length: 20 }).notNull().default("info"),
+    ip: varchar("ip", { length: 80 }),
+    userAgent: text("user_agent"),
+    summary: varchar("summary", { length: 500 }).notNull(),
+    metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => [
+    index("admin_audit_log_actor_idx").on(
+      table.shopId,
+      table.actorUserId,
+      table.createdAt.desc()
+    ),
+    index("admin_audit_log_severity_idx").on(
+      table.shopId,
+      table.severity,
+      table.createdAt.desc()
+    ),
+    index("admin_audit_log_shop_created_idx").on(
+      table.shopId,
+      table.createdAt.desc()
+    ),
+    index("admin_audit_log_shop_event_idx").on(
+      table.shopId,
+      table.eventType,
+      table.createdAt.desc()
+    ),
+    check(
+      "admin_audit_log_severity_check",
+      sql`${table.severity} in ('info', 'warning', 'critical')`
+    )
+  ]
+);
+
+export const adminSessions = pgTable(
+  "admin_sessions",
+  {
+    token: text("token").primaryKey(),
+    shopId: uuid("shop_id").notNull().references(() => shops.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    ip: text("ip"),
+    userAgent: text("user_agent"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => [
+    index("idx_admin_sessions_expires_at").on(table.expiresAt),
+    index("idx_admin_sessions_shop_user_active")
+      .on(table.shopId, table.userId)
+      .where(sql`${table.revokedAt} is null`),
+    index("idx_admin_sessions_user_id").on(table.userId)
+  ]
+);
+
+export const customerChannelLinks = pgTable(
+  "customer_channel_links",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    shopId: uuid("shop_id").notNull().references(() => shops.id, { onDelete: "cascade" }),
+    customerId: uuid("customer_id").notNull().references(() => customers.id, { onDelete: "cascade" }),
+    provider: varchar("provider", { length: 40 }).notNull(),
+    providerUserId: varchar("provider_user_id", { length: 160 }).notNull(),
+    providerUsername: varchar("provider_username", { length: 160 }),
+    providerDisplayName: varchar("provider_display_name", { length: 220 }),
+    isActive: boolean("is_active").notNull().default(true),
+    linkedAt: timestamp("linked_at", { withTimezone: true }).notNull().defaultNow(),
+    ...timestamps
+  },
+  (table) => [
+    uniqueIndex("customer_channel_links_provider_uidx").on(
+      table.shopId,
+      table.provider,
+      table.providerUserId
+    ),
+    index("customer_channel_links_customer_idx").on(
+      table.shopId,
+      table.customerId
+    )
+  ]
+);
+
+export const customerLinkTokens = pgTable(
+  "customer_link_tokens",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    shopId: uuid("shop_id").notNull().references(() => shops.id, { onDelete: "cascade" }),
+    customerId: uuid("customer_id").notNull().references(() => customers.id, { onDelete: "cascade" }),
+    orderId: uuid("order_id").references(() => orders.id, { onDelete: "cascade" }),
+    provider: varchar("provider", { length: 40 }).notNull(),
+    purpose: varchar("purpose", { length: 80 }).notNull(),
+    token: varchar("token", { length: 180 }).notNull(),
+    status: varchar("status", { length: 40 }).notNull().default("pending"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
+    ...timestamps
+  },
+  (table) => [
+    unique("customer_link_tokens_token_key").on(table.token),
+    index("customer_link_tokens_lookup_idx").on(
+      table.provider,
+      table.purpose,
+      table.token,
+      table.status,
+      table.expiresAt
+    ),
+    index("customer_link_tokens_customer_idx").on(
+      table.shopId,
+      table.customerId
+    )
+  ]
+);
+
+export const customerLoginCodes = pgTable(
+  "customer_login_codes",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    shopId: uuid("shop_id").notNull().references(() => shops.id, { onDelete: "cascade" }),
+    customerId: uuid("customer_id").references(() => customers.id, { onDelete: "cascade" }),
+    phone: varchar("phone", { length: 32 }).notNull(),
+    code: varchar("code", { length: 12 }).notNull(),
+    attempts: integer("attempts").notNull().default(0),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => [
+    index("customer_login_codes_phone_idx").on(
+      table.shopId,
+      table.phone,
+      table.createdAt.desc()
+    ),
+    index("customer_login_codes_customer_idx").on(table.customerId)
+  ]
+);
+
+export const customerSessions = pgTable(
+  "customer_sessions",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    shopId: uuid("shop_id").notNull().references(() => shops.id, { onDelete: "cascade" }),
+    customerId: uuid("customer_id").notNull().references(() => customers.id, { onDelete: "cascade" }),
+    token: text("token").notNull(),
+    userAgent: text("user_agent"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => [
+    unique("customer_sessions_token_key").on(table.token),
+    index("customer_sessions_customer_idx").on(table.customerId),
+    index("customer_sessions_token_idx").on(table.token)
+  ]
+);
+
+export const employeeLinkTokens = pgTable(
+  "employee_link_tokens",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    shopId: uuid("shop_id").notNull().references(() => shops.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    provider: varchar("provider", { length: 50 }).notNull().default("telegram"),
+    purpose: varchar("purpose", { length: 80 }).notNull().default("connect_staff"),
+    token: varchar("token", { length: 255 }).notNull(),
+    status: varchar("status", { length: 50 }).notNull().default("pending"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
+    ...timestamps
+  },
+  (table) => [
+    unique("employee_link_tokens_token_key").on(table.token),
+    index("employee_link_tokens_shop_user_idx").on(
+      table.shopId,
+      table.userId
+    ),
+    index("employee_link_tokens_token_idx").on(table.token)
+  ]
+);
+
+export const notificationEvents = pgTable(
+  "notification_events",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    shopId: uuid("shop_id").notNull().references(() => shops.id, { onDelete: "cascade" }),
+    orderId: uuid("order_id").references(() => orders.id, { onDelete: "cascade" }),
+    type: varchar("type", { length: 80 }).notNull(),
+    channel: varchar("channel", { length: 40 }).notNull().default("telegram"),
+    recipientType: varchar("recipient_type", { length: 40 }).notNull().default("staff"),
+    recipientTelegramId: varchar("recipient_telegram_id", { length: 80 }),
+    status: varchar("status", { length: 40 }).notNull().default("pending"),
+    payload: jsonb("payload").notNull().default(sql`'{}'::jsonb`),
+    error: text("error"),
+    attempts: integer("attempts").notNull().default(0),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    ...timestamps
+  },
+  (table) => [
+    index("notification_events_shop_status_idx").on(
+      table.shopId,
+      table.status,
+      table.createdAt
+    ),
+    index("notification_events_order_idx").on(table.orderId),
+    index("notification_events_type_idx").on(table.type)
+  ]
+);
+
+export const telegramCartItems = pgTable(
+  "telegram_cart_items",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    shopId: uuid("shop_id").notNull().references(() => shops.id, { onDelete: "cascade" }),
+    telegramChatId: bigint("telegram_chat_id", { mode: "number" }).notNull(),
+    productId: uuid("product_id").notNull().references(() => products.id, { onDelete: "cascade" }),
+    quantity: integer("quantity").notNull().default(1),
+    ...timestamps
+  },
+  (table) => [
+    unique("telegram_cart_items_shop_id_telegram_chat_id_product_id_key").on(
+      table.shopId,
+      table.telegramChatId,
+      table.productId
+    ),
+    index("idx_telegram_cart_items_chat").on(
+      table.shopId,
+      table.telegramChatId
+    ),
+    check(
+      "telegram_cart_items_quantity_check",
+      sql`${table.quantity} > 0`
+    )
+  ]
+);
+
+export const telegramCheckoutSessions = pgTable(
+  "telegram_checkout_sessions",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    shopId: uuid("shop_id").notNull().references(() => shops.id, { onDelete: "cascade" }),
+    telegramChatId: bigint("telegram_chat_id", { mode: "number" }).notNull(),
+    step: varchar("step", { length: 80 }).notNull(),
+    data: jsonb("data").notNull().default(sql`'{}'::jsonb`),
+    ...timestamps
+  },
+  (table) => [
+    unique("telegram_checkout_sessions_shop_id_telegram_chat_id_key").on(
+      table.shopId,
+      table.telegramChatId
+    ),
+    index("idx_telegram_checkout_sessions_chat").on(
+      table.shopId,
+      table.telegramChatId
+    )
   ]
 );

@@ -10,9 +10,10 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:push": "drizzle-kit push",
+    "db:push": "node ../../scripts/db/guard-production-db-push.mjs && drizzle-kit push",
     "db:seed": "tsx scripts/seed-initial-shop.ts",
-    "db:check": "tsx scripts/check-db.ts"
+    "db:check": "tsx scripts/check-db.ts",
+    "db:drift": "node ../../scripts/db/check-schema-drift.mjs"
   },
   "dependencies": {
     "dotenv": "^17.2.3",

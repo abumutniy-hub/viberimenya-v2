@@ -19,6 +19,18 @@ for (const envPath of envPaths) {
   }
 }
 
+
+const projectRoot = resolve(__dirname, "../..");
+const pushRequested = process.argv.some((argument) => argument === "push");
+const productionPath = projectRoot === "/var/www/viberimenya-v2";
+const productionEnvironment = process.env.NODE_ENV === "production";
+
+if (pushRequested && (productionPath || productionEnvironment)) {
+  throw new Error(
+    "db:push заблокирован на production. Используйте только проверенные SQL-миграции."
+  );
+}
+
 if (!process.env.DATABASE_URL) {
   throw new Error("DATABASE_URL is required");
 }
