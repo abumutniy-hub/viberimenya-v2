@@ -28,6 +28,7 @@ import {
 } from "../modules/admin/admin-security.service";
 import { registerAdminSecurityRoutes } from "./admin-security";
 import { registerAdminSystemRoutes } from "./admin-system";
+import { registerAdminNotificationRoutes } from "./admin-notifications";
 import {
   createOrReuseYooKassaPayment,
   finalizeYooKassaRefund,
@@ -1502,6 +1503,7 @@ export async function adminRoutes(app: FastifyInstance) {
 
   registerAdminSecurityRoutes(app);
   registerAdminSystemRoutes(app);
+  registerAdminNotificationRoutes(app);
 
   app.post("/api/admin/auth/login", async (request, reply) => {
     const body = adminLoginSchema.parse(request.body ?? {});
@@ -2075,8 +2077,8 @@ export async function adminRoutes(app: FastifyInstance) {
           SELECT
             COUNT(*) FILTER (WHERE status = 'pending')::int AS pending,
             COUNT(*) FILTER (WHERE status = 'processing')::int AS processing,
-            COUNT(*) FILTER (WHERE status = 'failed')::int AS failed
-          FROM notification_events
+            COUNT(*) FILTER (WHERE status IN ('dead', 'partial'))::int AS failed
+          FROM notification_outbox
           WHERE shop_id = ${shop.id}
             AND created_at > NOW() - INTERVAL '30 days'
         `
@@ -11017,269 +11019,6 @@ export async function adminRoutes(app: FastifyInstance) {
     }
   });
 
-
-  app.get("/api/admin/notifications", async (request) => {
-    const query = z.object({
-      status: z.enum([
-        "all",
-        "pending",
-        "processing",
-        "sent",
-        "failed",
-        "skipped"
-      ]).optional().default("all"),
-      recipientType: z.enum([
-        "all",
-        "customer",
-        "staff"
-      ]).optional().default("all"),
-      type: z.string().trim().max(80).optional().default(""),
-      q: z.string().trim().max(160).optional().default(""),
-      page: z.coerce.number().int().min(1).max(100000).optional().default(1),
-      pageSize: z.coerce.number().int().min(10).max(100).optional().default(30)
-    }).parse(request.query ?? {});
-
-    const { client } = createDb();
-
-    try {
-      const shop = await getShop(client);
-      const offset = (query.page - 1) * query.pageSize;
-      const search = `%${query.q}%`;
-      const typeFilter = query.type ? `%${query.type}%` : "%";
-
-      const [metricsRows, totalRows, eventRows, typeRows] = await Promise.all([
-        client<{
-          pending: number;
-          processing: number;
-          sent: number;
-          failed: number;
-          skipped: number;
-          sent_today: number;
-        }[]>`
-          SELECT
-            COUNT(*) FILTER (WHERE status = 'pending')::int AS pending,
-            COUNT(*) FILTER (WHERE status = 'processing')::int AS processing,
-            COUNT(*) FILTER (WHERE status = 'sent')::int AS sent,
-            COUNT(*) FILTER (WHERE status = 'failed')::int AS failed,
-            COUNT(*) FILTER (WHERE status = 'skipped')::int AS skipped,
-            COUNT(*) FILTER (
-              WHERE status = 'sent'
-                AND (sent_at AT TIME ZONE 'Europe/Moscow')::date
-                  = (NOW() AT TIME ZONE 'Europe/Moscow')::date
-            )::int AS sent_today
-          FROM notification_events
-          WHERE shop_id = ${shop.id}
-            AND created_at > NOW() - INTERVAL '30 days'
-        `,
-        client<{ count: number }[]>`
-          SELECT COUNT(*)::int AS count
-          FROM notification_events ne
-          LEFT JOIN orders o ON o.id = ne.order_id
-          WHERE ne.shop_id = ${shop.id}
-            AND (${query.status} = 'all' OR ne.status = ${query.status})
-            AND (${query.recipientType} = 'all' OR ne.recipient_type = ${query.recipientType})
-            AND ne.type ILIKE ${typeFilter}
-            AND (
-              ${query.q} = ''
-              OR ne.type ILIKE ${search}
-              OR COALESCE(ne.error, '') ILIKE ${search}
-              OR COALESCE(ne.recipient_telegram_id, '') ILIKE ${search}
-              OR COALESCE(o.order_number, '') ILIKE ${search}
-            )
-        `,
-        client<{
-          id: string;
-          order_id: string | null;
-          order_number: string | null;
-          type: string;
-          channel: string;
-          recipient_type: string;
-          recipient_telegram_id: string | null;
-          status: string;
-          attempts: number;
-          error: string | null;
-          payload: unknown;
-          sent_at: string | null;
-          created_at: string;
-          updated_at: string;
-        }[]>`
-          SELECT
-            ne.id,
-            ne.order_id,
-            o.order_number,
-            ne.type,
-            ne.channel,
-            ne.recipient_type,
-            ne.recipient_telegram_id,
-            ne.status,
-            ne.attempts,
-            ne.error,
-            ne.payload,
-            ne.sent_at::text,
-            ne.created_at::text,
-            ne.updated_at::text
-          FROM notification_events ne
-          LEFT JOIN orders o ON o.id = ne.order_id
-          WHERE ne.shop_id = ${shop.id}
-            AND (${query.status} = 'all' OR ne.status = ${query.status})
-            AND (${query.recipientType} = 'all' OR ne.recipient_type = ${query.recipientType})
-            AND ne.type ILIKE ${typeFilter}
-            AND (
-              ${query.q} = ''
-              OR ne.type ILIKE ${search}
-              OR COALESCE(ne.error, '') ILIKE ${search}
-              OR COALESCE(ne.recipient_telegram_id, '') ILIKE ${search}
-              OR COALESCE(o.order_number, '') ILIKE ${search}
-            )
-          ORDER BY
-            CASE ne.status
-              WHEN 'failed' THEN 1
-              WHEN 'pending' THEN 2
-              WHEN 'processing' THEN 3
-              WHEN 'skipped' THEN 4
-              ELSE 5
-            END,
-            ne.created_at DESC
-          LIMIT ${query.pageSize}
-          OFFSET ${offset}
-        `,
-        client<{ type: string; count: number }[]>`
-          SELECT type, COUNT(*)::int AS count
-          FROM notification_events
-          WHERE shop_id = ${shop.id}
-            AND created_at > NOW() - INTERVAL '30 days'
-          GROUP BY type
-          ORDER BY count DESC, type ASC
-          LIMIT 40
-        `
-      ]);
-
-      return {
-        ok: true,
-        metrics: metricsRows[0] ?? {
-          pending: 0,
-          processing: 0,
-          sent: 0,
-          failed: 0,
-          skipped: 0,
-          sent_today: 0
-        },
-        events: eventRows,
-        types: typeRows,
-        pagination: {
-          page: query.page,
-          pageSize: query.pageSize,
-          total: Number(totalRows[0]?.count ?? 0),
-          pages: Math.max(1, Math.ceil(Number(totalRows[0]?.count ?? 0) / query.pageSize))
-        }
-      };
-    } finally {
-      await client.end();
-    }
-  });
-
-  app.post("/api/admin/notifications/:id/retry", async (request, reply) => {
-    const params = z.object({
-      id: z.string().uuid()
-    }).parse(request.params ?? {});
-
-    const { client } = createDb();
-
-    try {
-      const shop = await getShop(client);
-      const rows = await client<{ id: string }[]>`
-        UPDATE notification_events
-        SET status = 'pending',
-            attempts = 0,
-            error = NULL,
-            sent_at = NULL,
-            updated_at = NOW()
-        WHERE shop_id = ${shop.id}
-          AND id = ${params.id}
-          AND status IN ('failed', 'skipped')
-        RETURNING id
-      `;
-
-      if (!rows[0]) {
-        return reply.status(409).send({
-          ok: false,
-          message: "Повтор доступен только для пропущенного или неотправленного уведомления"
-        });
-      }
-
-      return { ok: true };
-    } finally {
-      await client.end();
-    }
-  });
-
-  app.post("/api/admin/notifications/:id/skip", async (request, reply) => {
-    const params = z.object({
-      id: z.string().uuid()
-    }).parse(request.params ?? {});
-
-    const { client } = createDb();
-
-    try {
-      const shop = await getShop(client);
-      const rows = await client<{ id: string }[]>`
-        UPDATE notification_events
-        SET status = 'skipped',
-            error = COALESCE(error, 'Отменено сотрудником CRM'),
-            updated_at = NOW()
-        WHERE shop_id = ${shop.id}
-          AND id = ${params.id}
-          AND status IN ('pending', 'processing', 'failed')
-        RETURNING id
-      `;
-
-      if (!rows[0]) {
-        return reply.status(409).send({
-          ok: false,
-          message: "Это уведомление уже обработано"
-        });
-      }
-
-      return { ok: true };
-    } finally {
-      await client.end();
-    }
-  });
-
-  app.post("/api/admin/notifications/retry-failed", async () => {
-    const { client } = createDb();
-
-    try {
-      const shop = await getShop(client);
-      const rows = await client<{ id: string }[]>`
-        WITH failed_events AS (
-          SELECT id
-          FROM notification_events
-          WHERE shop_id = ${shop.id}
-            AND status = 'failed'
-            AND created_at > NOW() - INTERVAL '30 days'
-          ORDER BY created_at ASC
-          LIMIT 100
-        )
-        UPDATE notification_events ne
-        SET status = 'pending',
-            attempts = 0,
-            error = NULL,
-            sent_at = NULL,
-            updated_at = NOW()
-        FROM failed_events
-        WHERE ne.id = failed_events.id
-        RETURNING ne.id
-      `;
-
-      return {
-        ok: true,
-        retried: rows.length
-      };
-    } finally {
-      await client.end();
-    }
-  });
 
   app.get("/api/admin/settings", async () => {
     const { client } = createDb();

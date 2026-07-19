@@ -296,10 +296,10 @@ export default async function AdminDashboardPage() {
             <strong>{metrics.processingNotifications}</strong>
           </a>
           <a
-            href="/admin/notifications?status=failed"
+            href="/admin/notifications?status=dead"
             className={metrics.failedNotifications > 0 ? "danger" : ""}
           >
-            <span>Ошибки отправки</span>
+            <span>Dead-letter / частично</span>
             <strong>{metrics.failedNotifications}</strong>
           </a>
         </div>
