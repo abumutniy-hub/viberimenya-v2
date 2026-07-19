@@ -13,7 +13,8 @@
     "db:push": "node ../../scripts/db/guard-production-db-push.mjs && drizzle-kit push",
     "db:seed": "tsx scripts/seed-initial-shop.ts",
     "db:check": "tsx scripts/check-db.ts",
-    "db:drift": "node ../../scripts/db/check-schema-drift.mjs"
+    "db:drift": "node ../../scripts/db/check-schema-drift.mjs",
+    "db:migration:check": "node ../../scripts/db/check-migration-integrity.mjs"
   },
   "dependencies": {
     "dotenv": "^17.2.3",
