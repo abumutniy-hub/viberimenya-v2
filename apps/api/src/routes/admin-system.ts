@@ -40,6 +40,7 @@ const monitoringSettingsSchema = z.object({
   dailySummaryEnabled: z.boolean(),
   autoRestartEnabled: z.boolean(),
   backupRetentionDays: z.number().int().min(7).max(90),
+  backupMaxCount: z.number().int().min(5).max(30),
   diskWarningPercent: z.number().int().min(60).max(90),
   diskCriticalPercent: z.number().int().min(75).max(99),
   staleOrderMinutes: z.number().int().min(30).max(720),
@@ -96,6 +97,22 @@ async function automaticBackups(limit = 12) {
       mode: String(manifest?.mode ?? "unknown"),
       sizeBytes: await directorySize(path).catch(() => 0),
       uploadsIncluded: Boolean(manifest?.uploadsIncluded),
+      uploadsStorageMode: String(
+        manifest?.uploadsStorageMode
+          ?? (manifest?.uploadsIncluded ? "legacy" : "not_present")
+      ),
+      uploadsSourceBackup: manifest?.uploadsSourceBackup
+        ? String(manifest.uploadsSourceBackup)
+        : null,
+      uploadsArchiveBytes: Number(manifest?.uploadsArchiveBytes ?? 0),
+      additionalStorageBytes: Number(
+        manifest?.additionalStorageBytes
+          ?? (manifest?.uploadsIncluded
+            ? await stat(join(path, String(manifest?.uploadsFile ?? "uploads.tar.gz")))
+                .then((item) => item.size)
+                .catch(() => 0)
+            : 0)
+      ),
       envEncrypted: Boolean(manifest?.envEncrypted),
     });
   }
@@ -197,6 +214,7 @@ async function monitoringSettings(client: ReturnType<typeof createDb>["client"],
     dailySummaryEnabled: raw.dailySummaryEnabled === true,
     autoRestartEnabled: raw.autoRestartEnabled !== false,
     backupRetentionDays: Math.min(90, Math.max(7, Number(raw.backupRetentionDays ?? 30) || 30)),
+    backupMaxCount: Math.min(30, Math.max(5, Number(raw.backupMaxCount ?? 7) || 7)),
     diskWarningPercent: Math.min(90, Math.max(60, Number(raw.diskWarningPercent ?? 75) || 75)),
     diskCriticalPercent: Math.min(99, Math.max(75, Number(raw.diskCriticalPercent ?? 90) || 90)),
     staleOrderMinutes: Math.min(720, Math.max(30, Number(raw.staleOrderMinutes ?? 120) || 120)),

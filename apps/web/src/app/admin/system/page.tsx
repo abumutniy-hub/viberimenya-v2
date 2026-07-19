@@ -34,6 +34,7 @@ type SystemResponse = {
     dailySummaryEnabled: boolean;
     autoRestartEnabled: boolean;
     backupRetentionDays: number;
+    backupMaxCount: number;
     diskWarningPercent: number;
     diskCriticalPercent: number;
     staleOrderMinutes: number;
@@ -112,6 +113,7 @@ export default async function AdminSystemPage() {
     dailySummaryEnabled: false,
     autoRestartEnabled: true,
     backupRetentionDays: 30,
+    backupMaxCount: 7,
     diskWarningPercent: 75,
     diskCriticalPercent: 90,
     staleOrderMinutes: 120,
@@ -135,7 +137,7 @@ export default async function AdminSystemPage() {
 
       <section className="admin-system-actions">
         <SystemActionButton action="diagnostics">Проверить сейчас</SystemActionButton>
-        <SystemActionButton action="backup" confirmText="Создать полную резервную копию базы, загрузок и зашифрованного .env сейчас?">
+        <SystemActionButton action="backup" confirmText="Создать резервную копию базы и зашифрованного .env? Неизменившийся архив фотографий будет переиспользован без повторного расхода диска.">
           Создать резервную копию
         </SystemActionButton>
         <SystemActionButton action="restore-check" confirmText="Проверить восстановление последней копии во временную базу? Работающий магазин не изменится.">
@@ -153,7 +155,11 @@ export default async function AdminSystemPage() {
         <article className={statusClass(data?.lastBackup?.status)}>
           <span>Последняя копия</span>
           <strong>{dateText(data?.lastBackup?.completedAt)}</strong>
-          <small>{text(data?.lastBackup?.mode, "автоматически")}</small>
+          <small>
+            {text(data?.lastBackup?.uploadsStorageMode) === "reused_hardlink"
+              ? "Фото переиспользованы без дублирования"
+              : text(data?.lastBackup?.mode, "автоматически")}
+          </small>
         </article>
         <article className={statusClass(data?.lastRestoreCheck?.status)}>
           <span>Проверка восстановления</span>
@@ -215,7 +221,7 @@ export default async function AdminSystemPage() {
             </div>
           </div>
           <div className="admin-system-recovery-note">
-            <p>База сохраняется в формате PostgreSQL custom, фотографии — отдельным архивом, `.env` — только в зашифрованном виде.</p>
+            <p>База сохраняется в формате PostgreSQL custom, `.env` — только в зашифрованном виде. Неизменившийся архив фотографий переиспользуется через hardlink и не занимает место повторно.</p>
             <dl>
               <div><dt>Архивы</dt><dd>{text(data?.recovery?.backupRoot)}</dd></div>
               <div><dt>Ключ</dt><dd>{text(data?.recovery?.keyPath)}</dd></div>
@@ -245,13 +251,23 @@ export default async function AdminSystemPage() {
         {backups.length ? (
           <div className="admin-system-table-wrap">
             <table className="admin-table">
-              <thead><tr><th>Создана</th><th>Режим</th><th>Размер</th><th>Содержимое</th><th>Статус</th></tr></thead>
+              <thead><tr><th>Создана</th><th>Режим</th><th>Логический размер</th><th>Добавлено на диск</th><th>Содержимое</th><th>Статус</th></tr></thead>
               <tbody>
                 {backups.map((backup) => (
                   <tr key={text(backup.name)}>
                     <td><strong>{dateText(backup.createdAt)}</strong><small>{text(backup.name)}</small></td>
                     <td>{text(backup.mode)}</td>
                     <td>{bytes(backup.sizeBytes)}</td>
+                    <td>
+                      <strong>{bytes(backup.additionalStorageBytes)}</strong>
+                      <small>
+                        {text(backup.uploadsStorageMode) === "reused_hardlink"
+                          ? "фото переиспользованы"
+                          : text(backup.uploadsStorageMode) === "created"
+                            ? "создан новый архив фото"
+                            : "legacy backup"}
+                      </small>
+                    </td>
                     <td>{bool(backup.uploadsIncluded) ? "База + фото + настройки" : "База + настройки"}</td>
                     <td><span className={`admin-system-status-pill ${statusClass(backup.status)}`}>{statusLabel(backup.status)}</span></td>
                   </tr>

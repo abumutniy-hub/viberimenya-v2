@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { createReadStream, existsSync } from "node:fs";
 import {
   appendFile,
   chmod,
@@ -176,8 +176,12 @@ export async function ensureEncryptionKey() {
 
 export async function sha256File(path) {
   const hash = createHash("sha256");
-  const content = await readFile(path);
-  hash.update(content);
+  await new Promise((resolvePromise, rejectPromise) => {
+    const stream = createReadStream(path);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.once("error", rejectPromise);
+    stream.once("end", resolvePromise);
+  });
   return hash.digest("hex");
 }
 
@@ -230,6 +234,7 @@ export async function monitoringSettings(databaseUrl) {
     dailySummaryEnabled: false,
     autoRestartEnabled: true,
     backupRetentionDays: 30,
+    backupMaxCount: 7,
     diskWarningPercent: 75,
     diskCriticalPercent: 90,
     staleOrderMinutes: 120,
@@ -245,6 +250,7 @@ export async function monitoringSettings(databaseUrl) {
           'dailySummaryEnabled', COALESCE((ss.settings #>> '{systemMonitoring,dailySummaryEnabled}')::boolean, false),
           'autoRestartEnabled', COALESCE((ss.settings #>> '{systemMonitoring,autoRestartEnabled}')::boolean, true),
           'backupRetentionDays', COALESCE(NULLIF(ss.settings #>> '{systemMonitoring,backupRetentionDays}', '')::int, 30),
+          'backupMaxCount', COALESCE(NULLIF(ss.settings #>> '{systemMonitoring,backupMaxCount}', '')::int, 7),
           'diskWarningPercent', COALESCE(NULLIF(ss.settings #>> '{systemMonitoring,diskWarningPercent}', '')::int, 75),
           'diskCriticalPercent', COALESCE(NULLIF(ss.settings #>> '{systemMonitoring,diskCriticalPercent}', '')::int, 90),
           'staleOrderMinutes', COALESCE(NULLIF(ss.settings #>> '{systemMonitoring,staleOrderMinutes}', '')::int, 120)
@@ -263,6 +269,7 @@ export async function monitoringSettings(databaseUrl) {
       dailySummaryEnabled: parseBoolean(data.dailySummaryEnabled, defaults.dailySummaryEnabled),
       autoRestartEnabled: parseBoolean(data.autoRestartEnabled, defaults.autoRestartEnabled),
       backupRetentionDays: clampNumber(data.backupRetentionDays, 7, 90, defaults.backupRetentionDays),
+      backupMaxCount: clampNumber(data.backupMaxCount, 5, 30, defaults.backupMaxCount),
       diskWarningPercent: clampNumber(data.diskWarningPercent, 60, 90, defaults.diskWarningPercent),
       diskCriticalPercent: clampNumber(data.diskCriticalPercent, 75, 99, defaults.diskCriticalPercent),
       staleOrderMinutes: clampNumber(data.staleOrderMinutes, 30, 720, defaults.staleOrderMinutes),
@@ -343,7 +350,14 @@ export async function listAutomaticBackups(limit = 20) {
       status: manifest?.status || "incomplete",
       sizeBytes: await directorySize(fullPath).catch(() => 0),
       databaseFile: manifest?.databaseFile || "database.dump",
+      uploadsFile: manifest?.uploadsFile || "uploads.tar.gz",
       uploadsIncluded: Boolean(manifest?.uploadsIncluded),
+      uploadsStorageMode: String(manifest?.uploadsStorageMode || (manifest?.uploadsIncluded ? "legacy" : "not_present")),
+      uploadsSourceBackup: manifest?.uploadsSourceBackup ? String(manifest.uploadsSourceBackup) : null,
+      uploadsFingerprint: manifest?.uploadsFingerprint ? String(manifest.uploadsFingerprint) : null,
+      uploadsArchiveSha256: manifest?.uploadsArchiveSha256 ? String(manifest.uploadsArchiveSha256) : null,
+      uploadsArchiveBytes: Number(manifest?.uploadsArchiveBytes || 0),
+      additionalStorageBytes: Number(manifest?.additionalStorageBytes ?? (manifest?.uploadsIncluded ? await stat(join(fullPath, manifest?.uploadsFile || "uploads.tar.gz")).then((item) => item.size).catch(() => 0) : 0)),
       envEncrypted: Boolean(manifest?.envEncrypted),
     });
   }

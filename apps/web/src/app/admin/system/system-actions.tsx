@@ -11,6 +11,7 @@ type Settings = {
   dailySummaryEnabled: boolean;
   autoRestartEnabled: boolean;
   backupRetentionDays: number;
+  backupMaxCount: number;
   diskWarningPercent: number;
   diskCriticalPercent: number;
   staleOrderMinutes: number;
@@ -90,6 +91,7 @@ export function MonitoringSettingsForm({ initial }: { initial: Settings }) {
       dailySummaryEnabled: form.get("dailySummaryEnabled") === "on",
       autoRestartEnabled: form.get("autoRestartEnabled") === "on",
       backupRetentionDays: Number(form.get("backupRetentionDays") || 30),
+      backupMaxCount: Number(form.get("backupMaxCount") || 7),
       diskWarningPercent: Number(form.get("diskWarningPercent") || 75),
       diskCriticalPercent: Number(form.get("diskCriticalPercent") || 90),
       staleOrderMinutes: Number(form.get("staleOrderMinutes") || 120),
@@ -165,6 +167,17 @@ export function MonitoringSettingsForm({ initial }: { initial: Settings }) {
             <option value="45">45 дней</option>
             <option value="60">60 дней</option>
             <option value="90">90 дней</option>
+          </select>
+        </label>
+        <label>
+          <span>Максимум резервных копий</span>
+          <select name="backupMaxCount" defaultValue={String(initial.backupMaxCount)}>
+            <option value="5">5 копий</option>
+            <option value="7">7 копий</option>
+            <option value="10">10 копий</option>
+            <option value="14">14 копий</option>
+            <option value="21">21 копия</option>
+            <option value="30">30 копий</option>
           </select>
         </label>
         <label>
