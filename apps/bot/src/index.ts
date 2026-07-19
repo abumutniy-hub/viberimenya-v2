@@ -671,7 +671,8 @@ function clientMainKeyboard() {
     keyboard: [
       [{ text: "🛍 Каталог" }, { text: "🧺 Корзина" }],
       [{ text: "📦 Мои заказы" }, { text: "🎁 Бонусы" }],
-      [{ text: "👤 Профиль" }, { text: "☎️ Связь" }]
+      [{ text: "🏠 Адреса" }, { text: "❤️ Любимые" }],
+      [{ text: "👤 Профиль" }, { text: "💬 Поддержка" }]
     ],
     resize_keyboard: true,
     is_persistent: true
@@ -683,7 +684,8 @@ function unlinkedMainKeyboard() {
     keyboard: [
       [{ text: "🛍 Каталог" }, { text: "🧺 Корзина" }],
       [{ text: "📦 Мои заказы" }, { text: "🎁 Бонусы" }],
-      [{ text: "👤 Профиль" }, { text: "☎️ Связь" }],
+      [{ text: "🏠 Адреса" }, { text: "❤️ Любимые" }],
+      [{ text: "👤 Профиль" }, { text: "💬 Поддержка" }],
       [{ text: "🔗 Привязать аккаунт" }]
     ],
     resize_keyboard: true,
@@ -3515,37 +3517,136 @@ async function handleCustomerProfile(chatId: number) {
 
 async function handleContact(chatId: number) {
   const replyMarkup = await mainKeyboardForChat(chatId);
+  const shopId = await getDefaultShopId();
+
+  const settingsRows = shopId
+    ? await sql<{
+        phone: string | null;
+        whatsapp: string | null;
+        telegram: string | null;
+        instagram: string | null;
+        address: string | null;
+        work_hours: string | null;
+      }[]>`
+        SELECT phone, whatsapp, telegram, instagram, address, work_hours
+        FROM shop_settings
+        WHERE shop_id = ${shopId}
+        LIMIT 1
+      `
+    : [];
+
+  const settings = settingsRows[0];
+  const phone = valueToText(settings?.phone).trim();
+  const whatsapp = valueToText(settings?.whatsapp).trim();
+  const telegram = valueToText(settings?.telegram).trim();
+  const instagram = valueToText(settings?.instagram).trim();
+  const rows: TelegramInlineKeyboardButton[][] = [];
+
+  if (whatsapp) {
+    const whatsappUrl = whatsapp.startsWith("http")
+      ? whatsapp
+      : `https://wa.me/${whatsapp.replace(/[^0-9]/g, "")}`;
+
+    rows.push([{ text: "Написать в WhatsApp", url: whatsappUrl }]);
+  }
+
+  if (telegram) {
+    const telegramUrl = telegram.startsWith("http")
+      ? telegram
+      : `https://t.me/${telegram.replace(/^@/, "")}`;
+
+    rows.push([{ text: "Написать в Telegram", url: telegramUrl }]);
+  }
+
+  if (instagram) {
+    const instagramUrl = instagram.startsWith("http")
+      ? instagram
+      : `https://instagram.com/${instagram.replace(/^@/, "")}`;
+
+    rows.push([{ text: "Instagram", url: instagramUrl }]);
+  }
+
+  rows.push([{ text: "Открыть сайт", url: SITE_URL }]);
+  rows.push([{ text: "❌ Скрыть", callback_data: "msg:delete" }]);
 
   await sendTelegramMessage(
     chatId,
     [
-      "☎️ Связь",
+      "💬 Поддержка",
       "",
-      "Мы на связи в Telegram и WhatsApp.",
-      `Сайт: ${SITE_URL}`
-    ].join("\n"),
+      "Мы поможем с выбором букета, заказом, оплатой и доставкой.",
+      phone ? `Телефон: ${phone}` : "",
+      settings?.work_hours ? `Время работы: ${settings.work_hours}` : "",
+      settings?.address ? `Адрес: ${settings.address}` : "",
+      "",
+      "Выберите удобный способ связи:"
+    ].filter(Boolean).join("\n"),
     {
-      reply_markup: replyMarkup
+      reply_markup: inlineKeyboard(rows)
     }
   );
+
+  await sendTelegramMessage(chatId, "Главное меню остаётся доступно ниже.", {
+    reply_markup: replyMarkup
+  });
 }
 
-async function handleOrders(chatId: number) {
+type CustomerOrderScope = "all" | "active" | "history";
+
+function customerOrderScopeText(scope: CustomerOrderScope) {
+  if (scope === "active") return "Активные заказы";
+  if (scope === "history") return "История заказов";
+  return "Последние заказы";
+}
+
+function customerOrderScopeKeyboard(
+  scope: CustomerOrderScope,
+  activeCount: number,
+  historyCount: number,
+) {
+  return inlineKeyboard([
+    [
+      {
+        text: `${scope === "active" ? "✓ " : ""}Активные (${activeCount})`,
+        callback_data: "orders:active",
+      },
+      {
+        text: `${scope === "history" ? "✓ " : ""}История (${historyCount})`,
+        callback_data: "orders:history",
+      },
+    ],
+    [
+      {
+        text: `${scope === "all" ? "✓ " : ""}Все последние`,
+        callback_data: "orders:list",
+      },
+      {
+        text: "🔄 Обновить",
+        callback_data: `orders:${scope}`,
+      },
+    ],
+  ]);
+}
+
+async function handleOrders(
+  chatId: number,
+  scope: CustomerOrderScope = "all",
+) {
   const replyMarkup = await mainKeyboardForChat(chatId);
   const profile = await getTelegramProfile(String(chatId));
 
-  if (profile?.user_id) {
+  if (profile?.user_id && !profile.customer_id) {
     await sendTelegramMessage(
       chatId,
       [
         "📦 Заказы",
         "",
         "Рабочие заказы доступны в CRM.",
-        `CRM: ${SITE_URL}/admin`
+        `CRM: ${SITE_URL}/admin`,
       ].join("\n"),
       {
-        reply_markup: replyMarkup
-      }
+        reply_markup: replyMarkup,
+      },
     );
     return;
   }
@@ -3556,26 +3657,38 @@ async function handleOrders(chatId: number) {
       [
         "📦 Мои заказы",
         "",
-        "У вас пока нет заказов.",
-        "Откройте каталог, выберите букет и оформите доставку прямо в боте."
+        "Для истории и статусов подключите профиль покупателя.",
+        "Получите одноразовый код на сайте и нажмите «🔗 Привязать аккаунт».",
       ].join("\n"),
       {
-        reply_markup: replyMarkup
-      }
+        reply_markup: replyMarkup,
+      },
     );
     return;
   }
 
-  const shopId = await getDefaultShopId();
+  const countsRows = await sql<{
+    active_count: number;
+    history_count: number;
+  }[]>`
+    SELECT
+      COUNT(*) FILTER (
+        WHERE status NOT IN ('delivered', 'cancelled')
+      )::int AS active_count,
+      COUNT(*) FILTER (
+        WHERE status IN ('delivered', 'cancelled')
+      )::int AS history_count
+    FROM orders
+    WHERE shop_id = ${profile.shop_id}
+      AND customer_id = ${profile.customer_id}
+  `;
 
-  if (!shopId) {
-    await sendTelegramMessage(chatId, "Не удалось загрузить заказы. Попробуйте позже.", {
-      reply_markup: replyMarkup
-    });
-    return;
-  }
+  const counts = countsRows[0];
+  const activeCount = Number(counts?.active_count || 0);
+  const historyCount = Number(counts?.history_count || 0);
 
   const orders = await sql<{
+    id: string;
     order_number: string;
     status: string;
     payment_status: string;
@@ -3583,96 +3696,490 @@ async function handleOrders(chatId: number) {
     tracking_token: string | null;
     created_at: string;
     delivery_date: string | null;
+    delivery_type: string;
+    recipient_name: string | null;
+    item_names: string;
   }[]>`
-    SELECT order_number, status, payment_status, total, tracking_token, created_at, delivery_date
-    FROM orders
-    WHERE shop_id = ${shopId}
-      AND customer_id = ${profile.customer_id}
-    ORDER BY created_at DESC
-    LIMIT 5
+    SELECT
+      o.id,
+      o.order_number,
+      o.status,
+      o.payment_status,
+      o.total,
+      o.tracking_token,
+      o.created_at,
+      o.delivery_date,
+      o.delivery_type,
+      o.recipient_name,
+      COALESCE((
+        SELECT string_agg(
+          oi.product_name ||
+          CASE
+            WHEN oi.quantity > 1 THEN ' ×' || oi.quantity::text
+            ELSE ''
+          END,
+          ', '
+          ORDER BY oi.created_at
+        )
+        FROM order_items oi
+        WHERE oi.order_id = o.id
+      ), '') AS item_names
+    FROM orders o
+    WHERE o.shop_id = ${profile.shop_id}
+      AND o.customer_id = ${profile.customer_id}
+      AND (
+        ${scope} = 'all'
+        OR (
+          ${scope} = 'active'
+          AND o.status NOT IN ('delivered', 'cancelled')
+        )
+        OR (
+          ${scope} = 'history'
+          AND o.status IN ('delivered', 'cancelled')
+        )
+      )
+    ORDER BY
+      CASE
+        WHEN o.status NOT IN ('delivered', 'cancelled') THEN 0
+        ELSE 1
+      END,
+      o.created_at DESC
+    LIMIT 8
   `;
-
-  if (orders.length === 0) {
-    await sendTelegramMessage(
-      chatId,
-      [
-        "📦 Мои заказы",
-        "",
-        "У вас пока нет заказов.",
-        "Откройте каталог, выберите букет и оформите доставку прямо в боте."
-      ].join("\n"),
-      {
-        reply_markup: replyMarkup
-      }
-    );
-    return;
-  }
 
   await sendTelegramMessage(
     chatId,
     [
-      "📦 Мои заказы",
+      `📦 ${customerOrderScopeText(scope)}`,
       "",
-      `Показываю последние ${orders.length} заказ(а).`
+      `Активных: ${activeCount}`,
+      `В истории: ${historyCount}`,
+      orders.length
+        ? `Показываю: ${orders.length}`
+        : "В этом разделе заказов пока нет.",
     ].join("\n"),
     {
-      reply_markup: replyMarkup
-    }
+      reply_markup: customerOrderScopeKeyboard(
+        scope,
+        activeCount,
+        historyCount,
+      ),
+    },
   );
 
-  for (let index = 0; index < orders.length; index += 1) {
-    const order = orders[index];
-    if (!order) continue;
+  if (!orders.length) {
+    await sendTelegramMessage(
+      chatId,
+      "Откройте каталог, чтобы выбрать букет.",
+      {
+        reply_markup: inlineKeyboard([
+          [{ text: "🛍 Открыть каталог", callback_data: "catalog" }],
+        ]),
+      },
+    );
+    return;
+  }
 
-    const createdText = shortDateText(order.created_at);
+  for (const order of orders) {
     const deliveryText = shortDateText(order.delivery_date);
+    const createdText = shortDateText(order.created_at);
+    const buttons: TelegramInlineKeyboardButton[][] = [
+      [
+        {
+          text: "Подробнее",
+          callback_data: `customer:order:${order.id}`,
+        },
+      ],
+    ];
 
-    const message = [
-      `📦 Заказ ${index + 1}`,
-      "",
-      `Номер: ${order.order_number}`,
-      `Статус: ${orderStatusText(order.status)}`,
-      `Оплата: ${orderPaymentText(order.payment_status)}`,
-      `Сумма: ${money(order.total)}`,
-      deliveryText ? `Доставка: ${deliveryText}` : "",
-      createdText ? `Создан: ${createdText}` : ""
-    ].filter(Boolean).join("\n");
+    if (order.tracking_token) {
+      buttons[0]?.push({
+        text: "Отслеживать",
+        url: absoluteUrl(`/order/track/${order.tracking_token}`),
+      });
+    }
 
     await sendTelegramMessage(
       chatId,
-      message,
+      [
+        `Заказ ${order.order_number}`,
+        `Статус: ${orderStatusText(order.status)}`,
+        `Оплата: ${orderPaymentText(order.payment_status)}`,
+        order.item_names ? `Состав: ${order.item_names}` : "",
+        `Сумма: ${money(order.total)}`,
+        deliveryText
+          ? `${order.delivery_type === "pickup" ? "Самовывоз" : "Доставка"}: ${deliveryText}`
+          : "",
+        order.recipient_name
+          ? `Получатель: ${order.recipient_name}`
+          : "",
+        createdText ? `Создан: ${createdText}` : "",
+      ].filter(Boolean).join("\n"),
       {
-        reply_markup: order.tracking_token
-          ? inlineKeyboard([
-              [
-                {
-                  text: "Открыть заказ",
-                  url: absoluteUrl(`/order/track/${order.tracking_token}`)
-                }
-              ]
-            ])
-          : replyMarkup
-      }
+        reply_markup: inlineKeyboard(buttons),
+      },
     );
   }
+}
+
+async function handleCustomerOrderDetails(
+  chatId: number,
+  orderId: string,
+) {
+  const profile = await getTelegramProfile(String(chatId));
+
+  if (!profile?.customer_id) {
+    await sendTelegramMessage(
+      chatId,
+      "Для просмотра заказа подключите профиль покупателя.",
+      {
+        reply_markup: await mainKeyboardForChat(chatId),
+      },
+    );
+    return;
+  }
+
+  const rows = await sql<{
+    id: string;
+    order_number: string;
+    status: string;
+    payment_status: string;
+    payment_method: string;
+    total: number;
+    subtotal: number;
+    discount_total: number;
+    delivery_price: number;
+    bonus_spent: number;
+    bonus_earned: number;
+    delivery_type: string;
+    delivery_date: string | null;
+    delivery_interval_name: string | null;
+    delivery_address_text: string | null;
+    delivery_comment: string | null;
+    recipient_name: string | null;
+    recipient_phone: string | null;
+    tracking_token: string | null;
+    created_at: string;
+    item_names: string;
+  }[]>`
+    SELECT
+      o.id,
+      o.order_number,
+      o.status,
+      o.payment_status,
+      o.payment_method,
+      o.total,
+      o.subtotal,
+      o.discount_total,
+      o.delivery_price,
+      o.bonus_spent,
+      o.bonus_earned,
+      o.delivery_type,
+      o.delivery_date,
+      di.name AS delivery_interval_name,
+      o.delivery_address_text,
+      o.delivery_comment,
+      o.recipient_name,
+      o.recipient_phone,
+      o.tracking_token,
+      o.created_at,
+      COALESCE((
+        SELECT string_agg(
+          oi.product_name ||
+          CASE
+            WHEN oi.quantity > 1 THEN ' ×' || oi.quantity::text
+            ELSE ''
+          END,
+          ', '
+          ORDER BY oi.created_at
+        )
+        FROM order_items oi
+        WHERE oi.order_id = o.id
+      ), '') AS item_names
+    FROM orders o
+    LEFT JOIN delivery_intervals di
+      ON di.id = o.delivery_interval_id
+    WHERE o.id = ${orderId}
+      AND o.shop_id = ${profile.shop_id}
+      AND o.customer_id = ${profile.customer_id}
+    LIMIT 1
+  `;
+
+  const order = rows[0];
+
+  if (!order) {
+    await sendTelegramMessage(chatId, "Заказ не найден или недоступен.");
+    return;
+  }
+
+  const buttons: TelegramInlineKeyboardButton[][] = [];
+
+  if (order.tracking_token) {
+    buttons.push([
+      {
+        text: "Открыть страницу заказа",
+        url: absoluteUrl(`/order/track/${order.tracking_token}`),
+      },
+    ]);
+  }
+
+  buttons.push([
+    { text: "Активные", callback_data: "orders:active" },
+    { text: "История", callback_data: "orders:history" },
+  ]);
+  buttons.push([{ text: "🔄 Обновить", callback_data: `customer:order:${order.id}` }]);
+
+  await sendTelegramMessage(
+    chatId,
+    [
+      `📦 Заказ ${order.order_number}`,
+      "",
+      `Статус: ${orderStatusText(order.status)}`,
+      `Оплата: ${orderPaymentText(order.payment_status)}`,
+      order.item_names ? `Состав: ${order.item_names}` : "",
+      `Товары: ${money(order.subtotal)}`,
+      Number(order.discount_total || 0) > 0
+        ? `Скидка: −${money(order.discount_total)}`
+        : "",
+      Number(order.bonus_spent || 0) > 0
+        ? `Списано бонусов: ${money(order.bonus_spent)}`
+        : "",
+      Number(order.delivery_price || 0) > 0
+        ? `Доставка: ${money(order.delivery_price)}`
+        : "",
+      `Итого: ${money(order.total)}`,
+      Number(order.bonus_earned || 0) > 0
+        ? `Начислено бонусов: ${money(order.bonus_earned)}`
+        : "",
+      "",
+      order.delivery_type === "pickup" ? "Получение: самовывоз" : "Получение: доставка",
+      order.delivery_date
+        ? `Дата: ${shortDateText(order.delivery_date)}`
+        : "",
+      order.delivery_interval_name
+        ? `Интервал: ${order.delivery_interval_name}`
+        : "",
+      order.delivery_address_text
+        ? `Адрес: ${order.delivery_address_text}`
+        : "",
+      order.recipient_name
+        ? `Получатель: ${order.recipient_name}`
+        : "",
+      order.recipient_phone
+        ? `Телефон получателя: ${order.recipient_phone}`
+        : "",
+      order.delivery_comment
+        ? `Комментарий: ${order.delivery_comment}`
+        : "",
+      `Создан: ${shortDateText(order.created_at)}`,
+    ].filter(Boolean).join("\n"),
+    {
+      reply_markup: inlineKeyboard(buttons),
+    },
+  );
+}
+
+async function handleAddresses(chatId: number) {
+  const profile = await getTelegramProfile(String(chatId));
+  const replyMarkup = await mainKeyboardForChat(chatId);
+
+  if (!profile?.customer_id) {
+    await sendTelegramMessage(
+      chatId,
+      [
+        "🏠 Адреса",
+        "",
+        "Для сохранённых адресов подключите профиль покупателя.",
+        "После привязки адреса с сайта будут доступны здесь.",
+      ].join("\n"),
+      {
+        reply_markup: replyMarkup,
+      },
+    );
+    return;
+  }
+
+  const addresses = await sql<{
+    id: string;
+    city: string | null;
+    street: string | null;
+    house: string | null;
+    apartment: string | null;
+    entrance: string | null;
+    floor: string | null;
+    comment: string | null;
+    is_default: boolean;
+  }[]>`
+    SELECT
+      id,
+      city,
+      street,
+      house,
+      apartment,
+      entrance,
+      floor,
+      comment,
+      is_default
+    FROM customer_addresses
+    WHERE shop_id = ${profile.shop_id}
+      AND customer_id = ${profile.customer_id}
+    ORDER BY is_default DESC, updated_at DESC, created_at DESC
+    LIMIT 10
+  `;
+
+  const loginUrl = await createCustomerMagicLoginUrl({
+    shopId: profile.shop_id,
+    customerId: profile.customer_id,
+    orderId: null,
+  });
+
+  const lines = ["🏠 Сохранённые адреса", ""];
+
+  if (!addresses.length) {
+    lines.push("Сохранённых адресов пока нет.");
+    lines.push("Добавьте адрес в личном кабинете — он появится здесь автоматически.");
+  } else {
+    for (let index = 0; index < addresses.length; index += 1) {
+      const address = addresses[index];
+      if (!address) continue;
+
+      const main = [
+        address.city,
+        address.street,
+        address.house ? `д. ${address.house}` : "",
+        address.apartment ? `кв. ${address.apartment}` : "",
+      ].filter(Boolean).join(", ");
+      const extra = [
+        address.entrance ? `подъезд ${address.entrance}` : "",
+        address.floor ? `этаж ${address.floor}` : "",
+      ].filter(Boolean).join(", ");
+
+      lines.push(
+        `${address.is_default ? "⭐ " : ""}${index + 1}. ${main || "Адрес без названия"}`,
+      );
+      if (extra) lines.push(`   ${extra}`);
+      if (address.comment) lines.push(`   ${address.comment}`);
+    }
+  }
+
+  await sendTelegramMessage(chatId, lines.join("\n"), {
+    reply_markup: inlineKeyboard([
+      [{ text: "Управлять адресами", url: loginUrl }],
+      [{ text: "🔄 Обновить", callback_data: "addresses:list" }],
+    ]),
+  });
+}
+
+async function handleFavorites(chatId: number) {
+  const profile = await getTelegramProfile(String(chatId));
+  const replyMarkup = await mainKeyboardForChat(chatId);
+
+  if (!profile?.customer_id) {
+    await sendTelegramMessage(
+      chatId,
+      [
+        "❤️ Любимые букеты",
+        "",
+        "Подключите профиль покупателя, и бот соберёт любимые букеты из вашей истории заказов.",
+      ].join("\n"),
+      {
+        reply_markup: replyMarkup,
+      },
+    );
+    return;
+  }
+
+  const products = await sql<{
+    id: string;
+    name: string;
+    slug: string;
+    price: number;
+    ordered_quantity: number;
+  }[]>`
+    SELECT
+      p.id,
+      p.name,
+      p.slug,
+      p.price,
+      SUM(oi.quantity)::int AS ordered_quantity
+    FROM order_items oi
+    JOIN orders o ON o.id = oi.order_id
+    JOIN products p ON p.id = oi.product_id
+    WHERE o.shop_id = ${profile.shop_id}
+      AND o.customer_id = ${profile.customer_id}
+      AND p.status = 'active'
+    GROUP BY p.id, p.name, p.slug, p.price
+    ORDER BY SUM(oi.quantity) DESC, MAX(o.created_at) DESC
+    LIMIT 8
+  `;
+
+  if (!products.length) {
+    await sendTelegramMessage(
+      chatId,
+      [
+        "❤️ Любимые букеты",
+        "",
+        "После первых заказов здесь появятся букеты, которые вы выбираете чаще всего.",
+      ].join("\n"),
+      {
+        reply_markup: inlineKeyboard([
+          [{ text: "🛍 Открыть каталог", callback_data: "catalog" }],
+        ]),
+      },
+    );
+    return;
+  }
+
+  const buttons: TelegramInlineKeyboardButton[][] = products.map((product) => [
+    {
+      text: `${product.name} · ${money(product.price)}`,
+      callback_data: `prod:${product.id}`,
+    },
+  ]);
+  buttons.push([{ text: "🛍 Весь каталог", callback_data: "catalog" }]);
+
+  await sendTelegramMessage(
+    chatId,
+    [
+      "❤️ Любимые букеты",
+      "",
+      "Собрано из вашей истории заказов.",
+      "Нажмите на букет, чтобы открыть карточку и добавить его в корзину.",
+    ].join("\n"),
+    {
+      reply_markup: inlineKeyboard(buttons),
+    },
+  );
+}
+
+function bonusTransactionText(type: string, amount: number) {
+  const labels: Record<string, string> = {
+    earn: "Начисление",
+    spend: "Списание",
+    manual_add: "Ручное начисление",
+    manual_remove: "Корректировка",
+    expire: "Сгорание",
+  };
+  const signed = amount > 0 ? `+${amount}` : String(amount);
+  return `${labels[type] || type}: ${signed} ₽`;
 }
 
 async function handleBonuses(chatId: number) {
   const replyMarkup = await mainKeyboardForChat(chatId);
   const profile = await getTelegramProfile(String(chatId));
 
-  if (profile?.user_id) {
+  if (profile?.user_id && !profile.customer_id) {
     await sendTelegramMessage(
       chatId,
       [
         "🎁 Бонусы",
         "",
         "Бонусы клиентов отображаются в карточке клиента и заказах в CRM.",
-        `CRM: ${SITE_URL}/admin`
+        `CRM: ${SITE_URL}/admin`,
       ].join("\n"),
       {
-        reply_markup: replyMarkup
-      }
+        reply_markup: replyMarkup,
+      },
     );
     return;
   }
@@ -3683,14 +4190,11 @@ async function handleBonuses(chatId: number) {
       [
         "🎁 Бонусы",
         "",
-        "Бонусный счёт появится после первого заказа.",
-        "После оплаты заказа бонусы будут отображаться здесь и в личном кабинете.",
-        "",
-        `Личный кабинет: ${SITE_URL}/account`
+        "Подключите профиль покупателя, чтобы видеть баланс и историю начислений.",
       ].join("\n"),
       {
-        reply_markup: replyMarkup
-      }
+        reply_markup: replyMarkup,
+      },
     );
     return;
   }
@@ -3703,45 +4207,68 @@ async function handleBonuses(chatId: number) {
     SELECT bonus_balance, total_orders, total_spent
     FROM customers
     WHERE id = ${profile.customer_id}
+      AND shop_id = ${profile.shop_id}
     LIMIT 1
   `;
 
   const customer = customerRows[0];
 
   if (!customer) {
-    await sendTelegramMessage(
-      chatId,
-      [
-        "🎁 Бонусы",
-        "",
-        "Бонусный счёт появится после первого заказа.",
-        "",
-        `Личный кабинет: ${SITE_URL}/account`
-      ].join("\n"),
-      {
-        reply_markup: replyMarkup
-      }
-    );
+    await sendTelegramMessage(chatId, "Бонусный профиль не найден.", {
+      reply_markup: replyMarkup,
+    });
     return;
   }
 
-  await sendTelegramMessage(
-    chatId,
-    [
-      "🎁 Бонусы",
-      "",
-      `Баланс: ${money(customer.bonus_balance)}`,
-      `Заказов: ${Number(customer.total_orders || 0)}`,
-      `Покупки: ${money(customer.total_spent)}`,
-      "",
-      "Бонусы можно использовать при следующих заказах.",
-      "",
-      `Личный кабинет: ${SITE_URL}/account`
-    ].join("\n"),
-    {
-      reply_markup: replyMarkup
+  const transactions = await sql<{
+    type: string;
+    amount: number;
+    balance_after: number;
+    comment: string | null;
+    created_at: string;
+  }[]>`
+    SELECT type, amount, balance_after, comment, created_at
+    FROM bonus_transactions
+    WHERE shop_id = ${profile.shop_id}
+      AND customer_id = ${profile.customer_id}
+    ORDER BY created_at DESC
+    LIMIT 6
+  `;
+
+  const lines = [
+    "🎁 Бонусный счёт",
+    "",
+    `Баланс: ${money(customer.bonus_balance)}`,
+    `Заказов: ${Number(customer.total_orders || 0)}`,
+    `Покупки: ${money(customer.total_spent)}`,
+  ];
+
+  if (transactions.length) {
+    lines.push("", "Последние операции:");
+    for (const transaction of transactions) {
+      lines.push(
+        `• ${shortDateText(transaction.created_at)} — ${bonusTransactionText(transaction.type, Number(transaction.amount || 0))}`,
+      );
+      if (transaction.comment) {
+        lines.push(`  ${transaction.comment}`);
+      }
     }
-  );
+  } else {
+    lines.push("", "Операций по бонусному счёту пока нет.");
+  }
+
+  const loginUrl = await createCustomerMagicLoginUrl({
+    shopId: profile.shop_id,
+    customerId: profile.customer_id,
+    orderId: null,
+  });
+
+  await sendTelegramMessage(chatId, lines.join("\n"), {
+    reply_markup: inlineKeyboard([
+      [{ text: "Полная история в кабинете", url: loginUrl }],
+      [{ text: "🔄 Обновить", callback_data: "bonuses:list" }],
+    ]),
+  });
 }
 
 async function handleFloristAssemblyOrders(chatId: number) {
@@ -7556,7 +8083,44 @@ async function handleCallbackQuery(callbackQuery: TelegramCallbackQuery) {
 
   if (data === "orders:list") {
     await answerCallbackQuery(callbackQuery.id);
-    await handleOrders(chatId);
+    await handleOrders(chatId, "all");
+    return;
+  }
+
+  if (data === "orders:active") {
+    await answerCallbackQuery(callbackQuery.id);
+    await handleOrders(chatId, "active");
+    return;
+  }
+
+  if (data === "orders:history") {
+    await answerCallbackQuery(callbackQuery.id);
+    await handleOrders(chatId, "history");
+    return;
+  }
+
+  if (data.startsWith("customer:order:")) {
+    const orderId = data.slice("customer:order:".length);
+    await answerCallbackQuery(callbackQuery.id);
+    await handleCustomerOrderDetails(chatId, orderId);
+    return;
+  }
+
+  if (data === "addresses:list") {
+    await answerCallbackQuery(callbackQuery.id);
+    await handleAddresses(chatId);
+    return;
+  }
+
+  if (data === "favorites:list") {
+    await answerCallbackQuery(callbackQuery.id);
+    await handleFavorites(chatId);
+    return;
+  }
+
+  if (data === "bonuses:list") {
+    await answerCallbackQuery(callbackQuery.id);
+    await handleBonuses(chatId);
     return;
   }
 
@@ -8142,7 +8706,17 @@ async function handleUpdate(update: TelegramUpdate) {
     return;
   }
 
-  if (text === "☎️ Связь") {
+  if (text === "🏠 Адреса") {
+    await handleAddresses(message.chat.id);
+    return;
+  }
+
+  if (text === "❤️ Любимые") {
+    await handleFavorites(message.chat.id);
+    return;
+  }
+
+  if (text === "💬 Поддержка" || text === "☎️ Связь") {
     await handleContact(message.chat.id);
     return;
   }
