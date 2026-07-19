@@ -8330,6 +8330,7 @@ async function getRecipients(event: NotificationEvent): Promise<string[]> {
         AND ta.user_id IS NOT NULL
         AND ta.is_active = true
         AND ta.notifications_enabled = true
+        AND su.role IN ('owner', 'admin', 'manager')
       ORDER BY ta.telegram_id
     `;
 

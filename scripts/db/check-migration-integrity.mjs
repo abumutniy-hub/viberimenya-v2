@@ -82,97 +82,135 @@ if (
   journal.version !== "7" ||
   journal.dialect !== "postgresql" ||
   !Array.isArray(journal.entries) ||
-  journal.entries.length !== 1
+  journal.entries.length !== 2
 ) {
   throw new Error(
-    "Drizzle journal должен содержать ровно один baseline"
+    "Drizzle journal должен содержать baseline и Event Core migration"
   );
 }
 
-const entry = journal.entries[0];
+for (let index = 0; index < journal.entries.length; index += 1) {
+  const entry = journal.entries[index];
 
-if (
-  entry.idx !== 0 ||
-  !Number.isSafeInteger(entry.when) ||
-  !entry.tag.includes("canonical_production_baseline")
-) {
-  throw new Error(
-    "Некорректная запись canonical baseline в journal"
-  );
+  if (
+    entry.idx !== index ||
+    !Number.isSafeInteger(entry.when) ||
+    typeof entry.tag !== "string" ||
+    !entry.tag
+  ) {
+    throw new Error(
+      `Некорректная запись journal с индексом ${index}`
+    );
+  }
+}
+
+const baselineEntry = journal.entries[0];
+const eventCoreEntry = journal.entries[1];
+
+if (!baselineEntry.tag.includes("canonical_production_baseline")) {
+  throw new Error("Первая migration не является canonical baseline");
+}
+
+if (!eventCoreEntry.tag.includes("event_core_outbox")) {
+  throw new Error("Вторая migration не является Event Core migration");
 }
 
 const sqlFiles = readdirSync(drizzleDir)
-  .filter((name) => name.endsWith(".sql"));
-
+  .filter((name) => name.endsWith(".sql"))
+  .sort();
 const snapshotFiles = readdirSync(metaDir)
-  .filter(
-    (name) =>
-      name.endsWith("_snapshot.json")
-  );
+  .filter((name) => name.endsWith("_snapshot.json"))
+  .sort();
 
 if (
-  sqlFiles.length !== 1 ||
-  snapshotFiles.length !== 1
+  sqlFiles.length !== journal.entries.length ||
+  snapshotFiles.length !== journal.entries.length
 ) {
   throw new Error(
-    "В активном Drizzle baseline должен быть один SQL и один snapshot"
+    "Количество SQL/snapshot не совпадает с Drizzle journal"
   );
 }
 
-const expectedSqlName = `${entry.tag}.sql`;
+const migrationHashes = [];
 
-if (!sqlFiles.includes(expectedSqlName)) {
-  throw new Error(
-    `SQL-файл journal не найден: ${expectedSqlName}`
+for (const entry of journal.entries) {
+  const sqlName = `${entry.tag}.sql`;
+
+  if (!sqlFiles.includes(sqlName)) {
+    throw new Error(`SQL-файл journal не найден: ${sqlName}`);
+  }
+
+  const source = readFileSync(
+    resolve(drizzleDir, sqlName),
+    "utf8",
   );
+
+  if (
+    source.includes("__drizzle_migrations") ||
+    /(^|\n)\s*\\/.test(source)
+  ) {
+    throw new Error(
+      `Migration ${sqlName} содержит служебную таблицу или psql meta-command`
+    );
+  }
+
+  migrationHashes.push({
+    hash: createHash("sha256")
+      .update(source)
+      .digest("hex"),
+    when: entry.when,
+    tag: entry.tag,
+    source,
+  });
 }
 
-const sqlPath = resolve(
-  drizzleDir,
-  expectedSqlName,
-);
-const sqlSource = readFileSync(sqlPath, "utf8");
-
-if (
-  sqlSource.includes("__drizzle_migrations") ||
-  /(^|\n)\s*\\/.test(sqlSource)
-) {
-  throw new Error(
-    "Baseline содержит служебную Drizzle-таблицу или psql meta-command"
-  );
-}
-
-const tableCount = (
-  sqlSource.match(
-    /^CREATE TABLE\s+"public"\./gm,
-  ) || []
+const baseline = migrationHashes[0].source;
+const baselineTableCount = (
+  baseline.match(/^CREATE TABLE\s+"public"\./gm) || []
 ).length;
 
-if (tableCount !== 32) {
-  throw new Error(
-    `Baseline содержит ${tableCount} public tables вместо 32`
-  );
+if (
+  baselineTableCount !== 32 ||
+  !baseline.includes("notification_events_customer_copy_trg")
+) {
+  throw new Error("Canonical baseline повреждён");
+}
+
+const eventCore = migrationHashes[1].source;
+const requiredEventCoreFragments = [
+  'CREATE TABLE "domain_events"',
+  'CREATE TABLE "notification_outbox"',
+  'CREATE TABLE "notification_deliveries"',
+  'enqueue_notification_event_outbox',
+  'notification_events_outbox_enqueue_trg',
+  'notification_events_outbox_sync_trg',
+];
+
+for (const fragment of requiredEventCoreFragments) {
+  if (!eventCore.includes(fragment)) {
+    throw new Error(
+      `Event Core migration не содержит: ${fragment}`
+    );
+  }
 }
 
 if (
-  !sqlSource.includes(
-    "notification_events_customer_copy_trg"
-  )
+  /DROP\s+TABLE/i.test(eventCore) ||
+  /DROP\s+COLUMN/i.test(eventCore) ||
+  /ALTER\s+TYPE[^;]+DROP/i.test(eventCore)
 ) {
-  throw new Error(
-    "В baseline отсутствует production trigger"
-  );
+  throw new Error("Event Core migration содержит destructive DDL");
 }
 
-const snapshot = JSON.parse(
-  readFileSync(
-    resolve(metaDir, snapshotFiles[0]),
-    "utf8",
-  ),
+const latestSnapshotPath = resolve(
+  metaDir,
+  snapshotFiles[snapshotFiles.length - 1],
 );
-
+const latestSnapshot = JSON.parse(
+  readFileSync(latestSnapshotPath, "utf8"),
+);
 const snapshotTables = Object.values(
-  snapshot.tables || {},
+  latestSnapshot.tables || {},
 );
 const snapshotTableCount = snapshotTables.length;
 const snapshotColumnCount = snapshotTables.reduce(
@@ -182,17 +220,13 @@ const snapshotColumnCount = snapshotTables.reduce(
 );
 
 if (
-  snapshotTableCount !== 32 ||
-  snapshotColumnCount !== 374
+  snapshotTableCount !== 35 ||
+  snapshotColumnCount !== 439
 ) {
   throw new Error(
-    "Snapshot не соответствует 32 таблицам и 374 колонкам"
+    `Event Core snapshot: ${snapshotTableCount} tables / ${snapshotColumnCount} columns`
   );
 }
-
-const hash = createHash("sha256")
-  .update(sqlSource)
-  .digest("hex");
 
 const query = `
 SELECT
@@ -229,23 +263,24 @@ const rows = output
   .split(/\r?\n/)
   .filter((line) => line.trim());
 
-if (rows.length !== 1) {
+if (rows.length !== migrationHashes.length) {
   throw new Error(
     `В production migration journal найдено строк: ${rows.length}`
   );
 }
 
-const [databaseHash, createdAtRaw] =
-  rows[0].split("\t");
-const createdAt = Number(createdAtRaw);
+for (let index = 0; index < rows.length; index += 1) {
+  const [databaseHash, createdAtRaw] = rows[index].split("\t");
+  const expected = migrationHashes[index];
 
-if (
-  databaseHash !== hash ||
-  createdAt !== entry.when
-) {
-  throw new Error(
-    "Production migration metadata не совпадает с baseline"
-  );
+  if (
+    databaseHash !== expected.hash ||
+    Number(createdAtRaw) !== expected.when
+  ) {
+    throw new Error(
+      `Migration metadata не совпадает: ${expected.tag}`
+    );
+  }
 }
 
 const legacyReadme = resolve(
@@ -254,13 +289,11 @@ const legacyReadme = resolve(
 );
 
 if (!existsSync(legacyReadme)) {
-  throw new Error(
-    "Не найдено описание legacy migrations"
-  );
+  throw new Error("Не найдено описание legacy migrations");
 }
 
 console.log(
   "Migration integrity confirmed: " +
-  `${entry.tag}, 32 tables, 374 columns, ` +
+  `${eventCoreEntry.tag}, 35 tables, 439 columns, ` +
   "production metadata aligned."
 );

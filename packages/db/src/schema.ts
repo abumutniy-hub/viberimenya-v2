@@ -734,6 +734,166 @@ export const notificationEvents = pgTable(
   ]
 );
 
+export const domainEvents = pgTable(
+  "domain_events",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    shopId: uuid("shop_id").notNull().references(() => shops.id, { onDelete: "cascade" }),
+    aggregateType: varchar("aggregate_type", { length: 80 }).notNull(),
+    aggregateId: uuid("aggregate_id"),
+    eventType: varchar("event_type", { length: 120 }).notNull(),
+    eventVersion: integer("event_version").notNull().default(1),
+    actorType: varchar("actor_type", { length: 40 }).notNull().default("system"),
+    actorUserId: uuid("actor_user_id").references(() => users.id, { onDelete: "set null" }),
+    actorCustomerId: uuid("actor_customer_id").references(() => customers.id, { onDelete: "set null" }),
+    correlationId: uuid("correlation_id"),
+    causationId: uuid("causation_id"),
+    idempotencyKey: varchar("idempotency_key", { length: 255 }).notNull(),
+    payload: jsonb("payload").notNull().default(sql`'{}'::jsonb`),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
+    publishedAt: timestamp("published_at", { withTimezone: true }),
+    ...timestamps
+  },
+  (table) => [
+    uniqueIndex("domain_events_shop_idem_uidx").on(
+      table.shopId,
+      table.idempotencyKey
+    ),
+    index("domain_events_shop_type_idx").on(
+      table.shopId,
+      table.eventType,
+      table.occurredAt
+    ),
+    index("domain_events_aggregate_idx").on(
+      table.shopId,
+      table.aggregateType,
+      table.aggregateId,
+      table.occurredAt
+    ),
+    index("domain_events_correlation_idx").on(table.correlationId),
+    check(
+      "domain_events_version_check",
+      sql`${table.eventVersion} > 0`
+    )
+  ]
+);
+
+export const notificationOutbox = pgTable(
+  "notification_outbox",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    shopId: uuid("shop_id").notNull().references(() => shops.id, { onDelete: "cascade" }),
+    domainEventId: uuid("domain_event_id").references(() => domainEvents.id, { onDelete: "set null" }),
+    sourceNotificationEventId: uuid("source_notification_event_id").references(
+      () => notificationEvents.id,
+      { onDelete: "cascade" }
+    ),
+    orderId: uuid("order_id").references(() => orders.id, { onDelete: "cascade" }),
+    channel: varchar("channel", { length: 40 }).notNull().default("telegram"),
+    templateKey: varchar("template_key", { length: 120 }).notNull(),
+    recipientType: varchar("recipient_type", { length: 40 }).notNull(),
+    recipientUserId: uuid("recipient_user_id").references(() => users.id, { onDelete: "set null" }),
+    recipientCustomerId: uuid("recipient_customer_id").references(() => customers.id, { onDelete: "set null" }),
+    recipientRole: varchar("recipient_role", { length: 40 }),
+    recipientAddress: varchar("recipient_address", { length: 180 }),
+    payload: jsonb("payload").notNull().default(sql`'{}'::jsonb`),
+    status: varchar("status", { length: 40 }).notNull().default("pending"),
+    priority: integer("priority").notNull().default(100),
+    attempts: integer("attempts").notNull().default(0),
+    maxAttempts: integer("max_attempts").notNull().default(5),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
+    lockedAt: timestamp("locked_at", { withTimezone: true }),
+    lockedBy: varchar("locked_by", { length: 160 }),
+    lastError: text("last_error"),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    deadAt: timestamp("dead_at", { withTimezone: true }),
+    idempotencyKey: varchar("idempotency_key", { length: 255 }).notNull(),
+    ...timestamps
+  },
+  (table) => [
+    uniqueIndex("notification_outbox_source_uidx").on(
+      table.sourceNotificationEventId
+    ),
+    uniqueIndex("notification_outbox_shop_idem_uidx").on(
+      table.shopId,
+      table.idempotencyKey
+    ),
+    index("notification_outbox_ready_idx").on(
+      table.channel,
+      table.status,
+      table.nextAttemptAt,
+      table.priority,
+      table.createdAt
+    ),
+    index("notification_outbox_order_idx").on(table.orderId),
+    index("notification_outbox_user_idx").on(table.recipientUserId),
+    index("notification_outbox_customer_idx").on(table.recipientCustomerId),
+    check(
+      "notification_outbox_status_check",
+      sql`${table.status} in ('pending', 'processing', 'sent', 'partial', 'skipped', 'dead')`
+    ),
+    check(
+      "notification_outbox_attempts_check",
+      sql`${table.attempts} >= 0 and ${table.maxAttempts} > 0 and ${table.attempts} <= ${table.maxAttempts}`
+    ),
+    check(
+      "notification_outbox_priority_check",
+      sql`${table.priority} between 0 and 1000`
+    )
+  ]
+);
+
+export const notificationDeliveries = pgTable(
+  "notification_deliveries",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    shopId: uuid("shop_id").notNull().references(() => shops.id, { onDelete: "cascade" }),
+    outboxId: uuid("outbox_id").notNull().references(() => notificationOutbox.id, { onDelete: "cascade" }),
+    channel: varchar("channel", { length: 40 }).notNull(),
+    recipientType: varchar("recipient_type", { length: 40 }).notNull(),
+    recipientUserId: uuid("recipient_user_id").references(() => users.id, { onDelete: "set null" }),
+    recipientCustomerId: uuid("recipient_customer_id").references(() => customers.id, { onDelete: "set null" }),
+    recipientRole: varchar("recipient_role", { length: 40 }),
+    recipientAddress: varchar("recipient_address", { length: 180 }).notNull(),
+    status: varchar("status", { length: 40 }).notNull().default("pending"),
+    attempts: integer("attempts").notNull().default(0),
+    maxAttempts: integer("max_attempts").notNull().default(5),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
+    lockedAt: timestamp("locked_at", { withTimezone: true }),
+    lockedBy: varchar("locked_by", { length: 160 }),
+    providerMessageId: varchar("provider_message_id", { length: 180 }),
+    lastError: text("last_error"),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    failedAt: timestamp("failed_at", { withTimezone: true }),
+    metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
+    ...timestamps
+  },
+  (table) => [
+    uniqueIndex("notification_deliveries_target_uidx").on(
+      table.outboxId,
+      table.channel,
+      table.recipientAddress
+    ),
+    index("notification_deliveries_ready_idx").on(
+      table.channel,
+      table.status,
+      table.nextAttemptAt,
+      table.createdAt
+    ),
+    index("notification_deliveries_outbox_idx").on(table.outboxId),
+    index("notification_deliveries_user_idx").on(table.recipientUserId),
+    index("notification_deliveries_customer_idx").on(table.recipientCustomerId),
+    check(
+      "notification_deliveries_status_check",
+      sql`${table.status} in ('pending', 'processing', 'sent', 'skipped', 'failed')`
+    ),
+    check(
+      "notification_deliveries_attempts_check",
+      sql`${table.attempts} >= 0 and ${table.maxAttempts} > 0 and ${table.attempts} <= ${table.maxAttempts}`
+    )
+  ]
+);
+
 export const telegramCartItems = pgTable(
   "telegram_cart_items",
   {
