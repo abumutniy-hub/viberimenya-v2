@@ -15,14 +15,21 @@ export const CUSTOMER_CHECKOUT_DRAFT_MAX_CARD_TEXT = 500;
 export type CustomerCheckoutDraftStep =
   | "customer_name"
   | "customer_phone"
+  | "recipient_mode"
   | "recipient_name"
   | "recipient_phone"
   | "delivery_type"
+  | "delivery_service"
   | "delivery_zone"
   | "delivery_date"
   | "delivery_interval"
   | "delivery_address"
+  | "card_text"
+  | "surprise"
+  | "contact_preference"
   | "payment_method"
+  | "promo_code"
+  | "bonus"
   | "comment"
   | "privacy"
   | "confirm";
@@ -140,14 +147,21 @@ export class CheckoutDraftNotFoundError extends Error {
 const CHECKOUT_STEPS = new Set<CustomerCheckoutDraftStep>([
   "customer_name",
   "customer_phone",
+  "recipient_mode",
   "recipient_name",
   "recipient_phone",
   "delivery_type",
+  "delivery_service",
   "delivery_zone",
   "delivery_date",
   "delivery_interval",
   "delivery_address",
+  "card_text",
+  "surprise",
+  "contact_preference",
   "payment_method",
+  "promo_code",
+  "bonus",
   "comment",
   "privacy",
   "confirm",
