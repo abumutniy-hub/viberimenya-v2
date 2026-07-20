@@ -1952,144 +1952,448 @@ type TelegramCartRow = {
   name: string;
   slug: string;
   price: number;
+  availability: "available" | "preorder";
 };
 
-async function addProductToTelegramCart(chatId: number, productId: string) {
-  const shopId = await getDefaultShopId();
+const MAX_TELEGRAM_CART_QUANTITY = 99;
 
-  if (!shopId) {
-    return null;
-  }
+type BotCartSqlExecutor = {
+  <
+    T extends readonly (object | undefined)[] =
+      Record<string, unknown>[],
+  >(
+    strings: TemplateStringsArray,
+    ...parameters: any[]
+  ): PromiseLike<T>;
+};
 
-  const productRows = await sql<{ id: string; name: string }[]>`
-    SELECT id, name
-    FROM products
-    WHERE shop_id = ${shopId}
-      AND id = ${productId}
-      AND status = 'active'
+function telegramCartOperationKey(
+  chatId: number,
+  operationId: string,
+) {
+  const digest = createHash("sha256")
+    .update(`${chatId}:${operationId}`)
+    .digest("hex");
+
+  return `telegram-cart:${chatId}:${digest}`;
+}
+
+async function claimTelegramCartMutation(
+  transaction: BotCartSqlExecutor,
+  params: {
+    shopId: string;
+    chatId: number;
+    operationId: string;
+    action: string;
+    productId?: string;
+  },
+) {
+  const customers = await transaction<{ customer_id: string | null }[]>`
+    SELECT customer_id
+    FROM telegram_accounts
+    WHERE shop_id = ${params.shopId}
+      AND telegram_id = ${String(params.chatId)}
+      AND is_active = true
+    ORDER BY linked_at DESC, updated_at DESC, id DESC
+    LIMIT 1
+  `;
+  const customerId = customers[0]?.customer_id ?? null;
+  const rows = await transaction<{ id: string }[]>`
+    INSERT INTO domain_events (
+      shop_id,
+      aggregate_type,
+      aggregate_id,
+      event_type,
+      event_version,
+      actor_type,
+      actor_customer_id,
+      idempotency_key,
+      payload,
+      occurred_at,
+      created_at,
+      updated_at
+    )
+    VALUES (
+      ${params.shopId},
+      'commerce_cart',
+      ${customerId},
+      'customer.cart.mutated',
+      1,
+      ${customerId ? "customer" : "telegram"},
+      ${customerId},
+      ${telegramCartOperationKey(params.chatId, params.operationId)},
+      ${JSON.stringify({
+        source: "telegram",
+        action: params.action,
+        telegramChatId: String(params.chatId),
+        productId: params.productId ?? null,
+      })}::jsonb,
+      NOW(),
+      NOW(),
+      NOW()
+    )
+    ON CONFLICT (shop_id, idempotency_key)
+    DO NOTHING
+    RETURNING id
+  `;
+
+  return rows.length === 1;
+}
+
+async function loadEligibleTelegramProduct(
+  transaction: BotCartSqlExecutor,
+  shopId: string,
+  productId: string,
+) {
+  const rows = await transaction<{
+    id: string;
+    name: string;
+    availability: "available" | "preorder";
+  }[]>`
+    SELECT
+      p.id,
+      p.name,
+      COALESCE(
+        NULLIF(p.metadata #>> '{catalog,availability}', ''),
+        CASE
+          WHEN COALESCE(p.stock_quantity, 0) > 0
+            THEN 'available'
+          ELSE 'unavailable'
+        END
+      ) AS availability
+    FROM products p
+    LEFT JOIN categories c
+      ON c.id = p.category_id
+      AND c.shop_id = p.shop_id
+    WHERE p.shop_id = ${shopId}
+      AND p.id = ${productId}
+      AND p.status = 'active'
+      AND (
+        p.category_id IS NULL
+        OR c.is_active = true
+      )
+      AND COALESCE(
+        NULLIF(p.metadata #>> '{catalog,availability}', ''),
+        CASE
+          WHEN COALESCE(p.stock_quantity, 0) > 0
+            THEN 'available'
+          ELSE 'unavailable'
+        END
+      ) IN ('available', 'preorder')
     LIMIT 1
   `;
 
-  const product = productRows[0];
-
-  if (!product) {
-    return null;
-  }
-
-  const rows = await sql<{ quantity: number }[]>`
-    INSERT INTO telegram_cart_items (shop_id, telegram_chat_id, product_id, quantity)
-    VALUES (${shopId}, ${chatId}, ${product.id}, 1)
-    ON CONFLICT (shop_id, telegram_chat_id, product_id)
-    DO UPDATE SET quantity = telegram_cart_items.quantity + 1,
-                  updated_at = NOW()
-    RETURNING quantity
-  `;
-
-  return {
-    name: product.name,
-    quantity: rows[0]?.quantity || 1
-  };
+  return rows[0] ?? null;
 }
 
-async function decreaseProductInTelegramCart(chatId: number, productId: string) {
+async function sanitizeTelegramCart(chatId: number) {
   const shopId = await getDefaultShopId();
 
-  if (!shopId) {
-    return;
-  }
+  if (!shopId) return [] as string[];
 
-  await sql`
-    DELETE FROM telegram_cart_items
-    WHERE shop_id = ${shopId}
-      AND telegram_chat_id = ${chatId}
-      AND product_id = ${productId}
-      AND quantity <= 1
+  const invalid = await sql<{ product_id: string; name: string }[]>`
+    SELECT tci.product_id, p.name
+    FROM telegram_cart_items tci
+    INNER JOIN products p
+      ON p.id = tci.product_id
+      AND p.shop_id = tci.shop_id
+    LEFT JOIN categories c
+      ON c.id = p.category_id
+      AND c.shop_id = p.shop_id
+    WHERE tci.shop_id = ${shopId}
+      AND tci.telegram_chat_id = ${chatId}
+      AND (
+        p.status <> 'active'
+        OR (
+          p.category_id IS NOT NULL
+          AND COALESCE(c.is_active, false) = false
+        )
+        OR COALESCE(
+          NULLIF(p.metadata #>> '{catalog,availability}', ''),
+          CASE
+            WHEN COALESCE(p.stock_quantity, 0) > 0
+              THEN 'available'
+            ELSE 'unavailable'
+          END
+        ) NOT IN ('available', 'preorder')
+      )
   `;
+
+  if (invalid.length > 0) {
+    await sql`
+      DELETE FROM telegram_cart_items
+      WHERE shop_id = ${shopId}
+        AND telegram_chat_id = ${chatId}
+        AND product_id = ANY(${invalid.map((row) => row.product_id)}::uuid[])
+    `;
+  }
 
   await sql`
     UPDATE telegram_cart_items
-    SET quantity = quantity - 1,
+    SET quantity = ${MAX_TELEGRAM_CART_QUANTITY},
         updated_at = NOW()
     WHERE shop_id = ${shopId}
       AND telegram_chat_id = ${chatId}
-      AND product_id = ${productId}
-      AND quantity > 1
+      AND quantity > ${MAX_TELEGRAM_CART_QUANTITY}
   `;
+
+  return invalid.map((row) => row.name);
 }
 
-async function removeProductFromTelegramCart(chatId: number, productId: string) {
+async function addProductToTelegramCart(
+  chatId: number,
+  productId: string,
+  operationId: string = randomUUID(),
+) {
   const shopId = await getDefaultShopId();
 
-  if (!shopId) {
-    return;
-  }
+  if (!shopId) return null;
 
-  await sql`
-    DELETE FROM telegram_cart_items
-    WHERE shop_id = ${shopId}
-      AND telegram_chat_id = ${chatId}
-      AND product_id = ${productId}
-  `;
+  return sql.begin(async (transaction) => {
+    const claimed = await claimTelegramCartMutation(transaction, {
+      shopId,
+      chatId,
+      operationId,
+      action: "increment",
+      productId,
+    });
+
+    if (!claimed) {
+      const existing = await transaction<{
+        quantity: number;
+        name: string;
+      }[]>`
+        SELECT tci.quantity, p.name
+        FROM telegram_cart_items tci
+        INNER JOIN products p ON p.id = tci.product_id
+        WHERE tci.shop_id = ${shopId}
+          AND tci.telegram_chat_id = ${chatId}
+          AND tci.product_id = ${productId}
+        LIMIT 1
+      `;
+
+      return existing[0]
+        ? {
+            name: existing[0].name,
+            quantity: existing[0].quantity,
+            reused: true,
+          }
+        : null;
+    }
+
+    const product = await loadEligibleTelegramProduct(
+      transaction,
+      shopId,
+      productId,
+    );
+
+    if (!product) {
+      await transaction`
+        DELETE FROM telegram_cart_items
+        WHERE shop_id = ${shopId}
+          AND telegram_chat_id = ${chatId}
+          AND product_id = ${productId}
+      `;
+      return null;
+    }
+
+    const rows = await transaction<{ quantity: number }[]>`
+      INSERT INTO telegram_cart_items (
+        shop_id,
+        telegram_chat_id,
+        product_id,
+        quantity,
+        created_at,
+        updated_at
+      )
+      VALUES (${shopId}, ${chatId}, ${product.id}, 1, NOW(), NOW())
+      ON CONFLICT (shop_id, telegram_chat_id, product_id)
+      DO UPDATE SET
+        quantity = LEAST(
+          ${MAX_TELEGRAM_CART_QUANTITY},
+          telegram_cart_items.quantity + 1
+        ),
+        updated_at = NOW()
+      RETURNING quantity
+    `;
+
+    return {
+      name: product.name,
+      quantity: rows[0]?.quantity || 1,
+      reused: false,
+    };
+  });
 }
 
-async function clearTelegramCart(chatId: number) {
+async function decreaseProductInTelegramCart(
+  chatId: number,
+  productId: string,
+  operationId: string = randomUUID(),
+) {
   const shopId = await getDefaultShopId();
 
-  if (!shopId) {
-    return;
-  }
+  if (!shopId) return;
 
-  await sql`
-    DELETE FROM telegram_cart_items
-    WHERE shop_id = ${shopId}
-      AND telegram_chat_id = ${chatId}
-  `;
+  await sql.begin(async (transaction) => {
+    const claimed = await claimTelegramCartMutation(transaction, {
+      shopId,
+      chatId,
+      operationId,
+      action: "decrement",
+      productId,
+    });
+
+    if (!claimed) return;
+
+    const updated = await transaction<{ quantity: number }[]>`
+      UPDATE telegram_cart_items
+      SET quantity = quantity - 1,
+          updated_at = NOW()
+      WHERE shop_id = ${shopId}
+        AND telegram_chat_id = ${chatId}
+        AND product_id = ${productId}
+        AND quantity > 1
+      RETURNING quantity
+    `;
+
+    if (updated.length === 0) {
+      await transaction`
+        DELETE FROM telegram_cart_items
+        WHERE shop_id = ${shopId}
+          AND telegram_chat_id = ${chatId}
+          AND product_id = ${productId}
+      `;
+    }
+  });
+}
+
+async function removeProductFromTelegramCart(
+  chatId: number,
+  productId: string,
+  operationId: string = randomUUID(),
+) {
+  const shopId = await getDefaultShopId();
+
+  if (!shopId) return;
+
+  await sql.begin(async (transaction) => {
+    const claimed = await claimTelegramCartMutation(transaction, {
+      shopId,
+      chatId,
+      operationId,
+      action: "remove",
+      productId,
+    });
+
+    if (!claimed) return;
+
+    await transaction`
+      DELETE FROM telegram_cart_items
+      WHERE shop_id = ${shopId}
+        AND telegram_chat_id = ${chatId}
+        AND product_id = ${productId}
+    `;
+  });
+}
+
+async function clearTelegramCart(
+  chatId: number,
+  operationId: string = randomUUID(),
+) {
+  const shopId = await getDefaultShopId();
+
+  if (!shopId) return;
+
+  await sql.begin(async (transaction) => {
+    const claimed = await claimTelegramCartMutation(transaction, {
+      shopId,
+      chatId,
+      operationId,
+      action: "clear",
+    });
+
+    if (!claimed) return;
+
+    await transaction`
+      DELETE FROM telegram_cart_items
+      WHERE shop_id = ${shopId}
+        AND telegram_chat_id = ${chatId}
+    `;
+  });
 }
 
 async function getTelegramCartRows(chatId: number): Promise<TelegramCartRow[]> {
   const shopId = await getDefaultShopId();
 
-  if (!shopId) {
-    return [];
-  }
+  if (!shopId) return [];
 
   const rows = await sql<TelegramCartRow[]>`
     SELECT
       tci.product_id,
-      tci.quantity,
+      LEAST(${MAX_TELEGRAM_CART_QUANTITY}, tci.quantity)::int AS quantity,
       p.name,
       p.slug,
-      p.price
+      p.price,
+      COALESCE(
+        NULLIF(p.metadata #>> '{catalog,availability}', ''),
+        CASE
+          WHEN COALESCE(p.stock_quantity, 0) > 0
+            THEN 'available'
+          ELSE 'unavailable'
+        END
+      ) AS availability
     FROM telegram_cart_items tci
-    INNER JOIN products p ON p.id = tci.product_id
+    INNER JOIN products p
+      ON p.id = tci.product_id
+      AND p.shop_id = tci.shop_id
+    LEFT JOIN categories c
+      ON c.id = p.category_id
+      AND c.shop_id = p.shop_id
     WHERE tci.shop_id = ${shopId}
       AND tci.telegram_chat_id = ${chatId}
       AND p.status = 'active'
-    ORDER BY tci.created_at ASC
+      AND (
+        p.category_id IS NULL
+        OR c.is_active = true
+      )
+      AND COALESCE(
+        NULLIF(p.metadata #>> '{catalog,availability}', ''),
+        CASE
+          WHEN COALESCE(p.stock_quantity, 0) > 0
+            THEN 'available'
+          ELSE 'unavailable'
+        END
+      ) IN ('available', 'preorder')
+    ORDER BY tci.created_at ASC, tci.id ASC
   `;
 
   return rows;
 }
 
 async function handleCart(chatId: number, messageId?: number) {
+  const removedNames = await sanitizeTelegramCart(chatId);
   const rows = await getTelegramCartRows(chatId);
 
   if (rows.length === 0) {
+    const removedText = removedNames.length > 0
+      ? `\n\nНедоступные позиции удалены: ${removedNames.join(", ")}.`
+      : "";
+
     await sendOrEditTelegramMessage(
       chatId,
       [
         "🧺 Корзина",
         "",
-        "Корзина пока пустая.",
-        "Откройте каталог и добавьте букет прямо в боте."
+        `Корзина пока пустая.${removedText}`,
+        "Откройте каталог и добавьте букет прямо в боте.",
       ].join("\n"),
       {
         reply_markup: inlineKeyboard([
           [{ text: "🛍 Перейти в каталог", callback_data: "catalog" }],
-          [{ text: "❌ Скрыть", callback_data: "msg:delete" }]
-        ])
+          [{ text: "❌ Скрыть", callback_data: "msg:delete" }],
+        ]),
       },
-      messageId
+      messageId,
     );
     return;
   }
@@ -2098,40 +2402,49 @@ async function handleCart(chatId: number, messageId?: number) {
   const lines = ["🧺 Корзина", ""];
   const buttons: TelegramInlineKeyboardButton[][] = [];
 
+  if (removedNames.length > 0) {
+    lines.push(`Удалены недоступные позиции: ${removedNames.join(", ")}.`);
+    lines.push("");
+  }
+
   rows.forEach((item, index) => {
     const itemTotal = Number(item.price || 0) * Number(item.quantity || 0);
     total += itemTotal;
 
     lines.push(`${index + 1}. ${item.name}`);
     lines.push(`   ${item.quantity} × ${money(item.price)} = ${money(itemTotal)}`);
+    if (item.availability === "preorder") {
+      lines.push("   Доступно по предварительному заказу");
+    }
     lines.push("");
 
     buttons.push([
       { text: "➖", callback_data: `cart:dec:${item.product_id}` },
       { text: `${item.quantity} шт.`, callback_data: "cart:noop" },
       { text: "➕", callback_data: `cart:inc:${item.product_id}` },
-      { text: "❌", callback_data: `cart:remove:${item.product_id}` }
+      { text: "❌", callback_data: `cart:remove:${item.product_id}` },
     ]);
   });
 
   lines.push(`Итого: ${money(total)}`);
   lines.push("");
-  lines.push("Следующий шаг — оформление заказа с адресом и телефоном прямо в боте.");
+  lines.push("Корзина сохраняется и синхронизируется с сайтом после входа через Telegram.");
 
   buttons.push([
     { text: "🛍 Продолжить покупки", callback_data: "catalog" },
-    { text: "🧹 Очистить", callback_data: "cart:clear" }
+    { text: "🧹 Очистить", callback_data: "cart:clear" },
   ]);
   buttons.push([{ text: "✅ Оформить заказ", callback_data: "checkout:start" }]);
+  buttons.push([{ text: "🌐 Открыть корзину на сайте", callback_data: "cart:site" }]);
   buttons.push([{ text: "❌ Скрыть", callback_data: "msg:delete" }]);
 
   await sendOrEditTelegramMessage(
     chatId,
     lines.join("\n"),
     {
-      reply_markup: inlineKeyboard(buttons)
+      reply_markup: inlineKeyboard(buttons),
     },
-    messageId
+    messageId,
   );
 }
 
@@ -8099,7 +8412,11 @@ async function handleCallbackQuery(callbackQuery: TelegramCallbackQuery) {
 
   if (data.startsWith("cart:add:")) {
     const productId = data.slice("cart:add:".length);
-    const result = await addProductToTelegramCart(chatId, productId);
+    const result = await addProductToTelegramCart(
+      chatId,
+      productId,
+      callbackQuery.id,
+    );
     await answerCallbackQuery(callbackQuery.id, result ? "Добавлено в корзину" : "Товар недоступен");
     await handleCart(chatId);
     return;
@@ -8107,7 +8424,11 @@ async function handleCallbackQuery(callbackQuery: TelegramCallbackQuery) {
 
   if (data.startsWith("cart:inc:")) {
     const productId = data.slice("cart:inc:".length);
-    await addProductToTelegramCart(chatId, productId);
+    await addProductToTelegramCart(
+      chatId,
+      productId,
+      callbackQuery.id,
+    );
     await answerCallbackQuery(callbackQuery.id);
     await handleCart(chatId, message.message_id);
     return;
@@ -8115,7 +8436,11 @@ async function handleCallbackQuery(callbackQuery: TelegramCallbackQuery) {
 
   if (data.startsWith("cart:dec:")) {
     const productId = data.slice("cart:dec:".length);
-    await decreaseProductInTelegramCart(chatId, productId);
+    await decreaseProductInTelegramCart(
+      chatId,
+      productId,
+      callbackQuery.id,
+    );
     await answerCallbackQuery(callbackQuery.id);
     await handleCart(chatId, message.message_id);
     return;
@@ -8123,16 +8448,55 @@ async function handleCallbackQuery(callbackQuery: TelegramCallbackQuery) {
 
   if (data.startsWith("cart:remove:")) {
     const productId = data.slice("cart:remove:".length);
-    await removeProductFromTelegramCart(chatId, productId);
+    await removeProductFromTelegramCart(
+      chatId,
+      productId,
+      callbackQuery.id,
+    );
     await answerCallbackQuery(callbackQuery.id, "Товар удалён");
     await handleCart(chatId, message.message_id);
     return;
   }
 
   if (data === "cart:clear") {
-    await clearTelegramCart(chatId);
+    await clearTelegramCart(chatId, callbackQuery.id);
     await answerCallbackQuery(callbackQuery.id, "Корзина очищена");
     await handleCart(chatId, message.message_id);
+    return;
+  }
+
+  if (data === "cart:site") {
+    const profile = await getTelegramProfile(String(chatId));
+
+    if (!profile?.customer_id) {
+      await answerCallbackQuery(
+        callbackQuery.id,
+        "Сначала привяжите профиль покупателя",
+      );
+      await sendTelegramMessage(
+        chatId,
+        "Подключите Telegram к профилю покупателя — после этого корзина будет общей с сайтом.",
+      );
+      return;
+    }
+
+    const cartUrl = await createCustomerMagicLoginUrl({
+      shopId: profile.shop_id,
+      customerId: profile.customer_id,
+      orderId: null,
+      redirectPath: "/cart",
+    });
+
+    await answerCallbackQuery(callbackQuery.id);
+    await sendTelegramMessage(
+      chatId,
+      "Откройте общую корзину на сайте. Вход выполнится автоматически, ссылка действует 10 минут.",
+      {
+        reply_markup: inlineKeyboard([
+          [{ text: "🌐 Открыть корзину", url: cartUrl }],
+        ]),
+      },
+    );
     return;
   }
 

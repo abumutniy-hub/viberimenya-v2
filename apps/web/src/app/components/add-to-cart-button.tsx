@@ -2,8 +2,10 @@
 
 import {
   useEffect,
+  useRef,
   useState
 } from "react";
+import { incrementLinkedCustomerCartItem } from "../lib/customer-cart-sync";
 
 type CartItem = {
   cartLineId: string;
@@ -206,6 +208,7 @@ export function AddToCartButton({
 }) {
   const [added, setAdded] =
     useState(false);
+  const syncRevision = useRef(0);
 
   return (
     <button
@@ -233,7 +236,7 @@ export function AddToCartButton({
           ).trim();
 
         if (existing) {
-          existing.quantity += 1;
+          existing.quantity = Math.min(99, existing.quantity + 1);
           existing.slug = product.slug;
           existing.name = product.name;
           existing.price =
@@ -264,6 +267,42 @@ export function AddToCartButton({
         }
 
         writeCart(cart);
+
+        const revision = syncRevision.current + 1;
+        syncRevision.current = revision;
+
+        void incrementLinkedCustomerCartItem(product.id, 1).then((serverCart) => {
+          if (!serverCart || syncRevision.current !== revision) return;
+
+          const serverItem = serverCart.items.find(
+            (item) => item.productId === product.id,
+          );
+          const latest = readCart();
+          const latestItem = latest.find(
+            (item) => item.productId === product.id,
+          );
+
+          if (!serverItem) {
+            if (latestItem) {
+              writeCart(
+                latest.filter((item) => item.productId !== product.id),
+              );
+            }
+            return;
+          }
+
+          if (latestItem) {
+            latestItem.quantity = serverItem.quantity;
+            latestItem.slug = serverItem.slug;
+            latestItem.name = serverItem.name;
+            latestItem.price = serverItem.price;
+            latestItem.imageUrl = serverItem.imageUrl || latestItem.imageUrl;
+            latestItem.imageAlt = serverItem.imageAlt || serverItem.name;
+            latestItem.isAvailable = true;
+            writeCart(latest);
+          }
+        });
+
         setAdded(true);
 
         window.setTimeout(

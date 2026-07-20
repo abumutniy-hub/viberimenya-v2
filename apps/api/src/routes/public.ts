@@ -23,6 +23,14 @@ import {
 import { isYooKassaConfigured } from "../modules/payments/yookassa.service";
 import { unlinkCustomerTelegramIdentity } from "../modules/customers/customer-telegram-identity.service";
 import {
+  clearCommerceCart,
+  getCommerceCartSnapshot,
+  incrementCommerceCartQuantity,
+  resolveCustomerCommerceCartScope,
+  setCommerceCartQuantity,
+  synchronizeCommerceCart,
+} from "../modules/customers/customer-commerce-cart.service";
+import {
   createSecureCustomerSession,
   customerMagicTokenCandidates,
   customerSessionTokenCandidates,
@@ -789,6 +797,14 @@ async function getActiveCustomerSession(
   if (!token) return null;
 
   return resolveActiveCustomerSession(client, token);
+}
+
+function publicCommerceCartSnapshot<T extends { telegramChatId: unknown }>(
+  cart: T,
+) {
+  const { telegramChatId: _privateTelegramChatId, ...publicCart } = cart;
+
+  return publicCart;
 }
 
 const customerAddressSchema = z.object({
@@ -2110,6 +2126,312 @@ export async function publicRoutes(app: FastifyInstance) {
               }
             : null,
         })),
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
+
+  app.get("/api/public/account/cart", async (request, reply) => {
+    const { client } = createDb();
+
+    try {
+      const session = await getActiveCustomerSession(
+        client,
+        request.headers.cookie,
+      );
+
+      if (!session) {
+        return reply.status(401).send({
+          ok: false,
+          message: "Требуется вход",
+        });
+      }
+
+      const scope = await resolveCustomerCommerceCartScope(client, {
+        shopId: session.shop_id,
+        customerId: session.customer_id,
+      });
+
+      if (!scope.linked) {
+        return reply.status(409).send({
+          ok: false,
+          code: "telegram_not_connected",
+          message:
+            "Подключите Telegram, чтобы корзина синхронизировалась между сайтом и ботом.",
+        });
+      }
+
+      const cart = await getCommerceCartSnapshot(client, {
+        shopId: session.shop_id,
+        telegramChatId: scope.telegramChatId,
+      });
+
+      return {
+        ok: true,
+        cart: publicCommerceCartSnapshot(cart),
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.post("/api/public/account/cart/sync", async (request, reply) => {
+    const body = z
+      .object({
+        operationId: z.string().trim().min(8).max(180),
+        mode: z.enum(["merge_max", "replace"]).default("merge_max"),
+        items: z
+          .array(
+            z.object({
+              productId: z.string().uuid(),
+              quantity: z.number().int().min(1).max(99),
+            }),
+          )
+          .max(100)
+          .default([]),
+      })
+      .parse(request.body ?? {});
+    const { client } = createDb();
+
+    try {
+      const session = await getActiveCustomerSession(
+        client,
+        request.headers.cookie,
+      );
+
+      if (!session) {
+        return reply.status(401).send({
+          ok: false,
+          message: "Требуется вход",
+        });
+      }
+
+      const result = await client.begin(async (transaction) => {
+        const scope = await resolveCustomerCommerceCartScope(transaction, {
+          shopId: session.shop_id,
+          customerId: session.customer_id,
+        });
+
+        if (!scope.linked) return null;
+
+        return synchronizeCommerceCart(transaction, {
+          shopId: session.shop_id,
+          customerId: session.customer_id,
+          telegramChatId: scope.telegramChatId,
+          items: body.items,
+          mode: body.mode,
+          operationId: body.operationId,
+        });
+      });
+
+      if (!result) {
+        return reply.status(409).send({
+          ok: false,
+          code: "telegram_not_connected",
+          message:
+            "Подключите Telegram, чтобы корзина синхронизировалась между сайтом и ботом.",
+        });
+      }
+
+      return {
+        ok: true,
+        ...result,
+        cart: publicCommerceCartSnapshot(result.cart),
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.put(
+    "/api/public/account/cart/items/:productId",
+    async (request, reply) => {
+      const params = z
+        .object({
+          productId: z.string().uuid(),
+        })
+        .parse(request.params);
+      const body = z
+        .object({
+          operationId: z.string().trim().min(8).max(180),
+          quantity: z.number().int().min(0).max(99),
+        })
+        .parse(request.body ?? {});
+      const { client } = createDb();
+
+      try {
+        const session = await getActiveCustomerSession(
+          client,
+          request.headers.cookie,
+        );
+
+        if (!session) {
+          return reply.status(401).send({
+            ok: false,
+            message: "Требуется вход",
+          });
+        }
+
+        const result = await client.begin(async (transaction) => {
+          const scope = await resolveCustomerCommerceCartScope(transaction, {
+            shopId: session.shop_id,
+            customerId: session.customer_id,
+          });
+
+          if (!scope.linked) return null;
+
+          return setCommerceCartQuantity(transaction, {
+            shopId: session.shop_id,
+            customerId: session.customer_id,
+            telegramChatId: scope.telegramChatId,
+            productId: params.productId,
+            quantity: body.quantity,
+            source: "site",
+            operationId: body.operationId,
+          });
+        });
+
+        if (!result) {
+          return reply.status(409).send({
+            ok: false,
+            code: "telegram_not_connected",
+            message:
+              "Подключите Telegram, чтобы корзина синхронизировалась между сайтом и ботом.",
+          });
+        }
+
+        return {
+          ok: true,
+          ...result,
+          cart: publicCommerceCartSnapshot(result.cart),
+        };
+      } finally {
+        await client.end();
+      }
+    },
+  );
+
+  app.post(
+    "/api/public/account/cart/items/:productId/increment",
+    async (request, reply) => {
+      const params = z
+        .object({
+          productId: z.string().uuid(),
+        })
+        .parse(request.params);
+      const body = z
+        .object({
+          operationId: z.string().trim().min(8).max(180),
+          delta: z.union([z.literal(-1), z.literal(1)]),
+        })
+        .parse(request.body ?? {});
+      const { client } = createDb();
+
+      try {
+        const session = await getActiveCustomerSession(
+          client,
+          request.headers.cookie,
+        );
+
+        if (!session) {
+          return reply.status(401).send({
+            ok: false,
+            message: "Требуется вход",
+          });
+        }
+
+        const result = await client.begin(async (transaction) => {
+          const scope = await resolveCustomerCommerceCartScope(transaction, {
+            shopId: session.shop_id,
+            customerId: session.customer_id,
+          });
+
+          if (!scope.linked) return null;
+
+          return incrementCommerceCartQuantity(transaction, {
+            shopId: session.shop_id,
+            customerId: session.customer_id,
+            telegramChatId: scope.telegramChatId,
+            productId: params.productId,
+            delta: body.delta,
+            source: "site",
+            operationId: body.operationId,
+          });
+        });
+
+        if (!result) {
+          return reply.status(409).send({
+            ok: false,
+            code: "telegram_not_connected",
+            message:
+              "Подключите Telegram, чтобы корзина синхронизировалась между сайтом и ботом.",
+          });
+        }
+
+        return {
+          ok: true,
+          ...result,
+          cart: publicCommerceCartSnapshot(result.cart),
+        };
+      } finally {
+        await client.end();
+      }
+    },
+  );
+
+  app.delete("/api/public/account/cart", async (request, reply) => {
+    const body = z
+      .object({
+        operationId: z.string().trim().min(8).max(180),
+      })
+      .parse(request.body ?? {});
+    const { client } = createDb();
+
+    try {
+      const session = await getActiveCustomerSession(
+        client,
+        request.headers.cookie,
+      );
+
+      if (!session) {
+        return reply.status(401).send({
+          ok: false,
+          message: "Требуется вход",
+        });
+      }
+
+      const result = await client.begin(async (transaction) => {
+        const scope = await resolveCustomerCommerceCartScope(transaction, {
+          shopId: session.shop_id,
+          customerId: session.customer_id,
+        });
+
+        if (!scope.linked) return null;
+
+        return clearCommerceCart(transaction, {
+          shopId: session.shop_id,
+          customerId: session.customer_id,
+          telegramChatId: scope.telegramChatId,
+          source: "site",
+          operationId: body.operationId,
+        });
+      });
+
+      if (!result) {
+        return reply.status(409).send({
+          ok: false,
+          code: "telegram_not_connected",
+          message:
+            "Подключите Telegram, чтобы корзина синхронизировалась между сайтом и ботом.",
+        });
+      }
+
+      return {
+        ok: true,
+        ...result,
+        cart: publicCommerceCartSnapshot(result.cart),
       };
     } finally {
       await client.end();

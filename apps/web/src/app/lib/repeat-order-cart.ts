@@ -1,3 +1,5 @@
+import { synchronizeLinkedCustomerCart } from "./customer-cart-sync";
+
 export type RepeatOrderCartProduct = {
   productId: string;
   slug: string;
@@ -129,6 +131,14 @@ export function addRepeatOrderProducts(products: RepeatOrderCartProduct[]) {
   }
 
   writeCart(cart);
+
+  void synchronizeLinkedCustomerCart(
+    cart.map((item) => ({
+      productId: item.productId,
+      quantity: item.quantity,
+    })),
+    "merge_max",
+  );
 
   return {
     addedQuantity,

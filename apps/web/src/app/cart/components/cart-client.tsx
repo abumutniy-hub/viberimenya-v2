@@ -1,6 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  clearLinkedCustomerCart,
+  setLinkedCustomerCartItem,
+  synchronizeLinkedCustomerCart,
+  type LinkedCustomerCartSnapshot,
+} from "../../lib/customer-cart-sync";
 
 type CartItem = {
   cartLineId: string;
@@ -179,12 +185,37 @@ function writeCart(items: CartItem[]) {
   window.dispatchEvent(new Event("viberimenya_cart_changed"));
 }
 
+function cartItemsFromLinkedSnapshot(
+  snapshot: LinkedCustomerCartSnapshot,
+  current: CartItem[],
+): CartItem[] {
+  const currentByProductId = new Map(
+    current.map((item) => [item.productId, item]),
+  );
+
+  return snapshot.items.map((item) => {
+    const existing = currentByProductId.get(item.productId);
+
+    return {
+      cartLineId: existing?.cartLineId || createCartLineId(item.productId),
+      productId: item.productId,
+      slug: item.slug,
+      name: item.name,
+      price: Number(item.price || 0),
+      quantity: Math.min(99, Math.max(1, Number(item.quantity || 1))),
+      imageUrl: item.imageUrl || existing?.imageUrl || "",
+      imageAlt: item.imageAlt || item.name,
+      isAvailable: true,
+    };
+  });
+}
+
 type CartSyncProduct = {
   id: string;
   slug: string;
   name: string;
   price: number;
-  availability: "available" | "unavailable";
+  availability: "available" | "preorder" | "unavailable";
 
   primaryImage?: {
     url?: string;
@@ -268,7 +299,7 @@ async function refreshCartProducts(items: CartItem[]): Promise<CartItem[]> {
 
         imageAlt: imageAlt || product.name || item.name,
 
-        isAvailable: product.availability === "available",
+        isAvailable: product.availability !== "unavailable",
       };
     });
   } catch {
@@ -324,6 +355,7 @@ function phonesMatch(left: string, right: string) {
 
 export function CartClient() {
   const [items, setItems] = useState<CartItem[]>([]);
+  const cartMutationQueues = useRef(new Map<string, Promise<void>>());
   const [delivery, setDelivery] = useState<DeliveryData>({
     zones: [],
     intervals: [],
@@ -395,14 +427,27 @@ export function CartClient() {
 
     setItems(storedItems);
 
-    void refreshCartProducts(storedItems).then((freshItems) => {
-      setItems(freshItems);
+    void refreshCartProducts(storedItems).then(async (freshItems) => {
+      const linkedCart = await synchronizeLinkedCustomerCart(
+        freshItems
+          .filter((item) => item.isAvailable)
+          .map((item) => ({
+            productId: item.productId,
+            quantity: item.quantity,
+          })),
+        "merge_max",
+      );
+      const nextItems = linkedCart
+        ? cartItemsFromLinkedSnapshot(linkedCart, freshItems)
+        : freshItems;
+
+      setItems(nextItems);
 
       const storedById = new Map(
         storedItems.map((item) => [item.productId, item]),
       );
 
-      const priceChanged = freshItems.some((item) => {
+      const priceChanged = nextItems.some((item) => {
         const stored = storedById.get(item.productId);
 
         return Boolean(stored && stored.price !== item.price);
@@ -414,14 +459,21 @@ export function CartClient() {
         return Boolean(stored && stored.isAvailable !== item.isAvailable);
       });
 
-      if (priceChanged || availabilityChanged) {
+      if (linkedCart) {
+        const removedCount = linkedCart.removed.length;
+        setCartNotice(
+          removedCount > 0
+            ? `Корзина синхронизирована с Telegram. Недоступных товаров удалено: ${removedCount}.`
+            : "Корзина синхронизирована между сайтом и Telegram.",
+        );
+      } else if (priceChanged || availabilityChanged) {
         setCartNotice(
           "Цены и наличие товаров обновлены по актуальным данным каталога.",
         );
       }
 
-      if (JSON.stringify(freshItems) !== JSON.stringify(storedItems)) {
-        writeCart(freshItems);
+      if (JSON.stringify(nextItems) !== JSON.stringify(storedItems)) {
+        writeCart(nextItems);
       }
     });
 
@@ -602,6 +654,50 @@ export function CartClient() {
     setBonusMessage("");
   }
 
+  function queueLinkedCartQuantity(productId: string, quantity: number) {
+    const previous = cartMutationQueues.current.get(productId) ?? Promise.resolve();
+    const next = previous
+      .catch(() => undefined)
+      .then(async () => {
+        const snapshot = await setLinkedCustomerCartItem(productId, quantity);
+
+        if (!snapshot) return;
+
+        const serverItem = snapshot.items.find(
+          (item) => item.productId === productId,
+        );
+
+        setItems((current) => {
+          const updated = serverItem
+            ? current.map((item) =>
+                item.productId === productId
+                  ? {
+                      ...item,
+                      slug: serverItem.slug,
+                      name: serverItem.name,
+                      price: serverItem.price,
+                      quantity: serverItem.quantity,
+                      imageUrl: serverItem.imageUrl || item.imageUrl,
+                      imageAlt: serverItem.imageAlt || serverItem.name,
+                      isAvailable: true,
+                    }
+                  : item,
+              )
+            : current.filter((item) => item.productId !== productId);
+
+          writeCart(updated);
+          return updated;
+        });
+      });
+
+    cartMutationQueues.current.set(productId, next);
+    void next.finally(() => {
+      if (cartMutationQueues.current.get(productId) === next) {
+        cartMutationQueues.current.delete(productId);
+      }
+    });
+  }
+
   function updateQty(cartLineId: string, quantity: number) {
     const safeQuantity = Math.min(99, Math.max(0, Number(quantity) || 0));
     const next = items
@@ -615,15 +711,25 @@ export function CartClient() {
     resetCartAdjustments();
     setItems(next);
     writeCart(next);
+
+    const changed = items.find((item) => item.cartLineId === cartLineId);
+    if (changed) {
+      queueLinkedCartQuantity(changed.productId, safeQuantity);
+    }
   }
 
   function removeItem(cartLineId: string) {
+    const removed = items.find((item) => item.cartLineId === cartLineId);
     const next = items.filter((item) => item.cartLineId !== cartLineId);
 
     resetCartAdjustments();
     setFormError("");
     setItems(next);
     writeCart(next);
+
+    if (removed) {
+      queueLinkedCartQuantity(removed.productId, 0);
+    }
   }
 
   function removeUnavailableItems() {
@@ -900,6 +1006,7 @@ export function CartClient() {
 
       writeCart([]);
       setItems([]);
+      void clearLinkedCustomerCart();
       setCartNotice("");
       setClientRequestId(createClientRequestId());
       setSuccess(data.order);
