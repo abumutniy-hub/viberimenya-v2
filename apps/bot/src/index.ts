@@ -3,6 +3,13 @@ import { mkdir, unlink, writeFile } from "node:fs/promises";
 import { extname, join, resolve } from "node:path";
 import { config } from "dotenv";
 import postgres from "postgres";
+import {
+  CUSTOMER_MENU_TEXT,
+  clientMainKeyboard,
+  customerLinkInstructions,
+  isCustomerMenuCommand,
+  unlinkedMainKeyboard,
+} from "./customer-telegram-ux";
 
 config({ path: resolve(process.cwd(), "../../.env") });
 
@@ -76,10 +83,18 @@ type TelegramPhotoSize = {
   file_size?: number;
 };
 
+type TelegramContact = {
+  phone_number: string;
+  first_name?: string;
+  last_name?: string;
+  user_id?: number;
+};
+
 type TelegramMessage = {
   message_id: number;
   text?: string;
   photo?: TelegramPhotoSize[];
+  contact?: TelegramContact;
   from?: TelegramUser;
   chat: TelegramChat;
 };
@@ -664,33 +679,6 @@ async function answerCallbackQuery(callbackQueryId: string, text?: string) {
   }
 
   await telegramApi("answerCallbackQuery", body);
-}
-
-function clientMainKeyboard() {
-  return {
-    keyboard: [
-      [{ text: "🛍 Каталог" }, { text: "🧺 Корзина" }],
-      [{ text: "📦 Мои заказы" }, { text: "🎁 Бонусы" }],
-      [{ text: "🏠 Адреса" }, { text: "❤️ Любимые" }],
-      [{ text: "👤 Профиль" }, { text: "💬 Поддержка" }]
-    ],
-    resize_keyboard: true,
-    is_persistent: true
-  };
-}
-
-function unlinkedMainKeyboard() {
-  return {
-    keyboard: [
-      [{ text: "🛍 Каталог" }, { text: "🧺 Корзина" }],
-      [{ text: "📦 Мои заказы" }, { text: "🎁 Бонусы" }],
-      [{ text: "🏠 Адреса" }, { text: "❤️ Любимые" }],
-      [{ text: "👤 Профиль" }, { text: "💬 Поддержка" }],
-      [{ text: "🔗 Привязать аккаунт" }]
-    ],
-    resize_keyboard: true,
-    is_persistent: true
-  };
 }
 
 function staffMainKeyboard(role: string) {
@@ -1507,7 +1495,7 @@ async function handleTelegramLinkCode(message: TelegramMessage, rawCode: string)
       message.chat.id,
       retryAfter > 0
         ? "Слишком много неверных кодов. Повторите попытку через 15 минут."
-        : "Код не найден или срок действия истёк. Сгенерируйте новый код на сайте или в CRM.",
+        : "Код не найден или срок действия истёк. Получите новый код на сайте.",
     );
     return true;
   }
@@ -1709,42 +1697,76 @@ async function handleOpenMenu(chatId: number, isStart = false) {
   }
 }
 
-async function handleCatalog(chatId: number, messageId?: number) {
-  const shopId = await getDefaultShopId();
-  const replyMarkup = await mainKeyboardForChat(chatId);
+type PublicCatalogCategory = {
+  id: string;
+  slug: string;
+  name: string;
+  publicCount: number;
+  isActive: boolean;
+};
 
-  if (!shopId) {
-    await sendTelegramMessage(chatId, "Каталог временно недоступен. Попробуйте позже.", {
-      reply_markup: replyMarkup
-    });
+async function fetchPublicCatalogCategories(): Promise<PublicCatalogCategory[]> {
+  const response = await fetch(`${INTERNAL_API_URL}/api/public/categories`, {
+    headers: { accept: "application/json" },
+    signal: AbortSignal.timeout(5_000),
+  });
+
+  if (!response.ok) {
+    throw new Error(`public categories returned HTTP ${response.status}`);
+  }
+
+  const payload = await response.json() as unknown;
+  const record = payload && typeof payload === "object"
+    ? payload as Record<string, unknown>
+    : {};
+  const items = Array.isArray(record.items) ? record.items : [];
+
+  return items.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+
+    const row = item as Record<string, unknown>;
+    const id = valueToText(row.id);
+    const slug = valueToText(row.slug);
+    const name = valueToText(row.name);
+    const publicCount = Number(row.publicCount || 0);
+    const isActive = row.isActive === true;
+
+    if (!id || !slug || !name || !isActive || publicCount < 1) {
+      return [];
+    }
+
+    return [{ id, slug, name, publicCount, isActive }];
+  }).slice(0, 24);
+}
+
+async function handleCatalog(chatId: number, messageId?: number) {
+  let categories: PublicCatalogCategory[] = [];
+
+  try {
+    categories = await fetchPublicCatalogCategories();
+  } catch (error) {
+    console.error("[bot-worker] public categories fetch failed", error);
+    await sendTelegramMessage(
+      chatId,
+      "Каталог временно недоступен. Попробуйте позже.",
+    );
     return;
   }
 
-  const categories = await sql<{ id: string; name: string; slug: string }[]>`
-    SELECT id, name, slug
-    FROM categories
-    WHERE shop_id = ${shopId}
-      AND is_active = true
-    ORDER BY sort_order ASC, name ASC
-    LIMIT 24
-  `;
-
   if (categories.length === 0) {
-    await sendTelegramMessage(chatId, "Каталог пока наполняется.", {
-      reply_markup: replyMarkup
-    });
+    await sendTelegramMessage(chatId, "Каталог пока наполняется.");
     return;
   }
 
   const categoryButtons = categories.map((category) => ({
     text: category.name,
-    callback_data: `cat:${category.id}`
+    callback_data: `cat:${category.id}`,
   }));
 
   const rows: TelegramInlineKeyboardButton[][] = [
     ...chunkRows(categoryButtons, 2),
     [{ text: "🌐 Открыть каталог на сайте", url: buildCatalogUrl() }],
-    [{ text: "❌ Скрыть", callback_data: "msg:delete" }]
+    [{ text: "❌ Скрыть", callback_data: "msg:delete" }],
   ];
 
   await sendOrEditTelegramMessage(
@@ -1752,36 +1774,58 @@ async function handleCatalog(chatId: number, messageId?: number) {
     [
       "🛍 Каталог",
       "",
-      "Выберите раздел, а я покажу товары прямо здесь."
+      "Показаны только актуальные разделы с доступными товарами.",
     ].join("\n"),
     {
-      reply_markup: inlineKeyboard(rows)
+      reply_markup: inlineKeyboard(rows),
     },
-    messageId
+    messageId,
   );
 }
 
-async function handleCatalogCategory(chatId: number, categoryId: string, messageId?: number) {
+async function handleCatalogCategory(
+  chatId: number,
+  categoryId: string,
+  messageId?: number,
+  callbackQueryId?: string,
+) {
+  let categories: PublicCatalogCategory[] = [];
+
+  try {
+    categories = await fetchPublicCatalogCategories();
+  } catch (error) {
+    console.error("[bot-worker] category validation failed", error);
+    if (callbackQueryId) {
+      await answerCallbackQuery(callbackQueryId, "Каталог временно недоступен");
+    }
+    await sendTelegramMessage(
+      chatId,
+      "Каталог временно недоступен. Попробуйте позже.",
+    );
+    return;
+  }
+
+  const category = categories.find((item) => item.id === categoryId);
+
+  if (!category) {
+    if (callbackQueryId) {
+      await answerCallbackQuery(
+        callbackQueryId,
+        "Раздел больше недоступен. Каталог обновлён.",
+      );
+    }
+    await handleCatalog(chatId, messageId);
+    return;
+  }
+
+  if (callbackQueryId) {
+    await answerCallbackQuery(callbackQueryId);
+  }
+
   const shopId = await getDefaultShopId();
 
   if (!shopId) {
     await sendTelegramMessage(chatId, "Каталог временно недоступен. Попробуйте позже.");
-    return;
-  }
-
-  const categoryRows = await sql<{ id: string; name: string; slug: string }[]>`
-    SELECT id, name, slug
-    FROM categories
-    WHERE shop_id = ${shopId}
-      AND id = ${categoryId}
-      AND is_active = true
-    LIMIT 1
-  `;
-
-  const category = categoryRows[0];
-
-  if (!category) {
-    await sendTelegramMessage(chatId, "Раздел каталога не найден или временно скрыт.");
     return;
   }
 
@@ -1792,47 +1836,48 @@ async function handleCatalogCategory(chatId: number, categoryId: string, message
     price: number;
     short_description: string | null;
   }[]>`
-    SELECT id, name, slug, price, short_description
-    FROM products
-    WHERE shop_id = ${shopId}
-      AND category_id = ${category.id}
-      AND status = 'active'
-    ORDER BY sort_order ASC, created_at DESC
+    SELECT p.id, p.name, p.slug, p.price, p.short_description
+    FROM products p
+    INNER JOIN categories c
+      ON c.id = p.category_id
+      AND c.shop_id = p.shop_id
+      AND c.is_active = true
+    WHERE p.shop_id = ${shopId}
+      AND p.category_id = ${category.id}
+      AND p.status = 'active'
+      AND COALESCE(
+        NULLIF(p.metadata #>> '{catalog,availability}', ''),
+        CASE
+          WHEN COALESCE(p.stock_quantity, 0) > 0
+          THEN 'available'
+          ELSE 'unavailable'
+        END
+      ) = 'available'
+    ORDER BY p.sort_order ASC, p.created_at DESC
     LIMIT 20
   `;
 
   if (productRows.length === 0) {
     await sendTelegramMessage(
       chatId,
-      [
-        `🛍 ${category.name}`,
-        "",
-        "В этом разделе пока нет доступных товаров.",
-        "Можно вернуться в каталог или открыть сайт."
-      ].join("\n"),
-      {
-        reply_markup: inlineKeyboard([
-          [{ text: "⬅️ К разделам", callback_data: "catalog" }],
-          [{ text: "🌐 Каталог на сайте", url: buildCatalogUrl() }],
-          [{ text: "❌ Скрыть", callback_data: "msg:delete" }]
-        ])
-      }
+      "Раздел больше не содержит доступных товаров. Каталог обновлён.",
     );
+    await handleCatalog(chatId, messageId);
     return;
   }
 
   const productButtons = productRows.map((product) => ({
     text: `${product.name} · ${money(product.price)}`,
-    callback_data: `prod:${product.id}`
+    callback_data: `prod:${product.id}`,
   }));
 
   const rows: TelegramInlineKeyboardButton[][] = [
     ...chunkRows(productButtons, 1),
     [
       { text: "⬅️ К разделам", callback_data: "catalog" },
-      { text: "🌐 На сайте", url: buildCatalogUrl(`?category=${category.slug}`) }
+      { text: "🌐 На сайте", url: buildCatalogUrl(`?category=${category.slug}`) },
     ],
-    [{ text: "❌ Скрыть", callback_data: "msg:delete" }]
+    [{ text: "❌ Скрыть", callback_data: "msg:delete" }],
   ];
 
   await sendOrEditTelegramMessage(
@@ -1840,19 +1885,27 @@ async function handleCatalogCategory(chatId: number, categoryId: string, message
     [
       `🛍 ${category.name}`,
       "",
-      "Выберите букет, чтобы открыть карточку:"
+      "Выберите товар, чтобы открыть карточку:",
     ].join("\n"),
     {
-      reply_markup: inlineKeyboard(rows)
+      reply_markup: inlineKeyboard(rows),
     },
-    messageId
+    messageId,
   );
 }
 
-async function handleProductCard(chatId: number, productId: string) {
+
+async function handleProductCard(
+  chatId: number,
+  productId: string,
+  callbackQueryId?: string,
+) {
   const shopId = await getDefaultShopId();
 
   if (!shopId) {
+    if (callbackQueryId) {
+      await answerCallbackQuery(callbackQueryId, "Каталог временно недоступен");
+    }
     await sendTelegramMessage(chatId, "Каталог временно недоступен. Попробуйте позже.");
     return;
   }
@@ -1885,25 +1938,57 @@ async function handleProductCard(chatId: number, productId: string) {
       p.is_stock_visible,
       pi.url AS image_url
     FROM products p
-    LEFT JOIN categories c ON c.id = p.category_id
+    LEFT JOIN categories c
+      ON c.id = p.category_id
+      AND c.shop_id = p.shop_id
+      AND c.is_active = true
+      AND LOWER(c.slug) NOT IN (
+        'podpiska-na-cvety',
+        'podpiska-na-tsvety',
+        'subscription'
+      )
+      AND LOWER(BTRIM(c.name)) <> LOWER('Подписка на цветы')
     LEFT JOIN LATERAL (
       SELECT url
       FROM product_images
       WHERE product_id = p.id
+        AND shop_id = p.shop_id
       ORDER BY is_main DESC, sort_order ASC, created_at ASC
       LIMIT 1
     ) pi ON true
     WHERE p.shop_id = ${shopId}
       AND p.id = ${productId}
       AND p.status = 'active'
+      AND (
+        p.category_id IS NULL
+        OR c.id IS NOT NULL
+      )
+      AND COALESCE(
+        NULLIF(p.metadata #>> '{catalog,availability}', ''),
+        CASE
+          WHEN COALESCE(p.stock_quantity, 0) > 0
+          THEN 'available'
+          ELSE 'unavailable'
+        END
+      ) = 'available'
     LIMIT 1
   `;
 
   const product = productRows[0];
 
   if (!product) {
-    await sendTelegramMessage(chatId, "Товар не найден или временно скрыт.");
+    if (callbackQueryId) {
+      await answerCallbackQuery(
+        callbackQueryId,
+        "Товар больше недоступен. Каталог обновлён.",
+      );
+    }
+    await handleCatalog(chatId);
     return;
+  }
+
+  if (callbackQueryId) {
+    await answerCallbackQuery(callbackQueryId);
   }
 
   const description = product.short_description || product.description || product.composition || "Стильный букет от магазина «ВЫБЕРИ МЕНЯ».";
@@ -1917,17 +2002,19 @@ async function handleProductCard(chatId: number, productId: string) {
     product.category_name ? `Раздел: ${product.category_name}` : "",
     `Наличие: ${stockText}`,
     "",
-    description
+    description,
   ].filter(Boolean);
 
   const rows: TelegramInlineKeyboardButton[][] = [
     [{ text: "🧺 Добавить в корзину", callback_data: `cart:add:${product.id}` }],
     [{ text: "🌐 Открыть на сайте", url: buildProductUrl(product.slug) }],
     [
-      product.category_id ? { text: "⬅️ Назад к товарам", callback_data: `cat:${product.category_id}` } : { text: "⬅️ К разделам", callback_data: "catalog" },
-      { text: "🛍 Каталог", callback_data: "catalog" }
+      product.category_id
+        ? { text: "⬅️ Назад к товарам", callback_data: `cat:${product.category_id}` }
+        : { text: "⬅️ К разделам", callback_data: "catalog" },
+      { text: "🛍 Каталог", callback_data: "catalog" },
     ],
-    [{ text: "❌ Скрыть карточку", callback_data: "msg:delete" }]
+    [{ text: "❌ Скрыть карточку", callback_data: "msg:delete" }],
   ];
 
   const replyMarkup = inlineKeyboard(rows);
@@ -1935,13 +2022,13 @@ async function handleProductCard(chatId: number, productId: string) {
 
   if (imageUrl) {
     await sendTelegramPhoto(chatId, imageUrl, lines.join("\n"), {
-      reply_markup: replyMarkup
+      reply_markup: replyMarkup,
     });
     return;
   }
 
   await sendTelegramMessage(chatId, lines.join("\n"), {
-    reply_markup: replyMarkup
+    reply_markup: replyMarkup,
   });
 }
 
@@ -2980,8 +3067,34 @@ async function clearCheckoutSession(chatId: number) {
 
 async function askCheckoutQuestion(chatId: number, text: string) {
   await sendTelegramMessage(chatId, text, {
-    reply_markup: checkoutCancelKeyboard()
+    reply_markup: checkoutCancelKeyboard(),
   });
+}
+
+function checkoutPhoneKeyboard() {
+  return {
+    keyboard: [
+      [{ text: "📱 Поделиться номером", request_contact: true }],
+      [{ text: "❌ Отменить заказ" }],
+    ],
+    resize_keyboard: true,
+    one_time_keyboard: true,
+    is_persistent: false,
+    input_field_placeholder: "+7 999 123-45-67",
+  };
+}
+
+async function askCheckoutPhoneQuestion(chatId: number) {
+  await sendTelegramMessage(
+    chatId,
+    [
+      "Шаг 2.",
+      "Введите ваш телефон или нажмите «📱 Поделиться номером»:",
+      "",
+      "Например: +7 999 123-45-67",
+    ].join("\n"),
+    { reply_markup: checkoutPhoneKeyboard() },
+  );
 }
 
 async function handleCheckoutStart(chatId: number) {
@@ -3008,6 +3121,208 @@ async function handleCheckoutStart(chatId: number) {
       "Введите ваше имя:",
     ].join("\n"),
   );
+}
+
+async function resumeCheckout(chatId: number) {
+  const session = await getCheckoutSession(chatId);
+
+  if (!session) {
+    await sendTelegramMessage(
+      chatId,
+      "Незавершённое оформление не найдено. Откройте корзину и начните заново.",
+    );
+    return;
+  }
+
+  const data = safeCheckoutData(session.data);
+
+  if (session.step === "customer_name") {
+    await askCheckoutQuestion(chatId, "Шаг 1. Введите ваше имя:");
+    return;
+  }
+
+  if (session.step === "customer_phone") {
+    await askCheckoutPhoneQuestion(chatId);
+    return;
+  }
+
+  if (session.step === "recipient_name") {
+    await askCheckoutQuestion(
+      chatId,
+      "Шаг 3. Введите имя получателя или отправьте знак минус: -",
+    );
+    return;
+  }
+
+  if (session.step === "recipient_phone") {
+    await askCheckoutQuestion(
+      chatId,
+      "Шаг 4. Введите телефон получателя или отправьте знак минус: -",
+    );
+    return;
+  }
+
+  if (session.step === "delivery_type") {
+    await showCheckoutDeliveryType(chatId, data);
+    return;
+  }
+
+  if (session.step === "delivery_zone") {
+    await showCheckoutDeliveryZones(chatId, data);
+    return;
+  }
+
+  if (session.step === "delivery_date") {
+    await askCheckoutQuestion(
+      chatId,
+      "Шаг 7. Введите дату доставки в формате ДД.ММ.ГГГГ:",
+    );
+    return;
+  }
+
+  if (session.step === "delivery_interval") {
+    await showCheckoutIntervals(chatId, data);
+    return;
+  }
+
+  if (session.step === "delivery_address") {
+    await askCheckoutQuestion(
+      chatId,
+      "Шаг 9. Введите полный адрес доставки:",
+    );
+    return;
+  }
+
+  if (session.step === "payment_method") {
+    await showCheckoutPaymentMethods(chatId, data);
+    return;
+  }
+
+  if (session.step === "comment") {
+    await askCheckoutQuestion(
+      chatId,
+      "Добавьте комментарий к заказу или отправьте знак минус: -",
+    );
+    return;
+  }
+
+  if (session.step === "privacy") {
+    await showCheckoutPrivacy(chatId, data);
+    return;
+  }
+
+  await showCheckoutConfirm(chatId, data);
+}
+
+async function sendCheckoutResumePrompt(chatId: number) {
+  const session = await getCheckoutSession(chatId);
+
+  if (!session) return;
+
+  await sendTelegramMessage(
+    chatId,
+    [
+      "Черновик оформления сохранён.",
+      "Можно вернуться к нему позже или отменить.",
+    ].join("\n"),
+    {
+      reply_markup: inlineKeyboard([
+        [{ text: "▶️ Продолжить оформление", callback_data: "checkout:resume" }],
+        [{ text: "🔄 Заполнить заново", callback_data: "checkout:restart" }],
+        [{ text: "❌ Отменить заказ", callback_data: "checkout:cancel" }],
+      ]),
+    },
+  );
+}
+
+async function handleCustomerLinkEntry(chatId: number) {
+  const profile = await getTelegramProfile(String(chatId));
+
+  if (profile?.customer_id) {
+    await sendTelegramMessage(
+      chatId,
+      "Telegram уже привязан к вашему профилю покупателя.",
+      {
+        reply_markup: inlineKeyboard([
+          [{ text: "👤 Открыть профиль", callback_data: "menu:profile" }],
+        ]),
+      },
+    );
+    return;
+  }
+
+  await sendTelegramMessage(chatId, customerLinkInstructions());
+}
+
+async function showCustomerMoreMenu(chatId: number) {
+  const profile = await getTelegramProfile(String(chatId));
+  const rows: TelegramInlineKeyboardButton[][] = [
+    [
+      { text: CUSTOMER_MENU_TEXT.addresses, callback_data: "menu:addresses" },
+      { text: CUSTOMER_MENU_TEXT.favorites, callback_data: "menu:favorites" },
+    ],
+    [{ text: CUSTOMER_MENU_TEXT.support, callback_data: "menu:support" }],
+  ];
+
+  if (!profile?.customer_id) {
+    rows.push([{
+      text: CUSTOMER_MENU_TEXT.link,
+      callback_data: "menu:link",
+    }]);
+  } else {
+    rows.push([{
+      text: "👤 Управление профилем",
+      callback_data: "menu:profile",
+    }]);
+  }
+
+  rows.push([{ text: "❌ Скрыть", callback_data: "msg:delete" }]);
+
+  await sendTelegramMessage(
+    chatId,
+    "Дополнительные разделы:",
+    { reply_markup: inlineKeyboard(rows) },
+  );
+}
+
+async function handleCustomerMenuCommand(
+  message: TelegramMessage,
+  text: string,
+): Promise<boolean> {
+  if (!isCustomerMenuCommand(text)) return false;
+
+  const chatId = message.chat.id;
+  const hadCheckout = Boolean(await getCheckoutSession(chatId));
+
+  if (text === "/menu") {
+    await handleOpenMenu(chatId);
+  } else if (text === CUSTOMER_MENU_TEXT.catalog) {
+    await handleCatalog(chatId);
+  } else if (text === CUSTOMER_MENU_TEXT.cart) {
+    await handleCart(chatId);
+  } else if (text === CUSTOMER_MENU_TEXT.orders || text === "📦 Заказы") {
+    await handleOrders(chatId);
+  } else if (text === CUSTOMER_MENU_TEXT.profile) {
+    await handleCustomerProfile(chatId);
+  } else if (text === CUSTOMER_MENU_TEXT.bonuses) {
+    await handleBonuses(chatId);
+  } else if (text === CUSTOMER_MENU_TEXT.more) {
+    await showCustomerMoreMenu(chatId);
+  } else if (text === CUSTOMER_MENU_TEXT.addresses) {
+    await handleAddresses(chatId);
+  } else if (text === CUSTOMER_MENU_TEXT.favorites) {
+    await handleFavorites(chatId);
+  } else if (text === CUSTOMER_MENU_TEXT.support || text === "☎️ Связь") {
+    await handleContact(chatId);
+  } else if (text === CUSTOMER_MENU_TEXT.link) {
+    await handleCustomerLinkEntry(chatId);
+  }
+
+  if (hadCheckout) {
+    await sendCheckoutResumePrompt(chatId);
+  }
+
+  return true;
 }
 
 async function showCheckoutConfirm(chatId: number, data: TelegramCheckoutData) {
@@ -3093,23 +3408,34 @@ async function handleCheckoutMessage(message: TelegramMessage, text: string): Pr
 
     data.customerName = value;
     await setCheckoutSession(message.chat.id, "customer_phone", data);
-    await askCheckoutQuestion(
-      message.chat.id,
-      [
-        "Шаг 2.",
-        "Введите ваш телефон:",
-        "",
-        "Например: +7 999 123-45-67",
-      ].join("\n"),
-    );
+    await askCheckoutPhoneQuestion(message.chat.id);
     return true;
   }
 
   if (session.step === "customer_phone") {
-    const phone = normalizePhone(value);
+    if (
+      message.contact?.user_id
+      && message.from?.id
+      && message.contact.user_id !== message.from.id
+    ) {
+      await sendTelegramMessage(
+        message.chat.id,
+        "Для входа и заказа можно отправить только номер владельца этого Telegram-аккаунта.",
+        { reply_markup: checkoutPhoneKeyboard() },
+      );
+      return true;
+    }
+
+    const phone = normalizePhone(
+      message.contact?.phone_number || value,
+    );
 
     if (phoneDigitsOnly(phone).length < 10) {
-      await askCheckoutQuestion(message.chat.id, "Введите корректный номер телефона:");
+      await sendTelegramMessage(
+        message.chat.id,
+        "Введите корректный номер телефона или поделитесь номером кнопкой ниже:",
+        { reply_markup: checkoutPhoneKeyboard() },
+      );
       return true;
     }
 
@@ -3751,7 +4077,7 @@ async function handleCustomerProfile(chatId: number) {
           "👤 Профиль",
           "",
           "Эта Telegram-привязка больше не активна.",
-          "Получите новый код в CRM и нажмите «🔗 Привязать аккаунт»."
+          "Получите новый код на сайте и откройте раздел привязки аккаунта."
         ].join("\n"),
         {
           reply_markup: await mainKeyboardForChat(chatId)
@@ -3808,7 +4134,7 @@ async function handleCustomerProfile(chatId: number) {
         "👤 Профиль",
         "",
         "Личный кабинет пока не подключён.",
-        "Получите код привязки на сайте или в CRM, затем нажмите «🔗 Привязать аккаунт» и введите код."
+        "Получите код на сайте, откройте «☰ Ещё» → «🔗 Привязать аккаунт» и введите его."
       ].join("\n"),
       {
         reply_markup: replyMarkup
@@ -8398,15 +8724,18 @@ async function handleCallbackQuery(callbackQuery: TelegramCallbackQuery) {
 
   if (data.startsWith("cat:")) {
     const categoryId = data.slice("cat:".length);
-    await answerCallbackQuery(callbackQuery.id);
-    await handleCatalogCategory(chatId, categoryId, message.message_id);
+    await handleCatalogCategory(
+      chatId,
+      categoryId,
+      message.message_id,
+      callbackQuery.id,
+    );
     return;
   }
 
   if (data.startsWith("prod:")) {
     const productId = data.slice("prod:".length);
-    await answerCallbackQuery(callbackQuery.id);
-    await handleProductCard(chatId, productId);
+    await handleProductCard(chatId, productId, callbackQuery.id);
     return;
   }
 
@@ -8712,6 +9041,47 @@ async function handleCallbackQuery(callbackQuery: TelegramCallbackQuery) {
   }
 
 
+  if (data === "menu:addresses") {
+    await answerCallbackQuery(callbackQuery.id);
+    await handleAddresses(chatId);
+    await sendCheckoutResumePrompt(chatId);
+    return;
+  }
+
+  if (data === "menu:favorites") {
+    await answerCallbackQuery(callbackQuery.id);
+    await handleFavorites(chatId);
+    await sendCheckoutResumePrompt(chatId);
+    return;
+  }
+
+  if (data === "menu:support") {
+    await answerCallbackQuery(callbackQuery.id);
+    await handleContact(chatId);
+    await sendCheckoutResumePrompt(chatId);
+    return;
+  }
+
+  if (data === "menu:profile") {
+    await answerCallbackQuery(callbackQuery.id);
+    await handleCustomerProfile(chatId);
+    await sendCheckoutResumePrompt(chatId);
+    return;
+  }
+
+  if (data === "menu:link") {
+    await answerCallbackQuery(callbackQuery.id);
+    await handleCustomerLinkEntry(chatId);
+    await sendCheckoutResumePrompt(chatId);
+    return;
+  }
+
+  if (data === "checkout:resume") {
+    await answerCallbackQuery(callbackQuery.id, "Продолжаем оформление");
+    await resumeCheckout(chatId);
+    return;
+  }
+
   if (data === "checkout:start") {
     await answerCallbackQuery(callbackQuery.id);
     await handleCheckoutStart(chatId);
@@ -8822,7 +9192,7 @@ async function handleNotifications(chatId: number) {
         "🔔 Уведомления",
         "",
         "Telegram пока не привязан.",
-        "Получите код на сайте или в CRM, нажмите «🔗 Привязать аккаунт» и введите код."
+        "Получите код на сайте, откройте «☰ Ещё» → «🔗 Привязать аккаунт» и введите его."
       ].join("\n"),
       {
         reply_markup: replyMarkup
@@ -9013,7 +9383,11 @@ async function handleUpdate(update: TelegramUpdate) {
     }
   }
 
-  const text = message.text?.trim();
+  const text = (
+    message.text
+    || message.contact?.phone_number
+    || ""
+  ).trim();
 
   if (!text) {
     return;
@@ -9080,8 +9454,12 @@ async function handleUpdate(update: TelegramUpdate) {
     return;
   }
 
-  if (text === "👤 Профиль") {
-    await handleCustomerProfile(message.chat.id);
+  const customerMenuHandled = await handleCustomerMenuCommand(
+    message,
+    text,
+  );
+
+  if (customerMenuHandled) {
     return;
   }
 
@@ -9090,64 +9468,11 @@ async function handleUpdate(update: TelegramUpdate) {
     return;
   }
 
-  if (text === "/menu") {
-    await handleOpenMenu(message.chat.id);
-    return;
-  }
-
-  if (text === "🔗 Привязать аккаунт") {
-    await sendTelegramMessage(
-      message.chat.id,
-      [
-        "Введите код привязки.",
-        "",
-        "Клиент берёт код в личном кабинете на сайте или после оформления заказа.",
-        "Сотрудник берёт код в CRM у администратора."
-      ].join("\n")
-    );
-    return;
-  }
-
   if (/^[0-9\s-]{4,12}$/.test(text)) {
     const linked = await handleTelegramLinkCode(message, text);
     if (linked) {
       return;
     }
-  }
-
-  if (text === "🛍 Каталог") {
-    await handleCatalog(message.chat.id);
-    return;
-  }
-
-  if (text === "📦 Мои заказы" || text === "📦 Заказы") {
-    await handleOrders(message.chat.id);
-    return;
-  }
-
-  if (text === "🎁 Бонусы") {
-    await handleBonuses(message.chat.id);
-    return;
-  }
-
-  if (text === "🏠 Адреса") {
-    await handleAddresses(message.chat.id);
-    return;
-  }
-
-  if (text === "❤️ Любимые") {
-    await handleFavorites(message.chat.id);
-    return;
-  }
-
-  if (text === "💬 Поддержка" || text === "☎️ Связь") {
-    await handleContact(message.chat.id);
-    return;
-  }
-
-  if (text === "🧺 Корзина") {
-    await handleCart(message.chat.id);
-    return;
   }
 
   if (text === "🧾 CRM") {

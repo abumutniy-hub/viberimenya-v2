@@ -21,6 +21,7 @@ import {
   resolveProductAvailability
 } from "../lib/catalog-product";
 import { isYooKassaConfigured } from "../modules/payments/yookassa.service";
+import { listPublicCatalogCategories } from "../modules/catalog/public-category.service";
 import { unlinkCustomerTelegramIdentity } from "../modules/customers/customer-telegram-identity.service";
 import {
   clearCommerceCart,
@@ -1258,100 +1259,10 @@ export async function publicRoutes(app: FastifyInstance) {
     const { client, shop } = await getShopContext();
 
     try {
-      const items = await client<{
-        id: string;
-        shop_id: string;
-        parent_id: string | null;
-        slug: string;
-        name: string;
-        description: string | null;
-        image_url: string | null;
-        sort_order: number;
-        is_active: boolean;
-        public_count: number;
-      }[]>`
-        SELECT
-          c.id,
-          c.shop_id,
-          c.parent_id,
-          c.slug,
-          c.name,
-          c.description,
-          COALESCE(
-            NULLIF(TRIM(c.image_url), ''),
-            cover.url
-          ) AS image_url,
-          c.sort_order,
-          c.is_active,
-          COUNT(p.id)::int AS public_count
-        FROM categories c
-        INNER JOIN products p
-          ON p.category_id = c.id
-          AND p.shop_id = c.shop_id
-          AND p.status = 'active'
-          AND COALESCE(
-            NULLIF(
-              p.metadata #>> '{catalog,availability}',
-              ''
-            ),
-            CASE
-              WHEN COALESCE(p.stock_quantity, 0) > 0
-              THEN 'available'
-              ELSE 'unavailable'
-            END
-          ) = 'available'
-        LEFT JOIN LATERAL (
-          SELECT pi.url
-          FROM products cp
-          INNER JOIN product_images pi
-            ON pi.product_id = cp.id
-            AND pi.shop_id = cp.shop_id
-          WHERE cp.shop_id = c.shop_id
-            AND cp.category_id = c.id
-            AND cp.status = 'active'
-            AND COALESCE(
-              NULLIF(
-                cp.metadata #>> '{catalog,availability}',
-                ''
-              ),
-              CASE
-                WHEN COALESCE(cp.stock_quantity, 0) > 0
-                THEN 'available'
-                ELSE 'unavailable'
-              END
-            ) = 'available'
-          ORDER BY
-            cp.is_featured DESC,
-            cp.sort_order ASC,
-            pi.is_main DESC,
-            pi.sort_order ASC,
-            pi.created_at ASC
-          LIMIT 1
-        ) cover ON true
-        WHERE c.shop_id = ${shop.id}
-          AND c.is_active = true
-          AND LOWER(c.slug) NOT IN (
-            'podpiska-na-cvety',
-            'podpiska-na-tsvety',
-            'subscription'
-          )
-          AND LOWER(BTRIM(c.name)) <> LOWER('Подписка на цветы')
-        GROUP BY
-          c.id,
-          c.shop_id,
-          c.parent_id,
-          c.slug,
-          c.name,
-          c.description,
-          c.image_url,
-          c.sort_order,
-          c.is_active,
-          cover.url
-        ORDER BY
-          COUNT(p.id) DESC,
-          c.sort_order ASC,
-          c.name ASC
-      `;
+      const items = await listPublicCatalogCategories(
+        client,
+        shop.id,
+      );
 
       return {
         items: items.map((item) => ({
@@ -1364,8 +1275,8 @@ export async function publicRoutes(app: FastifyInstance) {
           imageUrl: item.image_url,
           sortOrder: Number(item.sort_order),
           isActive: item.is_active,
-          publicCount: Number(item.public_count)
-        }))
+          publicCount: Number(item.public_count),
+        })),
       };
     } finally {
       await client.end();
