@@ -40,8 +40,8 @@ export function clientMainKeyboard() {
       ],
     ],
     resize_keyboard: true,
-    one_time_keyboard: true,
-    is_persistent: false,
+    one_time_keyboard: false,
+    is_persistent: true,
     input_field_placeholder: "Выберите раздел",
   };
 }

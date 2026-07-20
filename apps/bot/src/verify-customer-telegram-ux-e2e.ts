@@ -28,8 +28,8 @@ assertCondition(
   "Компактное меню должно содержать три кнопки в каждом ряду",
 );
 assertCondition(linked.resize_keyboard === true, "resize_keyboard не включён");
-assertCondition(linked.one_time_keyboard === true, "one_time_keyboard не включён");
-assertCondition(linked.is_persistent === false, "Меню ошибочно сделано постоянным");
+assertCondition(linked.one_time_keyboard === false, "one_time_keyboard должен быть выключен");
+assertCondition(linked.is_persistent === true, "Главное меню должно быть закреплено");
 assertCondition(
   !linked.keyboard.flat().some((button) => String(button.text) === CUSTOMER_MENU_TEXT.link),
   "Кнопка привязки не должна постоянно занимать главное меню",
@@ -38,7 +38,7 @@ assertCondition(
   JSON.stringify(linked) === JSON.stringify(unlinked),
   "Непривязанный клиент должен получать такое же компактное меню",
 );
-pass("главное клиентское меню компактное и автоматически сворачивается");
+pass("главное клиентское меню компактное и закреплено");
 
 for (const command of Object.values(CUSTOMER_MENU_TEXT)) {
   assertCondition(
@@ -96,5 +96,5 @@ assertCondition(
 pass("Telegram-каталог использует API сайта и обновляет устаревшие кнопки");
 
 console.log("\nCUSTOMER TELEGRAM UX E2E: OK");
-console.log("Проверены компактное меню, checkout router, клиентские тексты и catalog parity.");
+console.log("Проверены закреплённое компактное меню, checkout router, клиентские тексты и catalog parity.");
 console.log("Реальные Telegram-сообщения не отправлялись.");
