@@ -41,6 +41,19 @@ import {
   writeCustomerSecurityAudit,
 } from "../modules/customers/customer-session-security.service";
 import {
+  cancelCustomerCheckoutDraft,
+  CheckoutDraftConflictError,
+  CheckoutDraftNotFoundError,
+  getCustomerCheckoutDraft,
+  getCustomerCheckoutOptions,
+  quoteCustomerCheckoutDraft,
+  resolveCustomerCheckoutDraftScope,
+  resolveTelegramCheckoutDraftCustomer,
+  saveCustomerCheckoutDraft,
+  type CustomerCheckoutDraftData,
+  type CustomerCheckoutDraftStep,
+} from "../modules/customers/customer-checkout-draft.service";
+import {
   CUSTOMER_AUTH_PROVIDER_ADAPTERS,
   CUSTOMER_PAIRING_COOKIE,
   CUSTOMER_PAIRING_TTL_SECONDS,
@@ -827,6 +840,93 @@ function publicCommerceCartSnapshot<T extends { telegramChatId: unknown }>(
 
   return publicCart;
 }
+
+const checkoutDraftStepSchema = z.enum([
+  "customer_name",
+  "customer_phone",
+  "recipient_name",
+  "recipient_phone",
+  "delivery_type",
+  "delivery_zone",
+  "delivery_date",
+  "delivery_interval",
+  "delivery_address",
+  "payment_method",
+  "comment",
+  "privacy",
+  "confirm",
+]);
+
+const checkoutDraftPatchSchema = z
+  .object({
+    clientRequestId: z.string().uuid().optional(),
+    customerName: z.string().trim().max(160).optional(),
+    customerPhone: z.string().trim().max(32).optional(),
+    customerEmail: z.union([
+      z.string().trim().email().max(255),
+      z.literal(""),
+    ]).optional(),
+    recipientName: z.string().trim().max(160).optional(),
+    recipientPhone: z.string().trim().max(32).optional(),
+    recipientSameAsCustomer: z.boolean().optional(),
+    deliveryType: z.enum(["delivery", "pickup"]).optional(),
+    deliveryService: z.enum(["standard", "express"]).optional(),
+    deliveryZoneId: z.union([z.string().uuid(), z.literal("")]).optional(),
+    deliveryZoneName: z.string().trim().max(160).optional(),
+    deliveryDateText: z.union([
+      z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      z.literal(""),
+    ]).optional(),
+    deliveryIntervalId: z.union([z.string().uuid(), z.literal("")]).optional(),
+    deliveryInterval: z.string().trim().max(80).optional(),
+    deliveryAddress: z.string().trim().max(1000).optional(),
+    deliveryComment: z.string().trim().max(1000).optional(),
+    paymentMethod: z.enum([
+      "cash_on_delivery",
+      "transfer_after_confirm",
+      "online_card",
+      "sbp",
+    ]).optional(),
+    comment: z.string().trim().max(2000).optional(),
+    cardText: z.string().trim().max(500).optional(),
+    isSurprise: z.boolean().optional(),
+    doNotCallRecipient: z.boolean().optional(),
+    contactPreference: z.enum([
+      "call_or_message",
+      "phone_call",
+      "messenger_only",
+    ]).optional(),
+    promoCode: z.string().trim().max(80).optional(),
+    bonusToSpend: z.coerce.number().int().min(0).max(1000000000).optional(),
+    privacyAccepted: z.boolean().optional(),
+  })
+  .strict();
+
+const checkoutDraftSaveSchema = z.object({
+  operationId: z.string().trim().min(8).max(180),
+  expectedRevision: z.number().int().min(0).optional(),
+  step: checkoutDraftStepSchema,
+  data: checkoutDraftPatchSchema,
+});
+
+function definedCheckoutDraftPatch(
+  value: z.infer<typeof checkoutDraftPatchSchema>,
+): Partial<CustomerCheckoutDraftData> {
+  const patch: Partial<CustomerCheckoutDraftData> = {};
+
+  for (const [key, fieldValue] of Object.entries(value)) {
+    if (fieldValue !== undefined) {
+      (patch as Record<string, unknown>)[key] = fieldValue;
+    }
+  }
+
+  return patch;
+}
+
+const checkoutDraftOperationSchema = z.object({
+  operationId: z.string().trim().min(8).max(180),
+  expectedRevision: z.number().int().min(0).optional(),
+});
 
 const customerAddressSchema = z.object({
   city: z.string().trim().min(2).max(120),
@@ -2063,6 +2163,428 @@ export async function publicRoutes(app: FastifyInstance) {
     }
   });
 
+
+  app.get("/api/public/account/checkout-options", async (request, reply) => {
+    const { client } = createDb();
+
+    try {
+      const session = await getActiveCustomerSession(
+        client,
+        request.headers.cookie,
+      );
+
+      if (!session) {
+        return reply.status(401).send({
+          ok: false,
+          message: "Требуется вход",
+        });
+      }
+
+      const options = await getCustomerCheckoutOptions(client, {
+        shopId: session.shop_id,
+        customerId: session.customer_id,
+      });
+
+      return { ok: true, options };
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.get("/api/public/account/checkout-draft", async (request, reply) => {
+    const { client } = createDb();
+
+    try {
+      const session = await getActiveCustomerSession(
+        client,
+        request.headers.cookie,
+      );
+
+      if (!session) {
+        return reply.status(401).send({
+          ok: false,
+          message: "Требуется вход",
+        });
+      }
+
+      const scope = await resolveCustomerCheckoutDraftScope(client, {
+        shopId: session.shop_id,
+        customerId: session.customer_id,
+      });
+
+      if (!scope.linked) {
+        return reply.status(409).send({
+          ok: false,
+          code: "telegram_not_connected",
+          message: "Подключите Telegram, чтобы продолжать оформление на разных устройствах.",
+        });
+      }
+
+      const draft = await getCustomerCheckoutDraft(client, {
+        shopId: session.shop_id,
+        customerId: session.customer_id,
+        telegramChatId: scope.telegramChatId,
+        source: "site",
+      });
+
+      return { ok: true, draft };
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.put("/api/public/account/checkout-draft", async (request, reply) => {
+    const body = checkoutDraftSaveSchema.parse(request.body ?? {});
+    const { client } = createDb();
+
+    try {
+      const session = await getActiveCustomerSession(
+        client,
+        request.headers.cookie,
+      );
+
+      if (!session) {
+        return reply.status(401).send({
+          ok: false,
+          message: "Требуется вход",
+        });
+      }
+
+      try {
+        const result = await client.begin(async (transaction) => {
+          const scope = await resolveCustomerCheckoutDraftScope(transaction, {
+            shopId: session.shop_id,
+            customerId: session.customer_id,
+          });
+
+          if (!scope.linked) return null;
+
+          return saveCustomerCheckoutDraft(transaction, {
+            shopId: session.shop_id,
+            customerId: session.customer_id,
+            telegramChatId: scope.telegramChatId,
+            source: "site",
+            operationId: body.operationId,
+            ...(body.expectedRevision === undefined
+              ? {}
+              : { expectedRevision: body.expectedRevision }),
+            step: body.step as CustomerCheckoutDraftStep,
+            patch: definedCheckoutDraftPatch(body.data),
+          });
+        });
+
+        if (!result) {
+          return reply.status(409).send({
+            ok: false,
+            code: "telegram_not_connected",
+            message: "Подключите Telegram, чтобы синхронизировать оформление.",
+          });
+        }
+
+        return { ok: true, ...result };
+      } catch (error) {
+        if (error instanceof CheckoutDraftConflictError) {
+          return reply.status(409).send({
+            ok: false,
+            code: "checkout_draft_conflict",
+            message: error.message,
+            currentRevision: error.currentRevision,
+          });
+        }
+
+        throw error;
+      }
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.post("/api/public/account/checkout-draft/quote", async (request, reply) => {
+    const body = checkoutDraftOperationSchema.parse(request.body ?? {});
+    const { client } = createDb();
+
+    try {
+      const session = await getActiveCustomerSession(
+        client,
+        request.headers.cookie,
+      );
+
+      if (!session) {
+        return reply.status(401).send({
+          ok: false,
+          message: "Требуется вход",
+        });
+      }
+
+      try {
+        const result = await client.begin(async (transaction) => {
+          const scope = await resolveCustomerCheckoutDraftScope(transaction, {
+            shopId: session.shop_id,
+            customerId: session.customer_id,
+          });
+
+          if (!scope.linked) return null;
+
+          return quoteCustomerCheckoutDraft(transaction, {
+            shopId: session.shop_id,
+            customerId: session.customer_id,
+            telegramChatId: scope.telegramChatId,
+            source: "site",
+            operationId: body.operationId,
+            ...(body.expectedRevision === undefined
+              ? {}
+              : { expectedRevision: body.expectedRevision }),
+          });
+        });
+
+        if (!result) {
+          return reply.status(409).send({
+            ok: false,
+            code: "telegram_not_connected",
+            message: "Подключите Telegram, чтобы рассчитать общий черновик.",
+          });
+        }
+
+        return { ok: true, ...result };
+      } catch (error) {
+        if (error instanceof CheckoutDraftConflictError) {
+          return reply.status(409).send({
+            ok: false,
+            code: "checkout_draft_conflict",
+            message: error.message,
+            currentRevision: error.currentRevision,
+          });
+        }
+
+        if (error instanceof CheckoutDraftNotFoundError) {
+          return reply.status(404).send({
+            ok: false,
+            code: "checkout_draft_not_found",
+            message: error.message,
+          });
+        }
+
+        throw error;
+      }
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.delete("/api/public/account/checkout-draft", async (request, reply) => {
+    const body = checkoutDraftOperationSchema.pick({ operationId: true })
+      .parse(request.body ?? {});
+    const { client } = createDb();
+
+    try {
+      const session = await getActiveCustomerSession(
+        client,
+        request.headers.cookie,
+      );
+
+      if (!session) {
+        return reply.status(401).send({
+          ok: false,
+          message: "Требуется вход",
+        });
+      }
+
+      const result = await client.begin(async (transaction) => {
+        const scope = await resolveCustomerCheckoutDraftScope(transaction, {
+          shopId: session.shop_id,
+          customerId: session.customer_id,
+        });
+
+        if (!scope.linked) return null;
+
+        return cancelCustomerCheckoutDraft(transaction, {
+          shopId: session.shop_id,
+          customerId: session.customer_id,
+          telegramChatId: scope.telegramChatId,
+          source: "site",
+          operationId: body.operationId,
+        });
+      });
+
+      if (!result) {
+        return reply.status(409).send({
+          ok: false,
+          code: "telegram_not_connected",
+          message: "Подключите Telegram, чтобы управлять общим черновиком.",
+        });
+      }
+
+      return { ok: true, ...result };
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.get("/api/public/internal/telegram/checkout-draft", async (request, reply) => {
+    const telegramChatId = localTelegramChatId(request);
+
+    if (!telegramChatId) {
+      return reply.status(403).send({ ok: false, message: "Forbidden" });
+    }
+
+    const { client, shop } = await getShopContext();
+
+    try {
+      const customerId = await resolveTelegramCheckoutDraftCustomer(client, {
+        shopId: shop.id,
+        telegramChatId,
+      });
+      const draft = await getCustomerCheckoutDraft(client, {
+        shopId: shop.id,
+        customerId,
+        telegramChatId,
+        source: "telegram",
+      });
+
+      return { ok: true, draft };
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.put("/api/public/internal/telegram/checkout-draft", async (request, reply) => {
+    const telegramChatId = localTelegramChatId(request);
+
+    if (!telegramChatId) {
+      return reply.status(403).send({ ok: false, message: "Forbidden" });
+    }
+
+    const body = checkoutDraftSaveSchema.parse(request.body ?? {});
+    const { client, shop } = await getShopContext();
+
+    try {
+      try {
+        const result = await client.begin(async (transaction) => {
+          const customerId = await resolveTelegramCheckoutDraftCustomer(transaction, {
+            shopId: shop.id,
+            telegramChatId,
+          });
+
+          return saveCustomerCheckoutDraft(transaction, {
+            shopId: shop.id,
+            customerId,
+            telegramChatId,
+            source: "telegram",
+            operationId: body.operationId,
+            ...(body.expectedRevision === undefined
+              ? {}
+              : { expectedRevision: body.expectedRevision }),
+            step: body.step as CustomerCheckoutDraftStep,
+            patch: definedCheckoutDraftPatch(body.data),
+          });
+        });
+
+        return { ok: true, ...result };
+      } catch (error) {
+        if (error instanceof CheckoutDraftConflictError) {
+          return reply.status(409).send({
+            ok: false,
+            code: "checkout_draft_conflict",
+            message: error.message,
+            currentRevision: error.currentRevision,
+          });
+        }
+
+        throw error;
+      }
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.post("/api/public/internal/telegram/checkout-draft/quote", async (request, reply) => {
+    const telegramChatId = localTelegramChatId(request);
+
+    if (!telegramChatId) {
+      return reply.status(403).send({ ok: false, message: "Forbidden" });
+    }
+
+    const body = checkoutDraftOperationSchema.parse(request.body ?? {});
+    const { client, shop } = await getShopContext();
+
+    try {
+      try {
+        const result = await client.begin(async (transaction) => {
+          const customerId = await resolveTelegramCheckoutDraftCustomer(transaction, {
+            shopId: shop.id,
+            telegramChatId,
+          });
+
+          return quoteCustomerCheckoutDraft(transaction, {
+            shopId: shop.id,
+            customerId,
+            telegramChatId,
+            source: "telegram",
+            operationId: body.operationId,
+            ...(body.expectedRevision === undefined
+              ? {}
+              : { expectedRevision: body.expectedRevision }),
+          });
+        });
+
+        return { ok: true, ...result };
+      } catch (error) {
+        if (error instanceof CheckoutDraftConflictError) {
+          return reply.status(409).send({
+            ok: false,
+            code: "checkout_draft_conflict",
+            message: error.message,
+            currentRevision: error.currentRevision,
+          });
+        }
+
+        if (error instanceof CheckoutDraftNotFoundError) {
+          return reply.status(404).send({
+            ok: false,
+            code: "checkout_draft_not_found",
+            message: error.message,
+          });
+        }
+
+        throw error;
+      }
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.delete("/api/public/internal/telegram/checkout-draft", async (request, reply) => {
+    const telegramChatId = localTelegramChatId(request);
+
+    if (!telegramChatId) {
+      return reply.status(403).send({ ok: false, message: "Forbidden" });
+    }
+
+    const body = checkoutDraftOperationSchema.pick({ operationId: true })
+      .parse(request.body ?? {});
+    const { client, shop } = await getShopContext();
+
+    try {
+      const result = await client.begin(async (transaction) => {
+        const customerId = await resolveTelegramCheckoutDraftCustomer(transaction, {
+          shopId: shop.id,
+          telegramChatId,
+        });
+
+        return cancelCustomerCheckoutDraft(transaction, {
+          shopId: shop.id,
+          customerId,
+          telegramChatId,
+          source: "telegram",
+          operationId: body.operationId,
+        });
+      });
+
+      return { ok: true, ...result };
+    } finally {
+      await client.end();
+    }
+  });
 
   app.get("/api/public/account/cart", async (request, reply) => {
     const { client } = createDb();
@@ -5971,28 +6493,48 @@ export async function publicRoutes(app: FastifyInstance) {
         );
 
         if (requestedBonusSpend > 0) {
-          const token = getCookieValue(
-            request.headers.cookie,
-            CUSTOMER_SESSION_COOKIE,
-          );
+          if (telegramChatId) {
+            const telegramOwnerRows = await transaction<{ id: string }[]>`
+              SELECT id
+              FROM telegram_accounts
+              WHERE shop_id = ${shop.id}
+                AND customer_id = ${customer.id}
+                AND telegram_id = ${telegramChatId}
+                AND is_active = true
+              ORDER BY linked_at DESC, updated_at DESC, id DESC
+              LIMIT 1
+            `;
 
-          if (!token) {
-            throw new HttpError(
-              401,
-              "Войдите в личный кабинет, чтобы использовать бонусы",
+            if (!telegramOwnerRows[0]) {
+              throw new HttpError(
+                403,
+                "Бонусы можно списать только из связанного Telegram-профиля",
+              );
+            }
+          } else {
+            const token = getCookieValue(
+              request.headers.cookie,
+              CUSTOMER_SESSION_COOKIE,
             );
-          }
 
-          const session = await resolveActiveCustomerSession(
-            transaction,
-            token,
-          );
+            if (!token) {
+              throw new HttpError(
+                401,
+                "Войдите в личный кабинет, чтобы использовать бонусы",
+              );
+            }
 
-          if (!session || session.customer_id !== customer.id) {
-            throw new HttpError(
-              403,
-              "Бонусы можно списать только со своего профиля",
+            const session = await resolveActiveCustomerSession(
+              transaction,
+              token,
             );
+
+            if (!session || session.customer_id !== customer.id) {
+              throw new HttpError(
+                403,
+                "Бонусы можно списать только со своего профиля",
+              );
+            }
           }
 
           const freshCustomerRows = await transaction<

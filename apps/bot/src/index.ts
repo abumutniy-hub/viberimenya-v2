@@ -19,6 +19,14 @@ import {
   pairingPhoneMatches,
   parsePairingStartPayload,
 } from "./customer-browser-pairing";
+import {
+  normalizeTelegramCheckoutDraftData,
+  prepareTelegramCheckoutDraftData,
+  telegramCheckoutDraftExpired,
+  type TelegramCheckoutDraftData,
+  type TelegramCheckoutDraftPaymentMethod,
+  type TelegramCheckoutDraftStep,
+} from "./customer-checkout-draft-core";
 
 config({ path: resolve(process.cwd(), "../../.env") });
 
@@ -3304,45 +3312,9 @@ async function handleCart(chatId: number, messageId?: number) {
 }
 
 
-type TelegramCheckoutStep =
-  | "customer_name"
-  | "customer_phone"
-  | "recipient_name"
-  | "recipient_phone"
-  | "delivery_type"
-  | "delivery_zone"
-  | "delivery_date"
-  | "delivery_interval"
-  | "delivery_address"
-  | "payment_method"
-  | "comment"
-  | "privacy"
-  | "confirm";
-
-type TelegramPaymentMethod =
-  | "cash_on_delivery"
-  | "transfer_after_confirm"
-  | "online_card"
-  | "sbp";
-
-type TelegramCheckoutData = {
-  clientRequestId?: string;
-  customerName?: string;
-  customerPhone?: string;
-  recipientName?: string;
-  recipientPhone?: string;
-  recipientSameAsCustomer?: boolean;
-  deliveryType?: "delivery" | "pickup";
-  deliveryZoneId?: string;
-  deliveryZoneName?: string;
-  deliveryDateText?: string;
-  deliveryIntervalId?: string;
-  deliveryInterval?: string;
-  deliveryAddress?: string;
-  paymentMethod?: TelegramPaymentMethod;
-  comment?: string;
-  privacyAccepted?: boolean;
-};
+type TelegramCheckoutStep = TelegramCheckoutDraftStep;
+type TelegramPaymentMethod = TelegramCheckoutDraftPaymentMethod;
+type TelegramCheckoutData = TelegramCheckoutDraftData;
 
 type TelegramCheckoutSession = {
   step: TelegramCheckoutStep;
@@ -3385,59 +3357,7 @@ type TelegramCheckoutConfiguration = {
 
 
 function safeCheckoutData(value: unknown): TelegramCheckoutData {
-  if (!value) {
-    return {};
-  }
-
-  if (typeof value === "string") {
-    try {
-      return safeCheckoutData(JSON.parse(value));
-    } catch {
-      return {};
-    }
-  }
-
-  if (typeof value !== "object" || Array.isArray(value)) {
-    return {};
-  }
-
-  const raw = value as Record<string, unknown>;
-  const data: TelegramCheckoutData = {};
-  const stringKeys: Array<keyof TelegramCheckoutData> = [
-    "clientRequestId",
-    "customerName",
-    "customerPhone",
-    "recipientName",
-    "recipientPhone",
-    "deliveryZoneId",
-    "deliveryZoneName",
-    "deliveryDateText",
-    "deliveryIntervalId",
-    "deliveryInterval",
-    "deliveryAddress",
-    "paymentMethod",
-    "comment",
-  ];
-
-  for (const key of stringKeys) {
-    if (typeof raw[key] === "string") {
-      (data as Record<string, unknown>)[key] = raw[key];
-    }
-  }
-
-  if (raw.deliveryType === "delivery" || raw.deliveryType === "pickup") {
-    data.deliveryType = raw.deliveryType;
-  }
-
-  if (typeof raw.recipientSameAsCustomer === "boolean") {
-    data.recipientSameAsCustomer = raw.recipientSameAsCustomer;
-  }
-
-  if (typeof raw.privacyAccepted === "boolean") {
-    data.privacyAccepted = raw.privacyAccepted;
-  }
-
-  return data;
+  return normalizeTelegramCheckoutDraftData(value);
 }
 
 
@@ -3782,8 +3702,17 @@ async function getCheckoutSession(chatId: number): Promise<TelegramCheckoutSessi
     return null;
   }
 
-  const rows = await sql<{ step: TelegramCheckoutStep; data: unknown }[]>`
-    SELECT step, data
+  const rows = await sql<{
+    step: TelegramCheckoutStep;
+    data: unknown;
+    created_at: string;
+    updated_at: string;
+  }[]>`
+    SELECT
+      step,
+      data,
+      created_at::text,
+      updated_at::text
     FROM telegram_checkout_sessions
     WHERE shop_id = ${shopId}
       AND telegram_chat_id = ${chatId}
@@ -3796,41 +3725,203 @@ async function getCheckoutSession(chatId: number): Promise<TelegramCheckoutSessi
     return null;
   }
 
+  const data = normalizeTelegramCheckoutDraftData(row.data, {
+    telegramChatId: String(chatId),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  });
+
+  if (telegramCheckoutDraftExpired(data)) {
+    await sql`
+      DELETE FROM telegram_checkout_sessions
+      WHERE shop_id = ${shopId}
+        AND telegram_chat_id = ${chatId}
+    `;
+    return null;
+  }
+
   return {
     step: row.step,
-    data: safeCheckoutData(row.data)
+    data,
   };
 }
 
-async function setCheckoutSession(chatId: number, step: TelegramCheckoutStep, data: TelegramCheckoutData) {
+async function setCheckoutSession(
+  chatId: number,
+  step: TelegramCheckoutStep,
+  data: TelegramCheckoutData,
+  operationId: string = randomUUID(),
+) {
   const shopId = await getDefaultShopId();
 
   if (!shopId) {
     return;
   }
 
-  await sql`
-    INSERT INTO telegram_checkout_sessions (shop_id, telegram_chat_id, step, data)
-    VALUES (${shopId}, ${chatId}, ${step}, CAST(${JSON.stringify(data)} AS jsonb))
-    ON CONFLICT (shop_id, telegram_chat_id)
-    DO UPDATE SET step = EXCLUDED.step,
-                  data = EXCLUDED.data,
-                  updated_at = NOW()
-  `;
+  await sql.begin(async (transaction) => {
+    const existingRows = await transaction<{
+      data: unknown;
+    }[]>`
+      SELECT data
+      FROM telegram_checkout_sessions
+      WHERE shop_id = ${shopId}
+        AND telegram_chat_id = ${chatId}
+      LIMIT 1
+      FOR UPDATE
+    `;
+    const customerRows = await transaction<{
+      customer_id: string | null;
+    }[]>`
+      SELECT customer_id
+      FROM telegram_accounts
+      WHERE shop_id = ${shopId}
+        AND telegram_id = ${String(chatId)}
+        AND is_active = true
+      ORDER BY linked_at DESC, updated_at DESC, id DESC
+      LIMIT 1
+    `;
+    const customerId = customerRows[0]?.customer_id ?? null;
+    const prepared = prepareTelegramCheckoutDraftData({
+      previous: existingRows[0]?.data,
+      next: data,
+      customerId,
+      telegramChatId: String(chatId),
+      operationId,
+    });
+
+    await transaction`
+      INSERT INTO telegram_checkout_sessions (
+        shop_id,
+        telegram_chat_id,
+        step,
+        data,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        ${shopId},
+        ${chatId},
+        ${step},
+        ${JSON.stringify(prepared)}::jsonb,
+        NOW(),
+        NOW()
+      )
+      ON CONFLICT (shop_id, telegram_chat_id)
+      DO UPDATE SET
+        step = EXCLUDED.step,
+        data = EXCLUDED.data,
+        updated_at = NOW()
+    `;
+
+    await transaction`
+      INSERT INTO domain_events (
+        shop_id,
+        aggregate_type,
+        aggregate_id,
+        event_type,
+        event_version,
+        actor_type,
+        actor_customer_id,
+        idempotency_key,
+        payload,
+        occurred_at,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        ${shopId},
+        'checkout_draft',
+        ${customerId},
+        'customer.checkout_draft.changed',
+        1,
+        ${customerId ? "customer" : "telegram"},
+        ${customerId},
+        ${`checkout-draft:${chatId}:${operationId}`},
+        ${JSON.stringify({
+          source: "telegram",
+          action: "save",
+          step,
+          telegramChatId: String(chatId),
+          revision: prepared._core?.revision || 0,
+        })}::jsonb,
+        NOW(),
+        NOW(),
+        NOW()
+      )
+      ON CONFLICT (shop_id, idempotency_key)
+      DO NOTHING
+    `;
+  });
 }
 
-async function clearCheckoutSession(chatId: number) {
+async function clearCheckoutSession(
+  chatId: number,
+  operationId: string = randomUUID(),
+  action: "cancel" | "converted" = "cancel",
+) {
   const shopId = await getDefaultShopId();
 
   if (!shopId) {
     return;
   }
 
-  await sql`
-    DELETE FROM telegram_checkout_sessions
-    WHERE shop_id = ${shopId}
-      AND telegram_chat_id = ${chatId}
-  `;
+  await sql.begin(async (transaction) => {
+    const customerRows = await transaction<{
+      customer_id: string | null;
+    }[]>`
+      SELECT customer_id
+      FROM telegram_accounts
+      WHERE shop_id = ${shopId}
+        AND telegram_id = ${String(chatId)}
+        AND is_active = true
+      ORDER BY linked_at DESC, updated_at DESC, id DESC
+      LIMIT 1
+    `;
+    const customerId = customerRows[0]?.customer_id ?? null;
+
+    await transaction`
+      DELETE FROM telegram_checkout_sessions
+      WHERE shop_id = ${shopId}
+        AND telegram_chat_id = ${chatId}
+    `;
+
+    await transaction`
+      INSERT INTO domain_events (
+        shop_id,
+        aggregate_type,
+        aggregate_id,
+        event_type,
+        event_version,
+        actor_type,
+        actor_customer_id,
+        idempotency_key,
+        payload,
+        occurred_at,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        ${shopId},
+        'checkout_draft',
+        ${customerId},
+        'customer.checkout_draft.changed',
+        1,
+        ${customerId ? "customer" : "telegram"},
+        ${customerId},
+        ${`checkout-draft:${chatId}:${operationId}`},
+        ${JSON.stringify({
+          source: "telegram",
+          action,
+          telegramChatId: String(chatId),
+        })}::jsonb,
+        NOW(),
+        NOW(),
+        NOW()
+      )
+      ON CONFLICT (shop_id, idempotency_key)
+      DO NOTHING
+    `;
+  });
 }
 
 async function askCheckoutQuestion(chatId: number, text: string) {
@@ -4362,26 +4453,26 @@ async function createOrderFromTelegramCheckout(
     clientRequestId,
     customerName: data.customerName || "Клиент Telegram",
     customerPhone: data.customerPhone || "",
-    customerEmail: "",
+    customerEmail: data.customerEmail || "",
     recipientSameAsCustomer: data.recipientSameAsCustomer === true,
     recipientName: data.recipientName || data.customerName || "Клиент Telegram",
     recipientPhone: data.recipientPhone || data.customerPhone || "",
-    isSurprise: false,
-    doNotCallRecipient: false,
-    cardText: "",
-    contactPreference: "call_or_message",
+    isSurprise: data.isSurprise === true,
+    doNotCallRecipient: data.doNotCallRecipient === true,
+    cardText: data.cardText || "",
+    contactPreference: data.contactPreference || "call_or_message",
     deliveryType: data.deliveryType || "delivery",
-    deliveryService: "standard",
+    deliveryService: data.deliveryService || "standard",
     deliveryAddress: data.deliveryType === "pickup" ? "" : data.deliveryAddress || "",
-    deliveryComment: data.comment || "",
+    deliveryComment: data.deliveryComment || data.comment || "",
     deliveryDate: data.deliveryType === "pickup" ? "" : data.deliveryDateText || "",
     deliveryIntervalId: data.deliveryType === "pickup" ? "" : data.deliveryIntervalId || "",
     deliveryIntervalText: data.deliveryType === "pickup" ? "" : data.deliveryInterval || "",
     deliveryZoneId: data.deliveryType === "pickup" ? "" : data.deliveryZoneId || "",
     paymentMethod: data.paymentMethod || "transfer_after_confirm",
     customerComment: data.comment || "",
-    promoCode: "",
-    bonusToSpend: 0,
+    promoCode: data.promoCode || "",
+    bonusToSpend: Math.max(0, Math.floor(Number(data.bonusToSpend || 0))),
     privacyAccepted: data.privacyAccepted === true,
     items: cartRows.map((item) => ({
       productId: item.product_id,
@@ -4428,7 +4519,11 @@ async function createOrderFromTelegramCheckout(
   const order = responseData.order;
 
   await clearTelegramCart(chatId);
-  await clearCheckoutSession(chatId);
+  await clearCheckoutSession(
+    chatId,
+    `order:${order.id || clientRequestId}`,
+    "converted",
+  );
 
   return {
     id: order.id || "",
