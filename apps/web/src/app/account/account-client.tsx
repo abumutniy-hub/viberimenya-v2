@@ -78,6 +78,15 @@ type AddressDraft = {
   isDefault: boolean;
 };
 
+type PairingIntent = {
+  requestId: string;
+  status: string;
+  expiresAt: string;
+  telegramUrl: string | null;
+  qrDataUrl: string | null;
+  manualCode: string;
+};
+
 type AccountResponse = {
   ok: boolean;
   customer?: Customer;
@@ -190,8 +199,9 @@ async function readJson(response: Response) {
 export function AccountClient() {
   const [loading, setLoading] = useState(true);
   const [phone, setPhone] = useState("");
-  const [code, setCode] = useState("");
-  const [step, setStep] = useState<"phone" | "code">("phone");
+  const [step, setStep] = useState<"phone" | "pairing">("phone");
+  const [pairing, setPairing] = useState<PairingIntent | null>(null);
+  const [pairingBusy, setPairingBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [messageKind, setMessageKind] = useState<"info" | "success" | "error">(
     "info",
@@ -342,6 +352,91 @@ export function AccountClient() {
   }, []);
 
   useEffect(() => {
+    if (
+      !pairing
+      || step !== "pairing"
+      || customer
+    ) {
+      return;
+    }
+
+    let stopped = false;
+
+    const checkStatus = async () => {
+      try {
+        const response = await fetch(
+          `/api/public/account/auth/pairing/${encodeURIComponent(
+            pairing.requestId,
+          )}`,
+          {
+            credentials: "include",
+            cache: "no-store",
+          },
+        );
+        const data = await readJson(response);
+        const status = String(data.status || "");
+
+        if (
+          response.ok
+          && data.authenticated === true
+          && status === "authenticated"
+        ) {
+          stopped = true;
+          showMessage(
+            "Telegram подтверждён. Выполняется вход…",
+            "success",
+          );
+          await loadAccount();
+          window.history.replaceState(
+            null,
+            "",
+            String(data.redirectPath || "/account"),
+          );
+          return;
+        }
+
+        if (
+          [
+            "expired",
+            "cancelled",
+            "rejected",
+            "invalid_browser",
+          ].includes(status)
+        ) {
+          stopped = true;
+          setPairing(null);
+          setStep("phone");
+          showMessage(
+            status === "expired"
+              ? "Время подтверждения истекло. Создайте новый запрос."
+              : status === "rejected"
+                ? "Telegram не удалось привязать к этому номеру."
+                : status === "invalid_browser"
+                  ? "Подтверждение открыто в другом браузере. Создайте новый запрос здесь."
+                  : "Запрос входа отменён.",
+            "error",
+          );
+        }
+      } catch {
+        // A temporary network error must not cancel an active request.
+      }
+    };
+
+    void checkStatus();
+
+    const timer = window.setInterval(() => {
+      if (!stopped) {
+        void checkStatus();
+      }
+    }, 2000);
+
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [pairing, step, customer]);
+
+  useEffect(() => {
     if (loading || !customer) return;
 
     const section = new URLSearchParams(window.location.search).get("section");
@@ -367,10 +462,12 @@ export function AccountClient() {
     return () => window.clearInterval(timer);
   }, [telegramCode, telegramConnected]);
 
-  async function requestCode(event?: React.FormEvent<HTMLFormElement>) {
+  async function requestCode(
+    event?: React.FormEvent<HTMLFormElement>,
+  ) {
     event?.preventDefault();
 
-    if (requestCooldown > 0) return;
+    if (requestCooldown > 0 || pairingBusy) return;
 
     const cleanPhone = phone.trim();
 
@@ -379,31 +476,62 @@ export function AccountClient() {
       return;
     }
 
-    try {
-      const response = await fetch("/api/public/account/request-code", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ phone: cleanPhone }),
-      });
+    setPairingBusy(true);
 
+    try {
+      const response = await fetch(
+        "/api/public/account/auth/pairing",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            phone: cleanPhone,
+            redirectPath: "/account",
+          }),
+        },
+      );
       const data = await readJson(response);
 
       if (!response.ok || data.ok !== true) {
         showMessage(
-          String(data.message || "Не удалось отправить код"),
+          String(
+            data.message
+              || "Не удалось создать запрос входа",
+          ),
           "error",
         );
         return;
       }
 
-      setStep("code");
-      setCode("");
+      const intent: PairingIntent = {
+        requestId: String(data.requestId || ""),
+        status: String(data.status || "pending"),
+        expiresAt: String(data.expiresAt || ""),
+        telegramUrl:
+          typeof data.telegramUrl === "string"
+            ? data.telegramUrl
+            : null,
+        qrDataUrl:
+          typeof data.qrDataUrl === "string"
+            ? data.qrDataUrl
+            : null,
+        manualCode: String(data.manualCode || ""),
+      };
+
+      if (!intent.requestId || !intent.manualCode) {
+        showMessage(
+          "Сервер не вернул данные подтверждения",
+          "error",
+        );
+        return;
+      }
+
+      setPairing(intent);
+      setStep("pairing");
       setRequestCooldown(60);
       showMessage(
-        data.message === "Код входа отправлен в Telegram"
-          ? "Код входа отправлен в Telegram. Откройте бота и введите код здесь."
-          : String(data.message || "Код отправлен. Введите его здесь."),
+        "Откройте Telegram и подтвердите вход. Эта страница авторизуется автоматически.",
         "success",
       );
     } catch {
@@ -411,37 +539,34 @@ export function AccountClient() {
         "Не удалось связаться с сервером. Повторите попытку.",
         "error",
       );
+    } finally {
+      setPairingBusy(false);
     }
   }
 
-  async function verifyCode(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function cancelPairing() {
+    const current = pairing;
 
-    if (!code.trim()) {
-      showMessage("Введите код подтверждения", "error");
-      return;
-    }
-
-    try {
-      const response = await fetch("/api/public/account/verify-code", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ phone: phone.trim(), code: code.trim() }),
-      });
-
-      const data = await readJson(response);
-
-      if (!response.ok || data.ok !== true) {
-        showMessage(String(data.message || "Не удалось войти"), "error");
-        return;
+    if (current) {
+      try {
+        await fetch(
+          `/api/public/account/auth/pairing/${encodeURIComponent(
+            current.requestId,
+          )}/cancel`,
+          {
+            method: "POST",
+            credentials: "include",
+          },
+        );
+      } catch {
+        // The local screen is reset even if the request already expired.
       }
-
-      showMessage("Вы вошли в личный кабинет", "success");
-      await loadAccount();
-    } catch {
-      showMessage("Не удалось проверить код. Повторите попытку.", "error");
     }
+
+    setPairing(null);
+    setStep("phone");
+    setRequestCooldown(0);
+    showMessage("Запрос входа отменён", "info");
   }
 
   async function saveProfile(event: React.FormEvent<HTMLFormElement>) {
@@ -883,6 +1008,7 @@ export function AccountClient() {
       setCustomer(null);
       setSessions([]);
       setSecurityEvents([]);
+      setPairing(null);
       setStep("phone");
       showMessage("Вы вышли со всех устройств", "info");
     } catch {
@@ -907,7 +1033,7 @@ export function AccountClient() {
     setTelegramCode("");
     setSessions([]);
     setSecurityEvents([]);
-    setCode("");
+    setPairing(null);
     setStep("phone");
     showMessage("Вы вышли из личного кабинета", "info");
   }
@@ -930,8 +1056,8 @@ export function AccountClient() {
             <p className="eyebrow">Личный кабинет</p>
             <h1>Вход по телефону</h1>
             <p>
-              Код приходит в Telegram, подключённый к этому номеру после первого
-              заказа.
+              Введите номер, откройте Telegram и подтвердите вход.
+              Первый заказ для регистрации больше не требуется.
             </p>
           </div>
 
@@ -949,47 +1075,78 @@ export function AccountClient() {
                 />
               </label>
 
-              <button type="submit">Получить код</button>
+              <button type="submit" disabled={pairingBusy}>
+                {pairingBusy
+                  ? "Создаём запрос…"
+                  : "Продолжить через Telegram"}
+              </button>
             </form>
-          ) : (
-            <form onSubmit={verifyCode} className="account-form">
-              <label>
-                <span>Код подтверждения</span>
-                <input
-                  value={code}
-                  onChange={(event) =>
-                    setCode(event.target.value.replace(/\D/g, "").slice(0, 12))
-                  }
-                  placeholder="000000"
-                  inputMode="numeric"
-                  autoComplete="one-time-code"
-                />
-              </label>
+          ) : pairing ? (
+            <div className="account-pairing">
+              <div className="account-pairing-status">
+                <span className="account-pairing-pulse" />
+                <div>
+                  <strong>Ожидаем подтверждение в Telegram</strong>
+                  <p>
+                    После подтверждения личный кабинет откроется
+                    автоматически.
+                  </p>
+                </div>
+              </div>
 
-              <button type="submit">Войти</button>
+              {pairing.telegramUrl ? (
+                <a
+                  className="account-pairing-primary"
+                  href={pairing.telegramUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Открыть Telegram
+                </a>
+              ) : (
+                <p className="account-pairing-note">
+                  Откройте бот «Выбери Меня» вручную и введите код ниже.
+                </p>
+              )}
+
+              {pairing.qrDataUrl ? (
+                <div className="account-pairing-qr">
+                  <img
+                    src={pairing.qrDataUrl}
+                    alt="QR-код для открытия Telegram"
+                  />
+                  <span>
+                    Отсканируйте, если Telegram открыт на другом
+                    устройстве
+                  </span>
+                </div>
+              ) : null}
+
+              <div className="account-pairing-code">
+                <span>Резервный код</span>
+                <strong>
+                  {pairing.manualCode.slice(0, 3)}{" "}
+                  {pairing.manualCode.slice(3)}
+                </strong>
+                <small>
+                  В боте: «☰ Ещё» → «Привязать аккаунт»
+                </small>
+              </div>
+
+              <p className="account-pairing-security">
+                Номер Telegram должен совпасть с введённым на сайте.
+                Запрос действует 10 минут и используется один раз.
+              </p>
+
               <button
                 type="button"
-                className="ghost-button"
-                disabled={requestCooldown > 0}
-                onClick={() => void requestCode()}
+                className="ghost-button account-pairing-cancel"
+                onClick={() => void cancelPairing()}
               >
-                {requestCooldown > 0
-                  ? `Отправить повторно через ${requestCooldown} сек.`
-                  : "Отправить код ещё раз"}
+                Отменить и изменить телефон
               </button>
-              <button
-                type="button"
-                className="ghost-button"
-                onClick={() => {
-                  setStep("phone");
-                  setCode("");
-                  setRequestCooldown(0);
-                }}
-              >
-                Изменить телефон
-              </button>
-            </form>
-          )}
+            </div>
+          ) : null}
 
           {message ? (
             <p className={`account-message ${messageKind}`}>{message}</p>
@@ -998,10 +1155,19 @@ export function AccountClient() {
           <div className="account-login-help">
             <strong>Ещё не оформляли заказ?</strong>
             <p>
-              Сначала выберите букет. После заказа появится безопасная ссылка
-              для входа и подключения Telegram.
+              Это не мешает входу. Мы создадим профиль после
+              подтверждения номера в Telegram.
             </p>
-            <a href="/catalog">Перейти в каталог</a>
+            <a href="/catalog">Можно сначала посмотреть каталог</a>
+          </div>
+
+          <div className="account-auth-providers">
+            <span>Другие способы входа</span>
+            <p>
+              Яндекс ID, Сбер ID, email, MAX и passkey будут
+              подключаться к этому же профилю без дублирования
+              заказов и бонусов.
+            </p>
           </div>
         </section>
       </div>

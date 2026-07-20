@@ -40,6 +40,26 @@ import {
   safeCustomerRedirectPath,
   writeCustomerSecurityAudit,
 } from "../modules/customers/customer-session-security.service";
+import {
+  CUSTOMER_AUTH_PROVIDER_ADAPTERS,
+  CUSTOMER_PAIRING_COOKIE,
+  CUSTOMER_PAIRING_TTL_SECONDS,
+  buildCustomerPairingCookie,
+  clearCustomerPairingCookie,
+  createCustomerPairingBrowserNonce,
+  createCustomerPairingCode,
+  createCustomerPairingToken,
+  createTelegramPairingQrDataUrl,
+  createTelegramPairingUrl,
+  customerPairingStatusLabel,
+  hashCustomerPairingBrowserNonce,
+  hashCustomerPairingCode,
+  hashCustomerPairingIp,
+  hashCustomerPairingToken,
+  normalizeCustomerPhone,
+  resolveTelegramBotUsername,
+  safeHashEqual,
+} from "../modules/customers/customer-pairing.service";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -2454,6 +2474,622 @@ export async function publicRoutes(app: FastifyInstance) {
       await client.end();
     }
   });
+
+
+  app.get("/api/public/account/auth/providers", async () => {
+    return {
+      ok: true,
+      providers: CUSTOMER_AUTH_PROVIDER_ADAPTERS,
+    };
+  });
+
+  app.post("/api/public/account/auth/pairing", async (request, reply) => {
+    const body = z
+      .object({
+        phone: z.string().trim().min(5).max(32),
+        redirectPath: z.string().trim().max(240).optional(),
+      })
+      .parse(request.body ?? {});
+    const normalizedPhone = normalizeCustomerPhone(body.phone);
+
+    if (!normalizedPhone) {
+      return reply.status(400).send({
+        ok: false,
+        code: "invalid_phone",
+        message: "Введите корректный номер телефона",
+      });
+    }
+
+    const phoneCandidates = phoneDigitCandidates(normalizedPhone);
+    const redirectPath = safeCustomerRedirectPath(
+      body.redirectPath || "/account",
+    );
+    const userAgent =
+      String(request.headers["user-agent"] ?? "") || null;
+    const requestIp = request.ip || "unknown";
+    const requestIpHash = hashCustomerPairingIp(requestIp);
+    const { client } = createDb();
+
+    try {
+      const shopRows = await client<{ id: string }[]>`
+        SELECT id
+        FROM shops
+        WHERE slug = ${env.DEFAULT_SHOP_SLUG}
+        LIMIT 1
+      `;
+      const shop = shopRows[0];
+
+      if (!shop) {
+        throw new HttpError(404, "Shop not found");
+      }
+
+      const ipRateRows = await client<{ count: number }[]>`
+        SELECT COUNT(*)::int AS count
+        FROM customer_link_tokens
+        WHERE shop_id = ${shop.id}
+          AND provider = 'telegram'
+          AND purpose = 'browser_pairing_login'
+          AND metadata ->> 'requestIpHash' = ${requestIpHash}
+          AND created_at > NOW() - INTERVAL '1 hour'
+      `;
+
+      if (Number(ipRateRows[0]?.count ?? 0) >= 20) {
+        return reply.status(429).send({
+          ok: false,
+          code: "pairing_rate_limited",
+          message:
+            "Слишком много запросов. Повторите попытку немного позже.",
+        });
+      }
+
+      const customerRows = await client<
+        {
+          id: string;
+          phone: string;
+        }[]
+      >`
+        SELECT id, phone
+        FROM customers
+        WHERE shop_id = ${shop.id}
+          AND (
+            phone = ${normalizedPhone}
+            OR regexp_replace(phone, '[^0-9]', '', 'g')
+              = ANY(${phoneCandidates}::text[])
+          )
+        ORDER BY created_at ASC
+        LIMIT 1
+      `;
+      let customer = customerRows[0];
+      let createdProfile = false;
+
+      if (!customer) {
+        const createdRows = await client<
+          {
+            id: string;
+            phone: string;
+          }[]
+        >`
+          INSERT INTO customers (
+            shop_id,
+            phone,
+            name,
+            email,
+            bonus_balance,
+            total_orders,
+            total_spent,
+            created_at,
+            updated_at
+          )
+          VALUES (
+            ${shop.id},
+            ${normalizedPhone},
+            NULL,
+            NULL,
+            0,
+            0,
+            0,
+            NOW(),
+            NOW()
+          )
+          ON CONFLICT (shop_id, phone)
+          DO UPDATE SET updated_at = customers.updated_at
+          RETURNING id, phone
+        `;
+        customer = createdRows[0];
+        createdProfile = true;
+      }
+
+      if (!customer) {
+        throw new Error("Customer profile was not resolved");
+      }
+
+      const rateRows = await client<
+        {
+          customer_recent: number;
+          ip_recent: number;
+        }[]
+      >`
+        SELECT
+          COUNT(*) FILTER (
+            WHERE customer_id = ${customer.id}
+              AND created_at > NOW() - INTERVAL '10 minutes'
+          )::int AS customer_recent,
+          COUNT(*) FILTER (
+            WHERE metadata ->> 'requestIpHash' = ${requestIpHash}
+              AND created_at > NOW() - INTERVAL '1 hour'
+          )::int AS ip_recent
+        FROM customer_link_tokens
+        WHERE shop_id = ${shop.id}
+          AND provider = 'telegram'
+          AND purpose = 'browser_pairing_login'
+      `;
+      const rate = rateRows[0];
+
+      if (
+        Number(rate?.customer_recent ?? 0) >= 5
+        || Number(rate?.ip_recent ?? 0) >= 20
+      ) {
+        await writeCustomerSecurityAudit(client, {
+          shopId: shop.id,
+          customerId: customer.id,
+          eventType: "customer.pairing_rate_limited",
+          severity: "warning",
+          summary: "Ограничен запрос привязки Telegram",
+          ip: requestIp,
+          userAgent,
+          metadata: {
+            customerRecent: Number(rate?.customer_recent ?? 0),
+            ipRecent: Number(rate?.ip_recent ?? 0),
+          },
+        });
+
+        return reply.status(429).send({
+          ok: false,
+          code: "pairing_rate_limited",
+          message:
+            "Слишком много запросов. Повторите попытку немного позже.",
+        });
+      }
+
+      const rawToken = createCustomerPairingToken();
+      const rawNonce = createCustomerPairingBrowserNonce();
+      const manualCode = createCustomerPairingCode();
+      const storedToken = hashCustomerPairingToken(rawToken);
+      const browserNonceHash =
+        hashCustomerPairingBrowserNonce(rawNonce);
+      const codeHash = hashCustomerPairingCode(manualCode);
+
+      const createdRows = await client<
+        {
+          id: string;
+          expires_at: string;
+        }[]
+      >`
+        WITH cancelled AS (
+          UPDATE customer_link_tokens
+          SET
+            status = 'cancelled',
+            updated_at = NOW()
+          WHERE shop_id = ${shop.id}
+            AND customer_id = ${customer.id}
+            AND provider = 'telegram'
+            AND purpose = 'browser_pairing_login'
+            AND status IN ('pending', 'opened', 'confirmed')
+            AND consumed_at IS NULL
+          RETURNING id
+        )
+        INSERT INTO customer_link_tokens (
+          shop_id,
+          customer_id,
+          order_id,
+          provider,
+          purpose,
+          token,
+          status,
+          expires_at,
+          metadata,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          ${shop.id},
+          ${customer.id},
+          NULL,
+          'telegram',
+          'browser_pairing_login',
+          ${storedToken},
+          'pending',
+          NOW() + (${CUSTOMER_PAIRING_TTL_SECONDS} * INTERVAL '1 second'),
+          ${JSON.stringify({
+            version: 1,
+            provider: "telegram",
+            phone: customer.phone,
+            normalizedPhone,
+            codeHash,
+            browserNonceHash,
+            requestIpHash,
+            redirectPath,
+            createdProfile,
+            attempts: 0,
+            userAgent,
+          })}::jsonb,
+          NOW(),
+          NOW()
+        )
+        RETURNING id, expires_at::text
+      `;
+      const pairing = createdRows[0];
+
+      if (!pairing) {
+        throw new Error("Pairing request was not created");
+      }
+
+      await writeCustomerSecurityAudit(client, {
+        shopId: shop.id,
+        customerId: customer.id,
+        eventType: "customer.pairing_created",
+        summary: "Создан запрос входа через Telegram",
+        entityId: pairing.id,
+        ip: requestIp,
+        userAgent,
+        metadata: {
+          provider: "telegram",
+          createdProfile,
+          tokenStorage: "sha256-v1",
+          codeStorage: "sha256-v1",
+          browserNonceStorage: "sha256-v1",
+          expiresAt: pairing.expires_at,
+        },
+      });
+
+      const botUsername = await resolveTelegramBotUsername(
+        process.env.TELEGRAM_BOT_TOKEN || "",
+      );
+      const telegramUrl = createTelegramPairingUrl(
+        botUsername,
+        rawToken,
+      );
+      const qrDataUrl = createTelegramPairingQrDataUrl(
+        telegramUrl,
+      );
+
+      reply.header(
+        "Set-Cookie",
+        buildCustomerPairingCookie(rawNonce, env.NODE_ENV),
+      );
+      reply.header("Cache-Control", "no-store, max-age=0");
+      reply.header("Pragma", "no-cache");
+      reply.header("Referrer-Policy", "no-referrer");
+
+      return {
+        ok: true,
+        requestId: pairing.id,
+        status: "pending",
+        expiresAt: pairing.expires_at,
+        expiresInSeconds: CUSTOMER_PAIRING_TTL_SECONDS,
+        telegramUrl: telegramUrl || null,
+        qrDataUrl: qrDataUrl || null,
+        manualCode,
+        message:
+          "Откройте Telegram и подтвердите вход. Страница авторизуется автоматически.",
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.get(
+    "/api/public/account/auth/pairing/:id",
+    async (request, reply) => {
+      const params = z
+        .object({
+          id: z.string().uuid(),
+        })
+        .parse(request.params);
+      const activeSession = await (async () => {
+        const { client } = createDb();
+
+        try {
+          return await getActiveCustomerSession(
+            client,
+            request.headers.cookie,
+          );
+        } finally {
+          await client.end();
+        }
+      })();
+
+      if (activeSession) {
+        return {
+          ok: true,
+          status: "authenticated",
+          authenticated: true,
+          redirectPath: "/account",
+        };
+      }
+
+      const rawNonce = getCookieValue(
+        request.headers.cookie,
+        CUSTOMER_PAIRING_COOKIE,
+      );
+
+      if (!rawNonce) {
+        return reply.status(403).send({
+          ok: false,
+          status: "invalid_browser",
+          message: "Запрос входа открыт в другом браузере",
+        });
+      }
+
+      const nonceHash = hashCustomerPairingBrowserNonce(rawNonce);
+      const { client } = createDb();
+
+      try {
+        const shopRows = await client<{ id: string }[]>`
+          SELECT id
+          FROM shops
+          WHERE slug = ${env.DEFAULT_SHOP_SLUG}
+          LIMIT 1
+        `;
+        const shop = shopRows[0];
+
+        if (!shop) {
+          throw new HttpError(404, "Shop not found");
+        }
+
+        const result = await client.begin(async (transaction) => {
+          const rows = await transaction<
+            {
+              id: string;
+              customer_id: string;
+              status: string;
+              expires_at: string;
+              metadata: Record<string, unknown>;
+            }[]
+          >`
+            SELECT
+              id,
+              customer_id,
+              status,
+              expires_at::text,
+              metadata
+            FROM customer_link_tokens
+            WHERE id = ${params.id}
+              AND shop_id = ${shop.id}
+              AND provider = 'telegram'
+              AND purpose = 'browser_pairing_login'
+            LIMIT 1
+            FOR UPDATE SKIP LOCKED
+          `;
+          const pairing = rows[0];
+
+          if (!pairing) {
+            return {
+              kind: "pending" as const,
+              status: "pending",
+              expiresAt: null,
+            };
+          }
+
+          const metadata = pairing.metadata || {};
+          const storedNonceHash = String(
+            metadata.browserNonceHash || "",
+          );
+
+          if (
+            !storedNonceHash
+            || !safeHashEqual(storedNonceHash, nonceHash)
+          ) {
+            return {
+              kind: "invalid_browser" as const,
+              status: "invalid_browser",
+              expiresAt: pairing.expires_at,
+            };
+          }
+
+          if (
+            new Date(pairing.expires_at).getTime() <= Date.now()
+          ) {
+            if (
+              !["consumed", "cancelled", "rejected"].includes(
+                pairing.status,
+              )
+            ) {
+              await transaction`
+                UPDATE customer_link_tokens
+                SET
+                  status = 'expired',
+                  updated_at = NOW()
+                WHERE id = ${pairing.id}
+              `;
+            }
+
+            return {
+              kind: "expired" as const,
+              status: "expired",
+              expiresAt: pairing.expires_at,
+            };
+          }
+
+          if (
+            pairing.status === "confirmed"
+            || pairing.status === "consumed"
+          ) {
+            const session = await createSecureCustomerSession(
+              transaction,
+              {
+                shopId: shop.id,
+                customerId: pairing.customer_id,
+                userAgent:
+                  String(request.headers["user-agent"] ?? "")
+                  || null,
+                ip: request.ip || null,
+                source: "browser_telegram_pairing",
+              },
+            );
+            const redirectPath = safeCustomerRedirectPath(
+              metadata.redirectPath || "/account",
+            );
+
+            await transaction`
+              UPDATE customer_link_tokens
+              SET
+                status = 'consumed',
+                consumed_at = NOW(),
+                metadata = metadata || ${JSON.stringify({
+                  authenticatedAt: new Date().toISOString(),
+                  sessionId: session.sessionId,
+                })}::jsonb,
+                updated_at = NOW()
+              WHERE id = ${pairing.id}
+                AND status IN ('confirmed', 'consumed')
+            `;
+
+            await writeCustomerSecurityAudit(transaction, {
+              shopId: shop.id,
+              customerId: pairing.customer_id,
+              eventType: "customer.pairing_authenticated",
+              summary:
+                "Браузер авторизован после подтверждения Telegram",
+              entityId: pairing.id,
+              ip: request.ip || null,
+              userAgent:
+                String(request.headers["user-agent"] ?? "")
+                || null,
+              metadata: {
+                provider: "telegram",
+                sessionId: session.sessionId,
+                redirectPath,
+              },
+            });
+
+            return {
+              kind: "authenticated" as const,
+              status: "authenticated",
+              rawSessionToken: session.rawToken,
+              redirectPath,
+              expiresAt: pairing.expires_at,
+            };
+          }
+
+          return {
+            kind: "status" as const,
+            status: customerPairingStatusLabel(pairing.status),
+            expiresAt: pairing.expires_at,
+          };
+        });
+
+        if (result.kind === "invalid_browser") {
+          return reply.status(403).send({
+            ok: false,
+            status: result.status,
+            expiresAt: result.expiresAt,
+            message: "Запрос входа открыт в другом браузере",
+          });
+        }
+
+        if (result.kind === "authenticated") {
+          reply.header("Set-Cookie", [
+            buildCustomerSessionCookie(result.rawSessionToken),
+            clearCustomerPairingCookie(env.NODE_ENV),
+          ]);
+          reply.header("Cache-Control", "no-store, max-age=0");
+          reply.header("Pragma", "no-cache");
+          reply.header("Referrer-Policy", "no-referrer");
+
+          return {
+            ok: true,
+            status: "authenticated",
+            authenticated: true,
+            redirectPath: result.redirectPath,
+          };
+        }
+
+        return {
+          ok: true,
+          status: result.status,
+          authenticated: false,
+          expiresAt: result.expiresAt,
+        };
+      } finally {
+        await client.end();
+      }
+    },
+  );
+
+  app.post(
+    "/api/public/account/auth/pairing/:id/cancel",
+    async (request, reply) => {
+      const params = z
+        .object({
+          id: z.string().uuid(),
+        })
+        .parse(request.params);
+      const rawNonce = getCookieValue(
+        request.headers.cookie,
+        CUSTOMER_PAIRING_COOKIE,
+      );
+
+      if (!rawNonce) {
+        return reply.status(403).send({
+          ok: false,
+          message: "Запрос входа открыт в другом браузере",
+        });
+      }
+
+      const nonceHash = hashCustomerPairingBrowserNonce(rawNonce);
+      const { client } = createDb();
+
+      try {
+        const updatedRows = await client<
+          {
+            id: string;
+            customer_id: string;
+            shop_id: string;
+          }[]
+        >`
+          UPDATE customer_link_tokens
+          SET
+            status = 'cancelled',
+            updated_at = NOW()
+          WHERE id = ${params.id}
+            AND provider = 'telegram'
+            AND purpose = 'browser_pairing_login'
+            AND status IN ('pending', 'opened', 'confirmed')
+            AND consumed_at IS NULL
+            AND metadata ->> 'browserNonceHash' = ${nonceHash}
+          RETURNING id, customer_id, shop_id
+        `;
+        const cancelled = updatedRows[0];
+
+        if (cancelled) {
+          await writeCustomerSecurityAudit(client, {
+            shopId: cancelled.shop_id,
+            customerId: cancelled.customer_id,
+            eventType: "customer.pairing_cancelled",
+            summary: "Запрос входа через Telegram отменён",
+            entityId: cancelled.id,
+            ip: request.ip || null,
+            userAgent:
+              String(request.headers["user-agent"] ?? "")
+              || null,
+          });
+        }
+
+        reply.header(
+          "Set-Cookie",
+          clearCustomerPairingCookie(env.NODE_ENV),
+        );
+
+        return {
+          ok: true,
+          status: "cancelled",
+        };
+      } finally {
+        await client.end();
+      }
+    },
+  );
 
   app.post("/api/public/account/request-code", async (request, reply) => {
     const body = z

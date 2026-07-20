@@ -10,6 +10,15 @@ import {
   isCustomerMenuCommand,
   unlinkedMainKeyboard,
 } from "./customer-telegram-ux";
+import {
+  hashBrowserPairingCode,
+  hashBrowserPairingToken,
+  isPairingManualCode,
+  pairingApproveCallback,
+  pairingCancelCallback,
+  pairingPhoneMatches,
+  parsePairingStartPayload,
+} from "./customer-browser-pairing";
 
 config({ path: resolve(process.cwd(), "../../.env") });
 
@@ -890,7 +899,10 @@ async function unlinkCustomerTelegramFromBot(
       WHERE shop_id = ${shopId}
         AND customer_id = ${customerId}
         AND (
-          (provider = 'telegram' AND purpose = 'connect_channel')
+          (provider = 'telegram' AND purpose IN (
+            'connect_channel',
+            'browser_pairing_login'
+          ))
           OR (provider = 'site' AND purpose = 'magic_login')
         )
         AND status = 'pending'
@@ -1078,7 +1090,7 @@ async function handleCustomerLinkToken(message: TelegramMessage, payload: string
       AND provider = 'telegram'
       AND purpose = 'connect_channel'
       AND token = ${token}
-      AND status = 'pending'
+      AND status IN ('pending', 'opened', 'confirmed')
       AND consumed_at IS NULL
       AND expires_at > NOW()
     LIMIT 1
@@ -1216,6 +1228,747 @@ async function handleCustomerLinkToken(message: TelegramMessage, payload: string
   );
 
   return true;
+}
+
+
+type BrowserPairingRecord = {
+  id: string;
+  shop_id: string;
+  customer_id: string;
+  status: string;
+  expires_at: string;
+  metadata: Record<string, unknown>;
+  phone: string;
+};
+
+function pairingMetadataText(
+  metadata: Record<string, unknown>,
+  key: string,
+) {
+  const value = metadata[key];
+  return typeof value === "string" ? value : "";
+}
+
+async function loadBrowserPairingByToken(
+  shopId: string,
+  rawToken: string,
+) {
+  const storedToken = hashBrowserPairingToken(rawToken);
+  const rows = await sql<BrowserPairingRecord[]>`
+    SELECT
+      tokens.id,
+      tokens.shop_id,
+      tokens.customer_id,
+      tokens.status,
+      tokens.expires_at::text,
+      tokens.metadata,
+      customers.phone
+    FROM customer_link_tokens tokens
+    JOIN customers
+      ON customers.id = tokens.customer_id
+     AND customers.shop_id = tokens.shop_id
+    WHERE tokens.shop_id = ${shopId}
+      AND tokens.provider = 'telegram'
+      AND tokens.purpose = 'browser_pairing_login'
+      AND tokens.token = ${storedToken}
+      AND tokens.status IN ('pending', 'opened')
+      AND tokens.consumed_at IS NULL
+      AND tokens.expires_at > NOW()
+    LIMIT 1
+  `;
+
+  return rows[0] ?? null;
+}
+
+async function loadBrowserPairingByCode(
+  shopId: string,
+  rawCode: string,
+) {
+  const codeHash = hashBrowserPairingCode(rawCode);
+  const rows = await sql<BrowserPairingRecord[]>`
+    SELECT
+      tokens.id,
+      tokens.shop_id,
+      tokens.customer_id,
+      tokens.status,
+      tokens.expires_at::text,
+      tokens.metadata,
+      customers.phone
+    FROM customer_link_tokens tokens
+    JOIN customers
+      ON customers.id = tokens.customer_id
+     AND customers.shop_id = tokens.shop_id
+    WHERE tokens.shop_id = ${shopId}
+      AND tokens.provider = 'telegram'
+      AND tokens.purpose = 'browser_pairing_login'
+      AND tokens.metadata ->> 'codeHash' = ${codeHash}
+      AND tokens.status IN ('pending', 'opened')
+      AND tokens.consumed_at IS NULL
+      AND tokens.expires_at > NOW()
+    ORDER BY tokens.created_at DESC
+    LIMIT 1
+  `;
+
+  return rows[0] ?? null;
+}
+
+async function openBrowserPairing(
+  message: TelegramMessage,
+  pairing: BrowserPairingRecord,
+) {
+  const telegramId = String(message.chat.id);
+  const existingRows = await sql<
+    {
+      customer_id: string | null;
+      user_id: string | null;
+    }[]
+  >`
+    SELECT customer_id, user_id
+    FROM telegram_accounts
+    WHERE shop_id = ${pairing.shop_id}
+      AND telegram_id = ${telegramId}
+      AND is_active = true
+    LIMIT 1
+  `;
+  const existing = existingRows[0];
+
+  if (
+    existing?.customer_id
+    && existing.customer_id !== pairing.customer_id
+  ) {
+    await sql`
+      UPDATE customer_link_tokens
+      SET
+        status = 'rejected',
+        metadata = metadata || ${JSON.stringify({
+          rejectionReason: "telegram_linked_to_other_customer",
+          rejectedTelegramId: telegramId,
+          rejectedAt: new Date().toISOString(),
+        })}::jsonb,
+        updated_at = NOW()
+      WHERE id = ${pairing.id}
+        AND status IN ('pending', 'opened')
+    `;
+
+    await sendTelegramMessage(
+      message.chat.id,
+      [
+        "Этот Telegram уже связан с другим профилем.",
+        "",
+        "Сначала отключите прежнюю привязку в профиле покупателя или обратитесь в поддержку.",
+      ].join("\n"),
+      {
+        reply_markup: await mainKeyboardForChat(message.chat.id),
+      },
+    );
+
+    return true;
+  }
+
+  await sql`
+    UPDATE customer_link_tokens
+    SET
+      status = 'opened',
+      metadata = metadata || ${JSON.stringify({
+        candidateTelegramId: telegramId,
+        candidateUsername: message.from?.username || null,
+        candidateFirstName: message.from?.first_name || null,
+        candidateLastName: message.from?.last_name || null,
+        openedAt: new Date().toISOString(),
+      })}::jsonb,
+      updated_at = NOW()
+    WHERE id = ${pairing.id}
+      AND status IN ('pending', 'opened')
+      AND consumed_at IS NULL
+      AND expires_at > NOW()
+  `;
+
+  if (existing?.customer_id === pairing.customer_id) {
+    await sendTelegramMessage(
+      message.chat.id,
+      [
+        "🔐 Подтверждение входа на сайт",
+        "",
+        "Этот Telegram уже подключён к вашему профилю.",
+        "Подтвердите вход в браузере, где вы ввели номер телефона.",
+        "",
+        "Запрос действует 10 минут.",
+      ].join("\n"),
+      {
+        reply_markup: inlineKeyboard([
+          [
+            {
+              text: "✅ Подтвердить вход",
+              callback_data: pairingApproveCallback(pairing.id),
+            },
+          ],
+          [
+            {
+              text: "Отменить",
+              callback_data: pairingCancelCallback(pairing.id),
+            },
+          ],
+        ]),
+      },
+    );
+
+    return true;
+  }
+
+  await sendTelegramMessage(
+    message.chat.id,
+    [
+      "🔐 Подключение Telegram и вход на сайт",
+      "",
+      "Чтобы подтвердить номер, нажмите кнопку ниже.",
+      "Telegram передаст только ваш номер телефона.",
+      "",
+      "Номер должен совпадать с введённым на сайте.",
+    ].join("\n"),
+    {
+      reply_markup: {
+        keyboard: [
+          [
+            {
+              text: "📱 Поделиться моим номером",
+              request_contact: true,
+            },
+          ],
+          [
+            {
+              text: "Отменить вход",
+            },
+          ],
+        ],
+        resize_keyboard: true,
+        one_time_keyboard: true,
+        is_persistent: false,
+        input_field_placeholder: "Подтвердите свой номер",
+      },
+    },
+  );
+
+  return true;
+}
+
+async function confirmBrowserPairing(
+  pairingId: string,
+  message: TelegramMessage,
+  source: "linked_telegram" | "telegram_contact",
+) {
+  const telegramId = String(message.chat.id);
+
+  return sql.begin(async (transaction) => {
+    const rows = await transaction<BrowserPairingRecord[]>`
+      SELECT
+        tokens.id,
+        tokens.shop_id,
+        tokens.customer_id,
+        tokens.status,
+        tokens.expires_at::text,
+        tokens.metadata,
+        customers.phone
+      FROM customer_link_tokens tokens
+      JOIN customers
+        ON customers.id = tokens.customer_id
+       AND customers.shop_id = tokens.shop_id
+      WHERE tokens.id = ${pairingId}
+        AND tokens.provider = 'telegram'
+        AND tokens.purpose = 'browser_pairing_login'
+        AND tokens.status IN ('pending', 'opened')
+        AND tokens.consumed_at IS NULL
+        AND tokens.expires_at > NOW()
+      LIMIT 1
+      FOR UPDATE
+    `;
+    const pairing = rows[0];
+
+    if (!pairing) {
+      return {
+        ok: false as const,
+        reason: "expired" as const,
+      };
+    }
+
+    if (
+      pairingMetadataText(
+        pairing.metadata,
+        "candidateTelegramId",
+      ) !== telegramId
+    ) {
+      return {
+        ok: false as const,
+        reason: "different_telegram" as const,
+      };
+    }
+
+    const existingRows = await transaction<
+      {
+        customer_id: string | null;
+        user_id: string | null;
+      }[]
+    >`
+      SELECT customer_id, user_id
+      FROM telegram_accounts
+      WHERE shop_id = ${pairing.shop_id}
+        AND telegram_id = ${telegramId}
+        AND is_active = true
+      LIMIT 1
+      FOR UPDATE
+    `;
+    const existing = existingRows[0];
+
+    if (
+      existing?.customer_id
+      && existing.customer_id !== pairing.customer_id
+    ) {
+      await transaction`
+        UPDATE customer_link_tokens
+        SET
+          status = 'rejected',
+          metadata = metadata || ${JSON.stringify({
+            rejectionReason: "telegram_linked_to_other_customer",
+            rejectedTelegramId: telegramId,
+            rejectedAt: new Date().toISOString(),
+          })}::jsonb,
+          updated_at = NOW()
+        WHERE id = ${pairing.id}
+      `;
+
+      return {
+        ok: false as const,
+        reason: "already_linked" as const,
+      };
+    }
+
+    const displayName = [
+      message.from?.first_name,
+      message.from?.last_name,
+    ]
+      .filter(Boolean)
+      .join(" ") || null;
+
+    await transaction`
+      INSERT INTO telegram_accounts (
+        shop_id,
+        customer_id,
+        telegram_id,
+        username,
+        first_name,
+        last_name,
+        is_active,
+        notifications_enabled,
+        linked_at,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        ${pairing.shop_id},
+        ${pairing.customer_id},
+        ${telegramId},
+        ${message.from?.username || null},
+        ${message.from?.first_name || null},
+        ${message.from?.last_name || null},
+        true,
+        true,
+        NOW(),
+        NOW(),
+        NOW()
+      )
+      ON CONFLICT (shop_id, telegram_id)
+      DO UPDATE SET
+        customer_id = ${pairing.customer_id},
+        username = EXCLUDED.username,
+        first_name = EXCLUDED.first_name,
+        last_name = EXCLUDED.last_name,
+        is_active = true,
+        notifications_enabled = true,
+        linked_at = NOW(),
+        updated_at = NOW()
+    `;
+
+    await transaction`
+      INSERT INTO customer_channel_links (
+        shop_id,
+        customer_id,
+        provider,
+        provider_user_id,
+        provider_username,
+        provider_display_name,
+        is_active,
+        linked_at,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        ${pairing.shop_id},
+        ${pairing.customer_id},
+        'telegram',
+        ${telegramId},
+        ${message.from?.username || null},
+        ${displayName},
+        true,
+        NOW(),
+        NOW(),
+        NOW()
+      )
+      ON CONFLICT (shop_id, provider, provider_user_id)
+      DO UPDATE SET
+        customer_id = EXCLUDED.customer_id,
+        provider_username = EXCLUDED.provider_username,
+        provider_display_name = EXCLUDED.provider_display_name,
+        is_active = true,
+        linked_at = NOW(),
+        updated_at = NOW()
+    `;
+
+    await transaction`
+      UPDATE customers
+      SET
+        telegram_username = COALESCE(
+          ${message.from?.username || null},
+          telegram_username
+        ),
+        updated_at = NOW()
+      WHERE id = ${pairing.customer_id}
+        AND shop_id = ${pairing.shop_id}
+    `;
+
+    await transaction`
+      UPDATE customer_link_tokens
+      SET
+        status = 'confirmed',
+        metadata = metadata || ${JSON.stringify({
+          confirmedTelegramId: telegramId,
+          confirmedUsername: message.from?.username || null,
+          confirmedAt: new Date().toISOString(),
+          confirmationSource: source,
+        })}::jsonb,
+        updated_at = NOW()
+      WHERE id = ${pairing.id}
+        AND status IN ('pending', 'opened')
+    `;
+
+    await transaction`
+      INSERT INTO admin_audit_log (
+        shop_id,
+        actor_role,
+        event_type,
+        entity_type,
+        entity_id,
+        severity,
+        summary,
+        metadata,
+        created_at
+      )
+      VALUES (
+        ${pairing.shop_id},
+        'customer',
+        'customer.pairing_confirmed',
+        'customer',
+        ${pairing.customer_id},
+        'info',
+        'Telegram подтвердил вход в браузере',
+        ${JSON.stringify({
+          pairingId: pairing.id,
+          telegramId,
+          source,
+        })}::jsonb,
+        NOW()
+      )
+    `;
+
+    return {
+      ok: true as const,
+      customerId: pairing.customer_id,
+      shopId: pairing.shop_id,
+    };
+  });
+}
+
+async function handleBrowserPairingToken(
+  message: TelegramMessage,
+  payload: string,
+) {
+  const rawToken = parsePairingStartPayload(payload);
+
+  if (!rawToken) return false;
+
+  const shopId = await getDefaultShopId();
+
+  if (!shopId) {
+    await sendTelegramMessage(
+      message.chat.id,
+      "Магазин временно недоступен. Попробуйте позже.",
+    );
+    return true;
+  }
+
+  const pairing = await loadBrowserPairingByToken(
+    shopId,
+    rawToken,
+  );
+
+  if (!pairing) {
+    await sendTelegramMessage(
+      message.chat.id,
+      "Запрос входа уже использован, отменён или срок его действия истёк.",
+      {
+        reply_markup: await mainKeyboardForChat(message.chat.id),
+      },
+    );
+    return true;
+  }
+
+  return openBrowserPairing(message, pairing);
+}
+
+async function handleBrowserPairingCode(
+  message: TelegramMessage,
+  rawCode: string,
+) {
+  if (!isPairingManualCode(rawCode)) return false;
+
+  const shopId = await getDefaultShopId();
+  if (!shopId) return false;
+
+  const pairing = await loadBrowserPairingByCode(
+    shopId,
+    rawCode,
+  );
+
+  if (!pairing) return false;
+
+  telegramLinkAttempts.delete(message.chat.id);
+  return openBrowserPairing(message, pairing);
+}
+
+async function handleBrowserPairingContact(
+  message: TelegramMessage,
+) {
+  if (!message.contact) return false;
+
+  const telegramId = String(message.chat.id);
+  const shopId = await getDefaultShopId();
+
+  if (!shopId) return false;
+
+  const rows = await sql<BrowserPairingRecord[]>`
+    SELECT
+      tokens.id,
+      tokens.shop_id,
+      tokens.customer_id,
+      tokens.status,
+      tokens.expires_at::text,
+      tokens.metadata,
+      customers.phone
+    FROM customer_link_tokens tokens
+    JOIN customers
+      ON customers.id = tokens.customer_id
+     AND customers.shop_id = tokens.shop_id
+    WHERE tokens.shop_id = ${shopId}
+      AND tokens.provider = 'telegram'
+      AND tokens.purpose = 'browser_pairing_login'
+      AND tokens.status = 'opened'
+      AND tokens.consumed_at IS NULL
+      AND tokens.expires_at > NOW()
+      AND tokens.metadata ->> 'candidateTelegramId' = ${telegramId}
+    ORDER BY tokens.created_at DESC
+    LIMIT 1
+  `;
+  const pairing = rows[0];
+
+  if (!pairing) return false;
+
+  if (
+    !message.contact.user_id
+    || !message.from?.id
+    || message.contact.user_id !== message.from.id
+  ) {
+    await sendTelegramMessage(
+      message.chat.id,
+      "Нужно отправить именно свой номер кнопкой «Поделиться моим номером». Пересланные контакты не принимаются.",
+    );
+    return true;
+  }
+
+  if (
+    !pairingPhoneMatches(
+      pairing.phone,
+      message.contact.phone_number,
+    )
+  ) {
+    const attempts = Number(
+      pairing.metadata.attempts || 0,
+    ) + 1;
+    const status = attempts >= 5 ? "rejected" : "opened";
+
+    await sql`
+      UPDATE customer_link_tokens
+      SET
+        status = ${status},
+        metadata = metadata || ${JSON.stringify({
+          attempts,
+          lastMismatchAt: new Date().toISOString(),
+          mismatchReason: "phone_mismatch",
+        })}::jsonb,
+        updated_at = NOW()
+      WHERE id = ${pairing.id}
+        AND status = 'opened'
+    `;
+
+    await sendTelegramMessage(
+      message.chat.id,
+      attempts >= 5
+        ? "Номера не совпали. Запрос входа отменён. Создайте новый запрос на сайте."
+        : "Номер Telegram не совпадает с номером, введённым на сайте. Проверьте номер и создайте новый запрос при необходимости.",
+      {
+        reply_markup: {
+          remove_keyboard: true,
+        },
+      },
+    );
+
+    return true;
+  }
+
+  const result = await confirmBrowserPairing(
+    pairing.id,
+    message,
+    "telegram_contact",
+  );
+
+  if (!result.ok) {
+    await sendTelegramMessage(
+      message.chat.id,
+      "Не удалось подтвердить вход. Создайте новый запрос на сайте.",
+      {
+        reply_markup: await mainKeyboardForChat(message.chat.id),
+      },
+    );
+    return true;
+  }
+
+  await sendTelegramMessage(
+    message.chat.id,
+    [
+      "✅ Telegram подключён",
+      "",
+      "Номер подтверждён.",
+      "Вернитесь на сайт — вход завершится автоматически.",
+    ].join("\n"),
+    {
+      reply_markup: {
+        remove_keyboard: true,
+      },
+    },
+  );
+
+  await sendTelegramMessage(
+    message.chat.id,
+    "Главное меню:",
+    {
+      reply_markup: await mainKeyboardForChat(message.chat.id),
+    },
+  );
+
+  return true;
+}
+
+async function handleBrowserPairingApprove(
+  callbackQuery: TelegramCallbackQuery,
+  pairingId: string,
+) {
+  const message = callbackQuery.message;
+
+  if (!message) {
+    await answerCallbackQuery(callbackQuery.id);
+    return;
+  }
+
+  const result = await confirmBrowserPairing(
+    pairingId,
+    message,
+    "linked_telegram",
+  );
+
+  if (!result.ok) {
+    await answerCallbackQuery(
+      callbackQuery.id,
+      "Запрос больше не действует",
+    );
+    await sendTelegramMessage(
+      message.chat.id,
+      "Запрос входа уже использован, отменён или истёк.",
+      {
+        reply_markup: await mainKeyboardForChat(message.chat.id),
+      },
+    );
+    return;
+  }
+
+  await answerCallbackQuery(
+    callbackQuery.id,
+    "Вход подтверждён",
+  );
+  await sendTelegramMessage(
+    message.chat.id,
+    [
+      "✅ Вход подтверждён",
+      "",
+      "Вернитесь в браузер — личный кабинет откроется автоматически.",
+    ].join("\n"),
+    {
+      reply_markup: await mainKeyboardForChat(message.chat.id),
+    },
+  );
+}
+
+async function handleBrowserPairingCancel(
+  callbackQuery: TelegramCallbackQuery,
+  pairingId: string,
+) {
+  const message = callbackQuery.message;
+
+  if (!message) {
+    await answerCallbackQuery(callbackQuery.id);
+    return;
+  }
+
+  const telegramId = String(message.chat.id);
+  const updated = await sql<{ id: string }[]>`
+    UPDATE customer_link_tokens
+    SET
+      status = 'cancelled',
+      metadata = metadata || ${JSON.stringify({
+        cancelledAt: new Date().toISOString(),
+        cancelledTelegramId: telegramId,
+        cancelledBy: "telegram",
+      })}::jsonb,
+      updated_at = NOW()
+    WHERE id = ${pairingId}
+      AND provider = 'telegram'
+      AND purpose = 'browser_pairing_login'
+      AND status IN ('pending', 'opened')
+      AND consumed_at IS NULL
+      AND expires_at > NOW()
+      AND metadata ->> 'candidateTelegramId' = ${telegramId}
+    RETURNING id
+  `;
+
+  await answerCallbackQuery(
+    callbackQuery.id,
+    updated[0] ? "Запрос отменён" : "Запрос уже закрыт",
+  );
+  await sendTelegramMessage(
+    message.chat.id,
+    updated[0]
+      ? "Вход на сайте отменён."
+      : "Запрос уже использован, отменён или истёк.",
+    {
+      reply_markup: await mainKeyboardForChat(message.chat.id),
+    },
+  );
 }
 
 async function handleEmployeeLinkToken(message: TelegramMessage, payload: string) {
@@ -1359,6 +2112,13 @@ async function handleTelegramLinkCode(message: TelegramMessage, rawCode: string)
       message.chat.id,
       "Слишком много неверных кодов. Повторите попытку через 15 минут.",
     );
+    return true;
+  }
+
+  const browserPairingHandled =
+    await handleBrowserPairingCode(message, code);
+
+  if (browserPairingHandled) {
     return true;
   }
 
@@ -1609,6 +2369,14 @@ async function handleStart(update: TelegramUpdate) {
   if (!message) return;
 
   const payload = (message.text || "").split(/\s+/).slice(1).join(" ").trim();
+
+  if (payload.startsWith("pair_")) {
+    const handled = await handleBrowserPairingToken(
+      message,
+      payload,
+    );
+    if (handled) return;
+  }
 
   if (payload.startsWith("link_")) {
     const handled = await handleCustomerLinkToken(message, payload);
@@ -8716,6 +9484,18 @@ async function handleCallbackQuery(callbackQuery: TelegramCallbackQuery) {
     return;
   }
 
+  if (data.startsWith("pair:approve:")) {
+    const pairingId = data.slice("pair:approve:".length);
+    await handleBrowserPairingApprove(callbackQuery, pairingId);
+    return;
+  }
+
+  if (data.startsWith("pair:cancel:")) {
+    const pairingId = data.slice("pair:cancel:".length);
+    await handleBrowserPairingCancel(callbackQuery, pairingId);
+    return;
+  }
+
   if (data === "catalog") {
     await answerCallbackQuery(callbackQuery.id);
     await handleCatalog(chatId, message.message_id);
@@ -9383,6 +10163,13 @@ async function handleUpdate(update: TelegramUpdate) {
     }
   }
 
+  const pairingContactHandled =
+    await handleBrowserPairingContact(message);
+
+  if (pairingContactHandled) {
+    return;
+  }
+
   const text = (
     message.text
     || message.contact?.phone_number
@@ -9390,6 +10177,45 @@ async function handleUpdate(update: TelegramUpdate) {
   ).trim();
 
   if (!text) {
+    return;
+  }
+
+  if (text === "Отменить вход") {
+    const cancelled = await sql<{ id: string }[]>`
+      UPDATE customer_link_tokens
+      SET
+        status = 'cancelled',
+        metadata = metadata || ${JSON.stringify({
+          cancelledAt: new Date().toISOString(),
+          cancelledTelegramId: String(message.chat.id),
+          cancelledBy: "telegram_keyboard",
+        })}::jsonb,
+        updated_at = NOW()
+      WHERE id = (
+        SELECT id
+        FROM customer_link_tokens
+        WHERE provider = 'telegram'
+          AND purpose = 'browser_pairing_login'
+          AND status IN ('pending', 'opened')
+          AND consumed_at IS NULL
+          AND expires_at > NOW()
+          AND metadata ->> 'candidateTelegramId'
+            = ${String(message.chat.id)}
+        ORDER BY created_at DESC
+        LIMIT 1
+      )
+      RETURNING id
+    `;
+
+    await sendTelegramMessage(
+      message.chat.id,
+      cancelled[0]
+        ? "Вход на сайте отменён."
+        : "Активный запрос входа не найден.",
+      {
+        reply_markup: await mainKeyboardForChat(message.chat.id),
+      },
+    );
     return;
   }
 

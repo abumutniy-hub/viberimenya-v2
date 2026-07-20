@@ -100,10 +100,13 @@ export async function unlinkCustomerTelegramIdentity(
     WHERE shop_id = ${params.shopId}
       AND customer_id = ${params.customerId}
       AND (
-        (provider = 'telegram' AND purpose = 'connect_channel')
+        (provider = 'telegram' AND purpose IN (
+          'connect_channel',
+          'browser_pairing_login'
+        ))
         OR (provider = 'site' AND purpose = 'magic_login')
       )
-      AND status = 'pending'
+      AND status IN ('pending', 'opened', 'confirmed')
       AND consumed_at IS NULL
     RETURNING id
   `;

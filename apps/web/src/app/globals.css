@@ -16101,3 +16101,137 @@ body {
     white-space: normal;
   }
 }
+
+
+.account-pairing {
+  display: grid;
+  gap: 16px;
+}
+
+.account-pairing-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid rgba(49, 101, 60, 0.18);
+  border-radius: 18px;
+  background: rgba(49, 101, 60, 0.07);
+}
+
+.account-pairing-status p {
+  margin: 4px 0 0;
+  color: #746b63;
+}
+
+.account-pairing-pulse {
+  width: 12px;
+  height: 12px;
+  margin-top: 5px;
+  border-radius: 999px;
+  background: #4f8b5c;
+  box-shadow: 0 0 0 0 rgba(79, 139, 92, 0.35);
+  animation: account-pairing-pulse 1.8s infinite;
+}
+
+@keyframes account-pairing-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(79, 139, 92, 0.35);
+  }
+
+  70% {
+    box-shadow: 0 0 0 10px rgba(79, 139, 92, 0);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 rgba(79, 139, 92, 0);
+  }
+}
+
+.account-pairing-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
+  padding: 13px 18px;
+  border-radius: 999px;
+  background: #7d1736;
+  color: #fff;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.account-pairing-qr {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid rgba(88, 62, 43, 0.12);
+  border-radius: 20px;
+  background: #fff;
+}
+
+.account-pairing-qr img {
+  width: min(220px, 70vw);
+  aspect-ratio: 1;
+  object-fit: contain;
+}
+
+.account-pairing-qr span,
+.account-pairing-note,
+.account-pairing-security {
+  color: #746b63;
+  font-size: 13px;
+  text-align: center;
+}
+
+.account-pairing-code {
+  display: grid;
+  justify-items: center;
+  gap: 5px;
+  padding: 16px;
+  border-radius: 18px;
+  background: #f7f1ec;
+}
+
+.account-pairing-code span,
+.account-pairing-code small {
+  color: #746b63;
+}
+
+.account-pairing-code strong {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: clamp(28px, 7vw, 40px);
+  letter-spacing: 0.16em;
+  color: #3f2b21;
+}
+
+.account-pairing-cancel {
+  width: 100%;
+  border: 0;
+  border-radius: 999px;
+  padding: 13px 18px;
+  background: rgba(63, 43, 33, 0.08);
+  color: #3f2b21;
+  font: inherit;
+  cursor: pointer;
+}
+
+.account-auth-providers {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+  padding: 14px 16px;
+  border: 1px dashed rgba(125, 23, 54, 0.22);
+  border-radius: 18px;
+}
+
+.account-auth-providers span {
+  font-weight: 800;
+  color: #7d1736;
+}
+
+.account-auth-providers p {
+  margin: 0;
+  color: #746b63;
+  font-size: 13px;
+}
