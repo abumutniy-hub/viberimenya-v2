@@ -16002,3 +16002,102 @@ body {
     width: 100%;
   }
 }
+
+/* CUSTOMER SESSION SECURITY 17B-2B.2 */
+.account-security-card {
+  scroll-margin-top: 96px;
+}
+
+.account-security-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 18px 0;
+}
+
+.account-session-list {
+  display: grid;
+  gap: 10px;
+}
+
+.account-session-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 16px;
+  border: 1px solid rgba(26, 57, 45, 0.12);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.account-session-item.is-current {
+  border-color: rgba(42, 126, 87, 0.35);
+  background: rgba(224, 245, 234, 0.62);
+}
+
+.account-session-item > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.account-session-item strong,
+.account-session-item span,
+.account-session-item small {
+  overflow-wrap: anywhere;
+}
+
+.account-session-item span,
+.account-session-item small {
+  color: var(--muted-text, #67726c);
+}
+
+.account-security-events {
+  margin-top: 18px;
+  border-top: 1px solid rgba(26, 57, 45, 0.1);
+  padding-top: 15px;
+}
+
+.account-security-events summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.account-security-events > div {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.account-security-events p {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(26, 57, 45, 0.08);
+}
+
+.account-security-events span {
+  color: var(--muted-text, #67726c);
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .account-security-actions,
+  .account-session-item,
+  .account-security-events p {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .account-security-actions button,
+  .account-session-item button {
+    width: 100%;
+  }
+
+  .account-security-events span {
+    white-space: normal;
+  }
+}

@@ -50,6 +50,23 @@ type Address = {
   is_default: boolean;
 };
 
+type CustomerSession = {
+  id: string;
+  device: string;
+  ip: string | null;
+  isCurrent: boolean;
+  createdAt: string;
+  lastSeenAt: string | null;
+  expiresAt: string;
+};
+
+type SecurityEvent = {
+  type: string;
+  severity: string;
+  summary: string;
+  createdAt: string;
+};
+
 type AddressDraft = {
   city: string;
   street: string;
@@ -198,6 +215,10 @@ export function AccountClient() {
   const [editingAddressId, setEditingAddressId] = useState<string | null>(null);
   const [addressSaving, setAddressSaving] = useState(false);
   const [repeatingOrder, setRepeatingOrder] = useState<string | null>(null);
+  const [sessions, setSessions] = useState<CustomerSession[]>([]);
+  const [securityEvents, setSecurityEvents] = useState<SecurityEvent[]>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [sessionAction, setSessionAction] = useState<string | null>(null);
 
   const defaultAddressId = useMemo(
     () => addresses.find((address) => address.is_default)?.id ?? null,
@@ -220,6 +241,39 @@ export function AccountClient() {
   ) {
     setMessage(text);
     setMessageKind(kind);
+  }
+
+  async function loadSessions() {
+    setSessionsLoading(true);
+
+    try {
+      const response = await fetch("/api/public/account/sessions", {
+        credentials: "include",
+        cache: "no-store",
+      });
+      const data = await readJson(response);
+
+      if (response.ok && data.ok === true) {
+        setSessions(
+          Array.isArray(data.sessions)
+            ? (data.sessions as CustomerSession[])
+            : [],
+        );
+        setSecurityEvents(
+          Array.isArray(data.events)
+            ? (data.events as SecurityEvent[])
+            : [],
+        );
+      } else if (response.status === 401) {
+        setSessions([]);
+        setSecurityEvents([]);
+      }
+    } catch {
+      setSessions([]);
+      setSecurityEvents([]);
+    } finally {
+      setSessionsLoading(false);
+    }
   }
 
   async function loadAccount() {
@@ -249,6 +303,8 @@ export function AccountClient() {
         if (connected) {
           setTelegramCode("");
         }
+
+        void loadSessions();
       } else {
         setCustomer(null);
         setOrders([]);
@@ -259,6 +315,8 @@ export function AccountClient() {
         setTelegramLinkedAt(null);
         setTelegramNotificationsEnabled(false);
         setTelegramCode("");
+        setSessions([]);
+        setSecurityEvents([]);
       }
     } catch {
       setCustomer(null);
@@ -270,6 +328,32 @@ export function AccountClient() {
   useEffect(() => {
     void loadAccount();
   }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const auth = params.get("auth");
+
+    if (auth === "invalid") {
+      showMessage(
+        "Ссылка входа уже использована, истекла или была отозвана. Откройте новую ссылку в Telegram.",
+        "error",
+      );
+    }
+  }, []);
+
+  useEffect(() => {
+    if (loading || !customer) return;
+
+    const section = new URLSearchParams(window.location.search).get("section");
+    if (!section) return;
+
+    window.setTimeout(() => {
+      document.getElementById(section)?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    }, 150);
+  }, [loading, customer]);
 
   useEffect(() => {
     if (!telegramCode || telegramConnected) {
@@ -688,6 +772,126 @@ export function AccountClient() {
     }
   }
 
+  async function revokeSession(session: CustomerSession) {
+    const confirmed = window.confirm(
+      session.isCurrent
+        ? "Завершить текущую сессию? Потребуется войти снова."
+        : `Завершить сессию «${session.device}»?`,
+    );
+    if (!confirmed) return;
+
+    setSessionAction(session.id);
+
+    try {
+      const response = await fetch(
+        `/api/public/account/sessions/${session.id}`,
+        {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ confirm: true }),
+        },
+      );
+      const data = await readJson(response);
+
+      if (!response.ok || data.ok !== true) {
+        showMessage(
+          String(data.message || "Не удалось завершить сессию"),
+          "error",
+        );
+        return;
+      }
+
+      if (data.currentRevoked === true) {
+        setCustomer(null);
+        setSessions([]);
+        setSecurityEvents([]);
+        setStep("phone");
+        showMessage("Текущая сессия завершена", "info");
+        return;
+      }
+
+      showMessage("Сессия завершена", "success");
+      await loadSessions();
+    } catch {
+      showMessage("Не удалось завершить сессию", "error");
+    } finally {
+      setSessionAction(null);
+    }
+  }
+
+  async function revokeOtherSessions() {
+    if (!window.confirm("Завершить все сессии, кроме текущей?")) return;
+    setSessionAction("others");
+
+    try {
+      const response = await fetch(
+        "/api/public/account/sessions/revoke-others",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ confirm: true }),
+        },
+      );
+      const data = await readJson(response);
+
+      if (!response.ok || data.ok !== true) {
+        showMessage(
+          String(data.message || "Не удалось завершить сессии"),
+          "error",
+        );
+        return;
+      }
+
+      showMessage(
+        `Другие сессии завершены: ${Number(data.revokedCount || 0)}`,
+        "success",
+      );
+      await loadSessions();
+    } catch {
+      showMessage("Не удалось завершить сессии", "error");
+    } finally {
+      setSessionAction(null);
+    }
+  }
+
+  async function revokeAllSessions() {
+    if (!window.confirm("Выйти со всех устройств, включая это?")) return;
+    setSessionAction("all");
+
+    try {
+      const response = await fetch(
+        "/api/public/account/sessions/revoke-all",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ confirm: true }),
+        },
+      );
+      const data = await readJson(response);
+
+      if (!response.ok || data.ok !== true) {
+        showMessage(
+          String(data.message || "Не удалось завершить сессии"),
+          "error",
+        );
+        return;
+      }
+
+      setCustomer(null);
+      setSessions([]);
+      setSecurityEvents([]);
+      setStep("phone");
+      showMessage("Вы вышли со всех устройств", "info");
+    } catch {
+      showMessage("Не удалось завершить сессии", "error");
+    } finally {
+      setSessionAction(null);
+    }
+  }
+
   async function logout() {
     await fetch("/api/public/account/logout", {
       method: "POST",
@@ -701,6 +905,8 @@ export function AccountClient() {
     setTelegramConnected(false);
     setTelegramNotificationsEnabled(false);
     setTelegramCode("");
+    setSessions([]);
+    setSecurityEvents([]);
     setCode("");
     setStep("phone");
     showMessage("Вы вышли из личного кабинета", "info");
@@ -943,6 +1149,90 @@ export function AccountClient() {
           ) : null}
         </section>
       )}
+
+      <section className="account-card account-security-card" id="security">
+        <div className="account-section-heading">
+          <div>
+            <p className="eyebrow">Безопасность</p>
+            <h2>Активные устройства</h2>
+          </div>
+          <span>Не более 5 активных сессий</span>
+        </div>
+
+        <div className="account-security-actions">
+          <button
+            type="button"
+            disabled={sessionAction !== null || sessions.length <= 1}
+            onClick={() => void revokeOtherSessions()}
+          >
+            {sessionAction === "others"
+              ? "Завершаем…"
+              : "Завершить другие"}
+          </button>
+          <button
+            type="button"
+            className="account-danger-button"
+            disabled={sessionAction !== null}
+            onClick={() => void revokeAllSessions()}
+          >
+            {sessionAction === "all"
+              ? "Выходим…"
+              : "Выйти со всех устройств"}
+          </button>
+        </div>
+
+        {sessionsLoading ? (
+          <p>Проверяем активные устройства…</p>
+        ) : sessions.length ? (
+          <div className="account-session-list">
+            {sessions.map((session) => (
+              <article
+                key={session.id}
+                className={`account-session-item ${session.isCurrent ? "is-current" : ""}`}
+              >
+                <div>
+                  <strong>{session.device}</strong>
+                  <span>
+                    {session.isCurrent ? "Текущее устройство · " : ""}
+                    активность {dateText(session.lastSeenAt || session.createdAt)}
+                  </span>
+                  <small>
+                    {session.ip ? `IP: ${session.ip} · ` : ""}
+                    действует до {dateText(session.expiresAt)}
+                  </small>
+                </div>
+                <button
+                  type="button"
+                  disabled={sessionAction !== null}
+                  onClick={() => void revokeSession(session)}
+                >
+                  {sessionAction === session.id
+                    ? "Завершаем…"
+                    : session.isCurrent
+                      ? "Выйти"
+                      : "Завершить"}
+                </button>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <p>Активные сессии не найдены.</p>
+        )}
+
+        {securityEvents.length ? (
+          <details className="account-security-events">
+            <summary>Последние события безопасности</summary>
+            <div>
+              {securityEvents.map((event, index) => (
+                <p key={`${event.createdAt}-${index}`}>
+                  <strong>{event.summary}</strong>
+                  <span>{dateText(event.createdAt)}</span>
+                </p>
+              ))}
+            </div>
+          </details>
+        ) : null}
+      </section>
 
       <section className="account-card" id="addresses">
         <div className="account-section-heading">
@@ -1214,7 +1504,7 @@ export function AccountClient() {
         )}
       </section>
 
-      <section className="account-card">
+      <section className="account-card" id="bonuses">
         <div className="account-section-heading">
           <div>
             <p className="eyebrow">Лояльность</p>

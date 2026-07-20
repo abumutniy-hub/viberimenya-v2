@@ -901,8 +901,10 @@ async function unlinkCustomerTelegramFromBot(
         updated_at = NOW()
       WHERE shop_id = ${shopId}
         AND customer_id = ${customerId}
-        AND provider = 'telegram'
-        AND purpose = 'connect_channel'
+        AND (
+          (provider = 'telegram' AND purpose = 'connect_channel')
+          OR (provider = 'site' AND purpose = 'magic_login')
+        )
         AND status = 'pending'
         AND consumed_at IS NULL
     `;
@@ -991,26 +993,78 @@ function createCustomerMagicToken() {
   return randomUUID().replace(/-/g, "") + randomUUID().replace(/-/g, "");
 }
 
+function hashCustomerMagicToken(token: string) {
+  return `sha256:${createHash("sha256")
+    .update(`viberimenya:customer-magic-login:v1:${token}`)
+    .digest("hex")}`;
+}
+
 async function createCustomerMagicLoginUrl(params: {
   shopId: string;
   customerId: string;
   orderId: string | null;
+  redirectPath?: string;
 }) {
   const token = createCustomerMagicToken();
+  const storedToken = hashCustomerMagicToken(token);
+  const redirectPath = params.redirectPath || "/account";
 
-  await sql`
-    INSERT INTO customer_link_tokens (
-      shop_id, customer_id, order_id, provider, purpose,
-      token, status, expires_at, metadata, created_at, updated_at
-    )
-    VALUES (
-      ${params.shopId}, ${params.customerId}, ${params.orderId},
-      'site', 'magic_login',
-      ${token}, 'pending', NOW() + INTERVAL '15 minutes',
-      ${JSON.stringify({ source: "telegram_magic_login" })},
-      NOW(), NOW()
-    )
-  `;
+  await sql.begin(async (transaction) => {
+    await transaction`
+      UPDATE customer_link_tokens
+      SET status = 'expired',
+          updated_at = NOW()
+      WHERE shop_id = ${params.shopId}
+        AND customer_id = ${params.customerId}
+        AND provider = 'site'
+        AND purpose = 'magic_login'
+        AND status = 'pending'
+        AND consumed_at IS NULL
+        AND expires_at <= NOW()
+    `;
+
+    await transaction`
+      INSERT INTO customer_link_tokens (
+        shop_id, customer_id, order_id, provider, purpose,
+        token, status, expires_at, metadata, created_at, updated_at
+      )
+      VALUES (
+        ${params.shopId}, ${params.customerId}, ${params.orderId},
+        'site', 'magic_login',
+        ${storedToken}, 'pending', NOW() + INTERVAL '10 minutes',
+        ${JSON.stringify({
+          source: "telegram_magic_login",
+          redirectPath,
+          tokenStorage: "sha256-v1",
+        })},
+        NOW(), NOW()
+      )
+    `;
+
+    await transaction`
+      WITH ranked AS (
+        SELECT
+          id,
+          ROW_NUMBER() OVER (
+            ORDER BY created_at DESC, id DESC
+          ) AS position
+        FROM customer_link_tokens
+        WHERE shop_id = ${params.shopId}
+          AND customer_id = ${params.customerId}
+          AND provider = 'site'
+          AND purpose = 'magic_login'
+          AND status = 'pending'
+          AND consumed_at IS NULL
+          AND expires_at > NOW()
+      )
+      UPDATE customer_link_tokens tokens
+      SET status = 'cancelled',
+          updated_at = NOW()
+      WHERE tokens.id IN (
+        SELECT id FROM ranked WHERE position > 5
+      )
+    `;
+  });
 
   return absoluteUrl(`/api/public/auth/magic/${token}`);
 }
@@ -1143,7 +1197,8 @@ async function handleCustomerLinkToken(message: TelegramMessage, payload: string
   const magicLoginUrl = await createCustomerMagicLoginUrl({
     shopId,
     customerId: linkToken.customer_id,
-    orderId: linkToken.order_id
+    orderId: linkToken.order_id,
+    redirectPath: "/account",
   });
 
   await sendTelegramMessage(
@@ -1526,7 +1581,8 @@ async function handleTelegramLinkCode(message: TelegramMessage, rawCode: string)
   const magicLoginUrl = await createCustomerMagicLoginUrl({
     shopId,
     customerId: linkToken.customer_id,
-    orderId: linkToken.order_id
+    orderId: linkToken.order_id,
+    redirectPath: "/account",
   });
 
   telegramLinkAttempts.delete(message.chat.id);
@@ -1587,7 +1643,8 @@ async function handleOpenMenu(chatId: number, isStart = false) {
     ? await createCustomerMagicLoginUrl({
         shopId: profile.shop_id,
         customerId: profile.customer_id,
-        orderId: null
+        orderId: null,
+        redirectPath: "/account",
       })
     : null;
 
@@ -3474,7 +3531,8 @@ async function handleCustomerProfile(chatId: number) {
   const loginUrl = await createCustomerMagicLoginUrl({
     shopId: profile.shop_id,
     customerId: profile.customer_id,
-    orderId: null
+    orderId: null,
+    redirectPath: "/account",
   });
 
   await sendTelegramMessage(
@@ -4031,6 +4089,7 @@ async function handleAddresses(chatId: number) {
     shopId: profile.shop_id,
     customerId: profile.customer_id,
     orderId: null,
+    redirectPath: "/account?section=addresses",
   });
 
   const lines = ["🏠 Сохранённые адреса", ""];
@@ -4261,6 +4320,7 @@ async function handleBonuses(chatId: number) {
     shopId: profile.shop_id,
     customerId: profile.customer_id,
     orderId: null,
+    redirectPath: "/account?section=bonuses",
   });
 
   await sendTelegramMessage(chatId, lines.join("\n"), {

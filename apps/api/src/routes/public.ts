@@ -22,6 +22,15 @@ import {
 } from "../lib/catalog-product";
 import { isYooKassaConfigured } from "../modules/payments/yookassa.service";
 import { unlinkCustomerTelegramIdentity } from "../modules/customers/customer-telegram-identity.service";
+import {
+  createSecureCustomerSession,
+  customerMagicTokenCandidates,
+  customerSessionTokenCandidates,
+  describeCustomerDevice,
+  resolveActiveCustomerSession,
+  safeCustomerRedirectPath,
+  writeCustomerSecurityAudit,
+} from "../modules/customers/customer-session-security.service";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -727,13 +736,6 @@ function validateCreateOrderBody(body: z.infer<typeof createOrderSchema>) {
   }
 }
 
-function createSessionToken() {
-  return (
-    crypto.randomUUID().replace(/-/g, "") +
-    crypto.randomUUID().replace(/-/g, "")
-  );
-}
-
 function createTelegramLinkCode() {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
@@ -769,8 +771,13 @@ function clearCustomerSessionCookie() {
 type PublicSqlClient = ReturnType<typeof createDb>["client"];
 
 type ActiveCustomerSession = {
+  id: string;
   shop_id: string;
   customer_id: string;
+  user_agent: string | null;
+  expires_at: string;
+  last_seen_at: string | null;
+  created_at: string;
 };
 
 async function getActiveCustomerSession(
@@ -779,20 +786,9 @@ async function getActiveCustomerSession(
 ): Promise<ActiveCustomerSession | null> {
   const token = getCookieValue(cookieHeader, CUSTOMER_SESSION_COOKIE);
 
-  if (!token) {
-    return null;
-  }
+  if (!token) return null;
 
-  const rows = await client<ActiveCustomerSession[]>`
-    SELECT shop_id, customer_id
-    FROM customer_sessions
-    WHERE token = ${token}
-      AND revoked_at IS NULL
-      AND expires_at > NOW()
-    LIMIT 1
-  `;
-
-  return rows[0] ?? null;
+  return resolveActiveCustomerSession(client, token);
 }
 
 const customerAddressSchema = z.object({
@@ -2470,34 +2466,19 @@ export async function publicRoutes(app: FastifyInstance) {
         });
       }
 
-      const token = createSessionToken();
-
       await client`
         UPDATE customer_login_codes
         SET consumed_at = NOW()
         WHERE id = ${login.id}
       `;
 
-      await client`
-        INSERT INTO customer_sessions (
-          shop_id,
-          customer_id,
-          token,
-          user_agent,
-          expires_at,
-          last_seen_at,
-          created_at
-        )
-        VALUES (
-          ${shop.id},
-          ${login.customer_id},
-          ${token},
-          ${String(request.headers["user-agent"] ?? "")},
-          NOW() + INTERVAL '30 days',
-          NOW(),
-          NOW()
-        )
-      `;
+      const session = await createSecureCustomerSession(client, {
+        shopId: shop.id,
+        customerId: login.customer_id,
+        userAgent: String(request.headers["user-agent"] ?? "") || null,
+        ip: request.ip || null,
+        source: "telegram_login_code",
+      });
 
       const customerRows = await client`
         SELECT id, phone, name, email, GREATEST(bonus_balance, 0) AS bonus_balance, total_orders, total_spent, last_order_at
@@ -2506,7 +2487,7 @@ export async function publicRoutes(app: FastifyInstance) {
         LIMIT 1
       `;
 
-      reply.header("Set-Cookie", buildCustomerSessionCookie(token));
+      reply.header("Set-Cookie", buildCustomerSessionCookie(session.rawToken));
 
       return {
         ok: true,
@@ -2533,15 +2514,10 @@ export async function publicRoutes(app: FastifyInstance) {
         });
       }
 
-      const token = getCookieValue(
-        request.headers.cookie,
-        CUSTOMER_SESSION_COOKIE,
-      );
-
       await client`
         UPDATE customer_sessions
         SET last_seen_at = NOW()
-        WHERE token = ${token}
+        WHERE id = ${session.id}
       `;
 
       const customerRows = await client<
@@ -3248,11 +3224,12 @@ export async function publicRoutes(app: FastifyInstance) {
   app.get("/api/public/auth/magic/:token", async (request, reply) => {
     const params = z
       .object({
-        token: z.string().min(24),
+        token: z.string().min(24).max(220),
       })
       .parse(request.params ?? {});
 
     const { client } = createDb();
+    const tokenCandidates = customerMagicTokenCandidates(params.token);
 
     try {
       const shopRows = await client<{ id: string }[]>`
@@ -3261,122 +3238,191 @@ export async function publicRoutes(app: FastifyInstance) {
         WHERE slug = ${env.DEFAULT_SHOP_SLUG}
         LIMIT 1
       `;
-
       const shop = shopRows[0];
 
       if (!shop) {
-        return reply.redirect("/account");
+        return reply.redirect("/account?auth=invalid");
       }
-
-      const tokenRows = await client<
-        {
-          id: string;
-          customer_id: string;
-          order_id: string | null;
-        }[]
-      >`
-        SELECT id, customer_id, order_id
-        FROM customer_link_tokens
-        WHERE shop_id = ${shop.id}
-          AND provider = 'site'
-          AND purpose = 'magic_login'
-          AND token = ${params.token}
-          AND status = 'pending'
-          AND consumed_at IS NULL
-          AND expires_at > NOW()
-        LIMIT 1
-      `;
-
-      const loginToken = tokenRows[0];
-
-      if (!loginToken) {
-        return reply.redirect("/account");
-      }
-
-      const sessionToken = createSessionToken();
-
-      await client`
-        INSERT INTO customer_sessions (
-          shop_id,
-          customer_id,
-          token,
-          user_agent,
-          expires_at,
-          last_seen_at,
-          created_at
-        )
-        VALUES (
-          ${shop.id},
-          ${loginToken.customer_id},
-          ${sessionToken},
-          ${String(request.headers["user-agent"] ?? "")},
-          NOW() + INTERVAL '30 days',
-          NOW(),
-          NOW()
-        )
-      `;
 
       await client`
         UPDATE customer_link_tokens
-        SET status = 'consumed',
-            consumed_at = NOW(),
+        SET status = 'expired',
             updated_at = NOW()
-        WHERE id = ${loginToken.id}
+        WHERE shop_id = ${shop.id}
+          AND provider = 'site'
+          AND purpose = 'magic_login'
+          AND status = 'pending'
+          AND consumed_at IS NULL
+          AND expires_at <= NOW()
       `;
 
-      let redirectUrl = "/account";
+      const result = await client.begin(async (transaction) => {
+        const tokenRows = await transaction<
+          {
+            id: string;
+            customer_id: string;
+            order_id: string | null;
+            metadata: Record<string, unknown> | null;
+          }[]
+        >`
+          WITH candidate AS (
+            SELECT tokens.id
+            FROM customer_link_tokens tokens
+            WHERE tokens.shop_id = ${shop.id}
+              AND tokens.provider = 'site'
+              AND tokens.purpose = 'magic_login'
+              AND tokens.token = ANY(${tokenCandidates}::text[])
+              AND tokens.status = 'pending'
+              AND tokens.consumed_at IS NULL
+              AND tokens.expires_at > NOW()
+              AND EXISTS (
+                SELECT 1
+                FROM telegram_accounts accounts
+                WHERE accounts.shop_id = tokens.shop_id
+                  AND accounts.customer_id = tokens.customer_id
+                  AND accounts.is_active = true
+              )
+            ORDER BY tokens.created_at DESC
+            FOR UPDATE SKIP LOCKED
+            LIMIT 1
+          )
+          UPDATE customer_link_tokens tokens
+          SET
+            status = 'consumed',
+            consumed_at = NOW(),
+            updated_at = NOW()
+          FROM candidate
+          WHERE tokens.id = candidate.id
+            AND tokens.status = 'pending'
+            AND tokens.consumed_at IS NULL
+          RETURNING
+            tokens.id,
+            tokens.customer_id,
+            tokens.order_id,
+            tokens.metadata
+        `;
+        const loginToken = tokenRows[0];
 
-      if (loginToken.order_id) {
-        const orderRows = await client<{ tracking_token: string | null }[]>`
-          SELECT tracking_token
-          FROM orders
-          WHERE id = ${loginToken.order_id}
-            AND customer_id = ${loginToken.customer_id}
+        if (!loginToken) return null;
+
+        const session = await createSecureCustomerSession(transaction, {
+          shopId: shop.id,
+          customerId: loginToken.customer_id,
+          userAgent: String(request.headers["user-agent"] ?? "") || null,
+          ip: request.ip || null,
+          source: "telegram_magic_login",
+        });
+
+        let redirectUrl = safeCustomerRedirectPath(
+          loginToken.metadata?.redirectPath,
+        );
+
+        if (
+          redirectUrl === "/account" &&
+          loginToken.order_id
+        ) {
+          const orderRows = await transaction<
+            { tracking_token: string | null }[]
+          >`
+            SELECT tracking_token
+            FROM orders
+            WHERE id = ${loginToken.order_id}
+              AND customer_id = ${loginToken.customer_id}
+              AND shop_id = ${shop.id}
+            LIMIT 1
+          `;
+          const trackingToken = orderRows[0]?.tracking_token;
+
+          if (trackingToken) {
+            redirectUrl = safeCustomerRedirectPath(
+              `/order/track/${trackingToken}`,
+            );
+          }
+        }
+
+        await writeCustomerSecurityAudit(transaction, {
+          shopId: shop.id,
+          customerId: loginToken.customer_id,
+          eventType: "customer.magic_login_consumed",
+          entityId: loginToken.id,
+          summary: "Одноразовая ссылка Telegram использована",
+          ip: request.ip || null,
+          userAgent: String(request.headers["user-agent"] ?? "") || null,
+          metadata: {
+            redirectUrl,
+            sessionId: session.sessionId,
+            tokenStorage: "sha256-v1",
+          },
+        });
+
+        return {
+          rawSessionToken: session.rawToken,
+          redirectUrl,
+        };
+      });
+
+      if (!result) {
+        const rejectedRows = await client<
+          {
+            id: string;
+            customer_id: string;
+            status: string;
+            expires_at: string;
+          }[]
+        >`
+          SELECT id, customer_id, status, expires_at::text
+          FROM customer_link_tokens
+          WHERE shop_id = ${shop.id}
+            AND provider = 'site'
+            AND purpose = 'magic_login'
+            AND token = ANY(${tokenCandidates}::text[])
+          ORDER BY created_at DESC
           LIMIT 1
         `;
+        const rejected = rejectedRows[0];
 
-        const order = orderRows[0];
-
-        if (order?.tracking_token) {
-          redirectUrl = `/order/track/${order.tracking_token}`;
+        if (rejected) {
+          await writeCustomerSecurityAudit(client, {
+            shopId: shop.id,
+            customerId: rejected.customer_id,
+            eventType: "customer.magic_login_rejected",
+            entityId: rejected.id,
+            severity: "warning",
+            summary: "Отклонена одноразовая ссылка Telegram",
+            ip: request.ip || null,
+            userAgent: String(request.headers["user-agent"] ?? "") || null,
+            metadata: {
+              status: rejected.status,
+              expiresAt: rejected.expires_at,
+              reason: "expired_consumed_unlinked_or_concurrent",
+            },
+          });
         }
+
+        return reply.redirect("/account?auth=invalid");
       }
 
-      reply.header("Set-Cookie", buildCustomerSessionCookie(sessionToken));
-      return reply.redirect(redirectUrl);
+      reply.header(
+        "Set-Cookie",
+        buildCustomerSessionCookie(result.rawSessionToken),
+      );
+      reply.header("Cache-Control", "no-store, max-age=0");
+      reply.header("Pragma", "no-cache");
+      reply.header("Referrer-Policy", "no-referrer");
+      return reply.redirect(result.redirectUrl);
     } finally {
       await client.end();
     }
   });
 
   app.post("/api/public/account/telegram-code", async (request, reply) => {
-    const token = getCookieValue(
-      request.headers.cookie,
-      CUSTOMER_SESSION_COOKIE,
-    );
-
-    if (!token) {
-      return reply.status(401).send({
-        ok: false,
-        message: "Требуется вход",
-      });
-    }
-
     const { client } = createDb();
 
     try {
-      const sessionRows = await client<
-        { shop_id: string; customer_id: string }[]
-      >`
-        SELECT shop_id, customer_id
-        FROM customer_sessions
-        WHERE token = ${token}
-          AND revoked_at IS NULL
-          AND expires_at > NOW()
-        LIMIT 1
-      `;
-
-      const session = sessionRows[0];
+      const session = await getActiveCustomerSession(
+        client,
+        request.headers.cookie,
+      );
 
       if (!session) {
         return reply.status(401).send({
@@ -3462,6 +3508,274 @@ export async function publicRoutes(app: FastifyInstance) {
     }
   });
 
+  app.get("/api/public/account/sessions", async (request, reply) => {
+    const { client } = createDb();
+
+    try {
+      const currentSession = await getActiveCustomerSession(
+        client,
+        request.headers.cookie,
+      );
+
+      if (!currentSession) {
+        return reply.status(401).send({
+          ok: false,
+          message: "Требуется вход",
+        });
+      }
+
+      const rows = await client<
+        {
+          id: string;
+          user_agent: string | null;
+          ip: string | null;
+          expires_at: string;
+          last_seen_at: string | null;
+          created_at: string;
+        }[]
+      >`
+        SELECT
+          sessions.id,
+          sessions.user_agent,
+          created_audit.ip,
+          sessions.expires_at::text,
+          sessions.last_seen_at::text,
+          sessions.created_at::text
+        FROM customer_sessions sessions
+        LEFT JOIN LATERAL (
+          SELECT audit.ip
+          FROM admin_audit_log audit
+          WHERE audit.shop_id = sessions.shop_id
+            AND audit.event_type = 'customer.session_created'
+            AND audit.entity_id = sessions.id::text
+          ORDER BY audit.created_at ASC
+          LIMIT 1
+        ) created_audit ON true
+        WHERE sessions.shop_id = ${currentSession.shop_id}
+          AND sessions.customer_id = ${currentSession.customer_id}
+          AND sessions.revoked_at IS NULL
+          AND sessions.expires_at > NOW()
+        ORDER BY
+          CASE WHEN sessions.id = ${currentSession.id} THEN 0 ELSE 1 END,
+          COALESCE(sessions.last_seen_at, sessions.created_at) DESC,
+          sessions.created_at DESC
+        LIMIT 20
+      `;
+
+      const events = await client<
+        {
+          event_type: string;
+          severity: string;
+          summary: string;
+          created_at: string;
+        }[]
+      >`
+        SELECT
+          event_type,
+          severity,
+          summary,
+          created_at::text
+        FROM admin_audit_log
+        WHERE shop_id = ${currentSession.shop_id}
+          AND actor_role = 'customer'
+          AND metadata ->> 'customerId' = ${currentSession.customer_id}
+          AND event_type IN (
+            'customer.session_created',
+            'customer.session_revoked',
+            'customer.other_sessions_revoked',
+            'customer.all_sessions_revoked',
+            'customer.magic_login_consumed',
+            'customer.magic_login_rejected'
+          )
+        ORDER BY created_at DESC
+        LIMIT 12
+      `;
+
+      return {
+        ok: true,
+        maximumActiveSessions: 5,
+        sessions: rows.map((row) => ({
+          id: row.id,
+          device: describeCustomerDevice(row.user_agent),
+          ip: row.ip,
+          isCurrent: row.id === currentSession.id,
+          createdAt: row.created_at,
+          lastSeenAt: row.last_seen_at,
+          expiresAt: row.expires_at,
+        })),
+        events: events.map((event) => ({
+          type: event.event_type,
+          severity: event.severity,
+          summary: event.summary,
+          createdAt: event.created_at,
+        })),
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.delete(
+    "/api/public/account/sessions/:id",
+    async (request, reply) => {
+      const params = z
+        .object({ id: z.string().uuid() })
+        .parse(request.params ?? {});
+      z.object({ confirm: z.literal(true) }).parse(request.body ?? {});
+      const { client } = createDb();
+
+      try {
+        const currentSession = await getActiveCustomerSession(
+          client,
+          request.headers.cookie,
+        );
+
+        if (!currentSession) {
+          return reply.status(401).send({
+            ok: false,
+            message: "Требуется вход",
+          });
+        }
+
+        const rows = await client<{ id: string }[]>`
+          UPDATE customer_sessions
+          SET revoked_at = NOW()
+          WHERE id = ${params.id}
+            AND shop_id = ${currentSession.shop_id}
+            AND customer_id = ${currentSession.customer_id}
+            AND revoked_at IS NULL
+          RETURNING id
+        `;
+
+        if (!rows[0]) {
+          return reply.status(404).send({
+            ok: false,
+            message: "Активная сессия не найдена",
+          });
+        }
+
+        const currentRevoked = params.id === currentSession.id;
+
+        await writeCustomerSecurityAudit(client, {
+          shopId: currentSession.shop_id,
+          customerId: currentSession.customer_id,
+          eventType: "customer.session_revoked",
+          entityId: params.id,
+          summary: currentRevoked
+            ? "Завершена текущая сессия покупателя"
+            : "Завершена выбранная сессия покупателя",
+          ip: request.ip || null,
+          userAgent: String(request.headers["user-agent"] ?? "") || null,
+          metadata: { currentRevoked, source: "account_security" },
+        });
+
+        if (currentRevoked) {
+          reply.header("Set-Cookie", clearCustomerSessionCookie());
+        }
+
+        return { ok: true, currentRevoked };
+      } finally {
+        await client.end();
+      }
+    },
+  );
+
+  app.post(
+    "/api/public/account/sessions/revoke-others",
+    async (request, reply) => {
+      z.object({ confirm: z.literal(true) }).parse(request.body ?? {});
+      const { client } = createDb();
+
+      try {
+        const currentSession = await getActiveCustomerSession(
+          client,
+          request.headers.cookie,
+        );
+
+        if (!currentSession) {
+          return reply.status(401).send({
+            ok: false,
+            message: "Требуется вход",
+          });
+        }
+
+        const rows = await client<{ id: string }[]>`
+          UPDATE customer_sessions
+          SET revoked_at = NOW()
+          WHERE shop_id = ${currentSession.shop_id}
+            AND customer_id = ${currentSession.customer_id}
+            AND id <> ${currentSession.id}
+            AND revoked_at IS NULL
+            AND expires_at > NOW()
+          RETURNING id
+        `;
+
+        await writeCustomerSecurityAudit(client, {
+          shopId: currentSession.shop_id,
+          customerId: currentSession.customer_id,
+          eventType: "customer.other_sessions_revoked",
+          entityId: currentSession.id,
+          summary: "Завершены другие сессии покупателя",
+          ip: request.ip || null,
+          userAgent: String(request.headers["user-agent"] ?? "") || null,
+          metadata: { revokedCount: rows.length },
+        });
+
+        return { ok: true, revokedCount: rows.length };
+      } finally {
+        await client.end();
+      }
+    },
+  );
+
+  app.post(
+    "/api/public/account/sessions/revoke-all",
+    async (request, reply) => {
+      z.object({ confirm: z.literal(true) }).parse(request.body ?? {});
+      const { client } = createDb();
+
+      try {
+        const currentSession = await getActiveCustomerSession(
+          client,
+          request.headers.cookie,
+        );
+
+        if (!currentSession) {
+          return reply.status(401).send({
+            ok: false,
+            message: "Требуется вход",
+          });
+        }
+
+        const rows = await client<{ id: string }[]>`
+          UPDATE customer_sessions
+          SET revoked_at = NOW()
+          WHERE shop_id = ${currentSession.shop_id}
+            AND customer_id = ${currentSession.customer_id}
+            AND revoked_at IS NULL
+          RETURNING id
+        `;
+
+        await writeCustomerSecurityAudit(client, {
+          shopId: currentSession.shop_id,
+          customerId: currentSession.customer_id,
+          eventType: "customer.all_sessions_revoked",
+          entityId: currentSession.id,
+          severity: "warning",
+          summary: "Завершены все сессии покупателя",
+          ip: request.ip || null,
+          userAgent: String(request.headers["user-agent"] ?? "") || null,
+          metadata: { revokedCount: rows.length },
+        });
+
+        reply.header("Set-Cookie", clearCustomerSessionCookie());
+        return { ok: true, revokedCount: rows.length };
+      } finally {
+        await client.end();
+      }
+    },
+  );
+
   app.post("/api/public/account/logout", async (request, reply) => {
     const token = getCookieValue(
       request.headers.cookie,
@@ -3472,11 +3786,30 @@ export async function publicRoutes(app: FastifyInstance) {
       const { client } = createDb();
 
       try {
-        await client`
+        const candidates = customerSessionTokenCandidates(token);
+        const rows = await client<
+          { id: string; shop_id: string; customer_id: string }[]
+        >`
           UPDATE customer_sessions
           SET revoked_at = NOW()
-          WHERE token = ${token}
+          WHERE token = ANY(${candidates}::text[])
+            AND revoked_at IS NULL
+          RETURNING id, shop_id, customer_id
         `;
+        const session = rows[0];
+
+        if (session) {
+          await writeCustomerSecurityAudit(client, {
+            shopId: session.shop_id,
+            customerId: session.customer_id,
+            eventType: "customer.session_revoked",
+            entityId: session.id,
+            summary: "Покупатель вышел из личного кабинета",
+            ip: request.ip || null,
+            userAgent: String(request.headers["user-agent"] ?? "") || null,
+            metadata: { source: "logout" },
+          });
+        }
       } finally {
         await client.end();
       }
@@ -3484,9 +3817,7 @@ export async function publicRoutes(app: FastifyInstance) {
 
     reply.header("Set-Cookie", clearCustomerSessionCookie());
 
-    return {
-      ok: true,
-    };
+    return { ok: true };
   });
 
   app.post("/api/public/bonus/check", async (request, reply) => {
@@ -3495,31 +3826,13 @@ export async function publicRoutes(app: FastifyInstance) {
     });
 
     const body = schema.parse(request.body ?? {});
-    const token = getCookieValue(
-      request.headers.cookie,
-      CUSTOMER_SESSION_COOKIE,
-    );
-
-    if (!token) {
-      return reply.status(401).send({
-        ok: false,
-        message: "Войдите в личный кабинет, чтобы использовать бонусы",
-      });
-    }
-
     const { client } = createDb();
 
     try {
-      const sessionRows = await client<{ customer_id: string }[]>`
-        SELECT customer_id
-        FROM customer_sessions
-        WHERE token = ${token}
-          AND revoked_at IS NULL
-          AND expires_at > NOW()
-        LIMIT 1
-      `;
-
-      const session = sessionRows[0];
+      const session = await getActiveCustomerSession(
+        client,
+        request.headers.cookie,
+      );
 
       if (!session) {
         return reply.status(401).send({
@@ -4349,28 +4662,18 @@ export async function publicRoutes(app: FastifyInstance) {
             LIMIT 1
           `;
 
-          const customerSessionToken = createSessionToken();
-
-          await transaction`
-          INSERT INTO customer_sessions (
-            shop_id,
-            customer_id,
-            token,
-            user_agent,
-            expires_at,
-            last_seen_at,
-            created_at
-          )
-          VALUES (
-            ${shop.id},
-            ${existingOrder.customer_id},
-            ${customerSessionToken},
-            ${String(request.headers["user-agent"] ?? "")},
-            NOW() + INTERVAL '30 days',
-            NOW(),
-            NOW()
-          )
-        `;
+          const customerSession = await createSecureCustomerSession(
+            transaction,
+            {
+              shopId: shop.id,
+              customerId: existingOrder.customer_id,
+              userAgent:
+                String(request.headers["user-agent"] ?? "") || null,
+              ip: request.ip || null,
+              source: "order_reuse",
+            },
+          );
+          const customerSessionToken = customerSession.rawToken;
 
           return {
             customerSessionToken,
@@ -4811,16 +5114,10 @@ export async function publicRoutes(app: FastifyInstance) {
             );
           }
 
-          const sessionRows = await transaction<{ customer_id: string }[]>`
-          SELECT customer_id
-          FROM customer_sessions
-          WHERE token = ${token}
-            AND revoked_at IS NULL
-            AND expires_at > NOW()
-          LIMIT 1
-        `;
-
-          const session = sessionRows[0];
+          const session = await resolveActiveCustomerSession(
+            transaction,
+            token,
+          );
 
           if (!session || session.customer_id !== customer.id) {
             throw new HttpError(
@@ -5443,28 +5740,18 @@ export async function publicRoutes(app: FastifyInstance) {
         `;
         }
 
-        const customerSessionToken = createSessionToken();
-
-        await transaction`
-        INSERT INTO customer_sessions (
-          shop_id,
-          customer_id,
-          token,
-          user_agent,
-          expires_at,
-          last_seen_at,
-          created_at
-        )
-        VALUES (
-          ${shop.id},
-          ${customer.id},
-          ${customerSessionToken},
-          ${String(request.headers["user-agent"] ?? "")},
-          NOW() + INTERVAL '30 days',
-          NOW(),
-          NOW()
-        )
-      `;
+        const customerSession = await createSecureCustomerSession(
+          transaction,
+          {
+            shopId: shop.id,
+            customerId: customer.id,
+            userAgent:
+              String(request.headers["user-agent"] ?? "") || null,
+            ip: request.ip || null,
+            source: "order_created",
+          },
+        );
+        const customerSessionToken = customerSession.rawToken;
 
         return {
           customerSessionToken,

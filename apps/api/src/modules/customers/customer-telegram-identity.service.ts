@@ -99,8 +99,10 @@ export async function unlinkCustomerTelegramIdentity(
       updated_at = NOW()
     WHERE shop_id = ${params.shopId}
       AND customer_id = ${params.customerId}
-      AND provider = 'telegram'
-      AND purpose = 'connect_channel'
+      AND (
+        (provider = 'telegram' AND purpose = 'connect_channel')
+        OR (provider = 'site' AND purpose = 'magic_login')
+      )
       AND status = 'pending'
       AND consumed_at IS NULL
     RETURNING id
