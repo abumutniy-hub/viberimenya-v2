@@ -28,6 +28,12 @@ import {
   type TelegramCheckoutDraftStep,
 } from "./customer-checkout-draft-core";
 import {
+  buildTelegramOrderCreateBody,
+  readTelegramFinalizedOrder,
+  readTelegramOrderError,
+  type TelegramFinalizedOrder,
+} from "./customer-order-finalization";
+import {
   TELEGRAM_CHECKOUT_FLOW_CREATES_ORDER,
   TELEGRAM_CHECKOUT_FLOW_VERSION,
   normalizeTelegramBonus,
@@ -4588,9 +4594,113 @@ async function handleCheckoutContinueSite(chatId: number) {
   );
 }
 
+async function finalizeTelegramOrder(
+  chatId: number,
+  session: TelegramCheckoutSession,
+): Promise<TelegramFinalizedOrder> {
+  const cartRows = await getTelegramCartRows(chatId);
+  const body = buildTelegramOrderCreateBody(session.data, cartRows);
+  const response = await fetch(`${INTERNAL_API_URL}/api/public/orders`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-vm-order-source": "telegram-bot",
+      "x-vm-telegram-chat-id": String(chatId),
+      "x-vm-internal-token": INTERNAL_ORDER_TOKEN,
+      "user-agent": "viberimenya-telegram-bot/1.0",
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(45000),
+  });
+  const payload = await response.json().catch(() => null) as unknown;
+
+  if (!response.ok) {
+    throw readTelegramOrderError(payload, response.status);
+  }
+
+  return readTelegramFinalizedOrder(payload);
+}
+
+async function completeTelegramCheckout(
+  chatId: number,
+  session: TelegramCheckoutSession,
+  order: TelegramFinalizedOrder,
+) {
+  const shopId = await getDefaultShopId();
+  if (!shopId) throw new Error("Магазин не найден");
+
+  const customerRows = await sql<{ customer_id: string | null }[]>`
+    SELECT customer_id
+    FROM telegram_accounts
+    WHERE shop_id = ${shopId}
+      AND telegram_id = ${String(chatId)}
+      AND is_active = true
+    ORDER BY linked_at DESC, updated_at DESC, id DESC
+    LIMIT 1
+  `;
+  const customerId = customerRows[0]?.customer_id ?? null;
+  const clientRequestId = session.data.clientRequestId || order.id;
+
+  await sql.begin(async (transaction) => {
+    await transaction`
+      INSERT INTO domain_events (
+        shop_id,
+        aggregate_type,
+        aggregate_id,
+        event_type,
+        event_version,
+        actor_type,
+        actor_customer_id,
+        correlation_id,
+        idempotency_key,
+        payload,
+        occurred_at,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        ${shopId},
+        'order',
+        ${order.id}::uuid,
+        'customer.checkout_draft.converted',
+        1,
+        ${customerId ? "customer" : "telegram"},
+        ${customerId},
+        ${order.id}::uuid,
+        ${`checkout-finalized:${chatId}:${clientRequestId}`},
+        ${JSON.stringify({
+          orderId: order.id,
+          orderNumber: order.orderNumber,
+          clientRequestId,
+          telegramChatId: String(chatId),
+          reused: order.reused,
+          source: "telegram",
+        })}::jsonb,
+        NOW(),
+        NOW(),
+        NOW()
+      )
+      ON CONFLICT (shop_id, idempotency_key)
+      DO NOTHING
+    `;
+
+    await transaction`
+      DELETE FROM telegram_cart_items
+      WHERE shop_id = ${shopId}
+        AND telegram_chat_id = ${chatId}
+    `;
+
+    await transaction`
+      DELETE FROM telegram_checkout_sessions
+      WHERE shop_id = ${shopId}
+        AND telegram_chat_id = ${chatId}
+    `;
+  });
+}
+
 async function handleCheckoutReady(chatId: number) {
-  if (TELEGRAM_CHECKOUT_FLOW_CREATES_ORDER) {
-    throw new Error("Этап 17B-2C.1B не должен создавать реальные заказы");
+  if (!TELEGRAM_CHECKOUT_FLOW_CREATES_ORDER) {
+    throw new Error("Атомарная финализация заказа отключена");
   }
 
   const session = await getCheckoutSession(chatId);
@@ -4602,22 +4712,57 @@ async function handleCheckoutReady(chatId: number) {
     return;
   }
 
-  await sendTelegramMessage(
-    chatId,
-    [
-      "✅ Данные проверены и черновик сохранён.",
-      "",
-      "На следующем этапе 17B-2C.1C подключается атомарное создание заказа, резервирование и оплата.",
-      "Сейчас реальные заказы из нового сценария намеренно не создаются.",
-    ].join("\n"),
-    {
-      reply_markup: inlineKeyboard([
-        [{ text: "🌐 Продолжить на сайте", callback_data: "checkout:continue_site" }],
-        [{ text: "✏️ Изменить данные", callback_data: "checkout:review" }],
-        [{ text: "⏸ Оставить черновик", callback_data: "checkout:later" }],
-      ]),
-    },
-  );
+  await sendTelegramMessage(chatId, "⏳ Ещё раз проверяем цены, остатки, доставку, промокод и бонусы…");
+
+  try {
+    const order = await finalizeTelegramOrder(chatId, session);
+    await completeTelegramCheckout(chatId, session, order);
+
+    await sendTelegramMessage(
+      chatId,
+      [
+        order.reused ? "✅ Заказ уже был создан ранее." : "✅ Заказ успешно создан.",
+        "",
+        `Номер: ${order.orderNumber}`,
+        `Сумма: ${money(order.totalAmount)}`,
+        `Доставка: ${order.deliveryTariffName}`,
+        order.discountTotal > 0 ? `Скидка: ${money(order.discountTotal)}` : "",
+        order.bonusSpent > 0 ? `Списано бонусов: ${order.bonusSpent}` : "",
+        "",
+        "Менеджер проверит заказ и свяжется с вами при необходимости.",
+      ].filter(Boolean).join("\n"),
+      {
+        reply_markup: inlineKeyboard([
+          [{ text: "📦 Мои заказы", callback_data: "orders:list" }],
+          [{ text: "🔎 Отследить заказ", url: `${SITE_URL}/order/track/${order.trackingToken}` }],
+          [{ text: "🛍 Вернуться в каталог", callback_data: "catalog" }],
+        ]),
+      },
+    );
+
+    await restoreCheckoutMainKeyboard(chatId);
+  } catch (error) {
+    const message = error instanceof Error
+      ? error.message
+      : "Не удалось создать заказ";
+
+    await sendTelegramMessage(
+      chatId,
+      [
+        "Не удалось подтвердить заказ.",
+        message,
+        "",
+        "Корзина и черновик сохранены. Обновите итог и повторите подтверждение.",
+      ].join("\n"),
+      {
+        reply_markup: inlineKeyboard([
+          [{ text: "🔄 Пересчитать заказ", callback_data: "checkout:review" }],
+          [{ text: "✏️ Изменить данные", callback_data: "checkout:edit:delivery" }],
+          [{ text: "⏸ Продолжить позже", callback_data: "checkout:later" }],
+        ]),
+      },
+    );
+  }
 }
 
 async function handleCheckoutMessage(message: TelegramMessage, text: string): Promise<boolean> {

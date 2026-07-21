@@ -4,7 +4,7 @@ import type {
 } from "./customer-checkout-draft-core";
 
 export const TELEGRAM_CHECKOUT_FLOW_VERSION = 2;
-export const TELEGRAM_CHECKOUT_FLOW_CREATES_ORDER = false;
+export const TELEGRAM_CHECKOUT_FLOW_CREATES_ORDER = true;
 export const TELEGRAM_CHECKOUT_PROGRESS_TOTAL = 9;
 
 const STEP_PROGRESS: Record<TelegramCheckoutDraftStep, number> = {

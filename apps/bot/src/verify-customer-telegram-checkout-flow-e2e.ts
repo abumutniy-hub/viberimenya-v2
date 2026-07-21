@@ -20,11 +20,11 @@ function pass(message: string) {
 
 const empty = {};
 
-assertCondition(TELEGRAM_CHECKOUT_FLOW_CREATES_ORDER === false, "Этап 1B не должен создавать заказ");
+assertCondition(TELEGRAM_CHECKOUT_FLOW_CREATES_ORDER === true, "Этап 1C.1 должен создавать заказ");
 assertCondition(TELEGRAM_CHECKOUT_PROGRESS_TOTAL === 9, "Неверное число групп прогресса");
 assertCondition(telegramCheckoutProgress("customer_name").current === 1, "Покупатель должен быть первым шагом");
 assertCondition(telegramCheckoutProgress("confirm").current === 9, "Проверка должна быть последним шагом");
-pass("прогресс оформления стабилен и не создаёт финальный заказ");
+pass("прогресс оформления стабилен и передаёт финализацию отдельному атомарному ядру");
 
 assertCondition(telegramCheckoutPreviousStep("customer_phone", empty) === "customer_name", "Назад от телефона");
 assertCondition(telegramCheckoutPreviousStep("delivery_type", { recipientSameAsCustomer: true }) === "recipient_mode", "Назад для получателя-покупателя");
@@ -65,4 +65,4 @@ pass("все новые callback data укладываются в лимит Tel
 
 console.log("\nCUSTOMER TELEGRAM CHECKOUT FLOW E2E: OK");
 console.log("Проверены прогресс, Назад, редактирование, даты, промокод, бонусы и callback limits.");
-console.log("Реальные заказы и Telegram-сообщения не создавались.");
+console.log("Тест не создавал реальные заказы и Telegram-сообщения.");
