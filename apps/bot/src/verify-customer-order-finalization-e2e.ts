@@ -33,7 +33,24 @@ const body = buildTelegramOrderCreateBody(
     deliveryDateText: "2026-07-22",
     deliveryIntervalId: "550e8400-e29b-41d4-a716-446655440002",
     deliveryInterval: "12:00–15:00",
-    deliveryAddress: "Москва, улица Примерная, 1",
+    deliveryAddress: "г Москва, ул Примерная, д 1",
+    deliveryAddressSelected: true,
+    deliveryAddressProvider: "dadata",
+    deliveryAddressFiasId: "fias-address-test",
+    deliveryAddressKladrId: "7700000000000",
+    deliveryAddressPostalCode: "101000",
+    deliveryAddressRegion: "г Москва",
+    deliveryAddressCity: "г Москва",
+    deliveryAddressStreet: "ул Примерная",
+    deliveryAddressHouse: "1",
+    deliveryAddressLatitude: "55.75",
+    deliveryAddressLongitude: "37.61",
+    deliveryApartment: "15",
+    deliveryEntrance: "2",
+    deliveryFloor: "5",
+    deliveryIntercom: "15К",
+    deliveryNoApartment: false,
+    deliveryComment: "Вход со двора",
     paymentMethod: "transfer_after_confirm",
     promoCode: " summer10 ",
     bonusToSpend: 300,
@@ -48,6 +65,14 @@ const body = buildTelegramOrderCreateBody(
 assertCondition(body.clientRequestId === "550e8400-e29b-41d4-a716-446655440000", "clientRequestId должен сохраняться");
 assertCondition(body.items.length === 2 && body.items[0]?.productId.endsWith("0009"), "Товары должны сортироваться детерминированно");
 assertCondition(body.deliveryService === "express", "Срочная доставка потеряна");
+assertCondition(
+  body.deliveryAddressProvider === "dadata"
+    && body.deliveryAddressFiasId === "fias-address-test"
+    && body.deliveryAddressHouse === "1"
+    && body.deliveryApartment === "15"
+    && body.deliveryIntercom === "15К",
+  "Структурированные детали адреса потеряны при финализации",
+);
 assertCondition(body.promoCode === "SUMMER10", "Промокод должен нормализоваться");
 assertCondition(body.privacyAccepted === true, "Согласие обязательно");
 pass("черновик и единая корзина преобразуются в серверный order request");

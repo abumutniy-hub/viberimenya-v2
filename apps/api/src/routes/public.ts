@@ -22,6 +22,10 @@ import {
 } from "../lib/catalog-product";
 import { isYooKassaConfigured } from "../modules/payments/yookassa.service";
 import { listPublicCatalogCategories } from "../modules/catalog/public-category.service";
+import {
+  AddressSuggestionProviderError,
+  suggestDeliveryAddresses,
+} from "../modules/delivery/address-suggestions.service";
 import { unlinkCustomerTelegramIdentity } from "../modules/customers/customer-telegram-identity.service";
 import {
   clearCommerceCart,
@@ -618,6 +622,28 @@ const createOrderSchema = z.object({
     .optional()
     .default("standard"),
   deliveryAddress: z.string().trim().max(1000).optional().default(""),
+  deliveryAddressSelected: z.boolean().optional().default(false),
+  deliveryAddressProvider: z
+    .enum(["dadata", "saved", "manual"])
+    .optional()
+    .default("manual"),
+  deliveryAddressFiasId: z.string().trim().max(64).optional().default(""),
+  deliveryAddressKladrId: z.string().trim().max(32).optional().default(""),
+  deliveryAddressPostalCode: z.string().trim().max(16).optional().default(""),
+  deliveryAddressRegion: z.string().trim().max(160).optional().default(""),
+  deliveryAddressCity: z.string().trim().max(160).optional().default(""),
+  deliveryAddressSettlement: z.string().trim().max(160).optional().default(""),
+  deliveryAddressStreet: z.string().trim().max(255).optional().default(""),
+  deliveryAddressHouse: z.string().trim().max(60).optional().default(""),
+  deliveryAddressBlock: z.string().trim().max(60).optional().default(""),
+  deliveryAddressLatitude: z.string().trim().max(32).optional().default(""),
+  deliveryAddressLongitude: z.string().trim().max(32).optional().default(""),
+  deliveryAddressGeoQuality: z.string().trim().max(8).optional().default(""),
+  deliveryApartment: z.string().trim().max(60).optional().default(""),
+  deliveryEntrance: z.string().trim().max(60).optional().default(""),
+  deliveryFloor: z.string().trim().max(60).optional().default(""),
+  deliveryIntercom: z.string().trim().max(120).optional().default(""),
+  deliveryNoApartment: z.boolean().optional().default(false),
   deliveryComment: z.string().trim().max(1000).optional().default(""),
   deliveryDate: z.string().trim().max(10).optional().default(""),
   deliveryIntervalId: z
@@ -745,6 +771,70 @@ function addDaysToIsoDate(value: string, days: number) {
   return date.toISOString().slice(0, 10);
 }
 
+function composeOrderDeliveryAddress(
+  body: z.infer<typeof createOrderSchema>,
+) {
+  const base = body.deliveryAddress.trim();
+
+  if (body.deliveryType !== "delivery" || !base) return base;
+  if (body.deliveryNoApartment || !body.deliveryApartment.trim()) return base;
+
+  const apartment = body.deliveryApartment.trim();
+  const lower = base.toLocaleLowerCase("ru-RU");
+  const apartmentAlreadyIncluded =
+    lower.includes(apartment.toLocaleLowerCase("ru-RU"))
+    && /(?:кв\.?|квартира|офис)/i.test(base);
+
+  return apartmentAlreadyIncluded ? base : `${base}, кв./офис ${apartment}`;
+}
+
+function composeOrderDeliveryComment(
+  body: z.infer<typeof createOrderSchema>,
+) {
+  const parts = [
+    body.deliveryEntrance.trim()
+      ? `Подъезд ${body.deliveryEntrance.trim()}`
+      : "",
+    body.deliveryFloor.trim() ? `этаж ${body.deliveryFloor.trim()}` : "",
+    body.deliveryIntercom.trim()
+      ? `домофон ${body.deliveryIntercom.trim()}`
+      : "",
+    body.deliveryComment.trim(),
+  ].filter(Boolean);
+
+  return parts.join(", ").slice(0, 1000);
+}
+
+function orderDeliveryAddressDetails(
+  body: z.infer<typeof createOrderSchema>,
+) {
+  if (body.deliveryType !== "delivery") return null;
+
+  return {
+    selected: body.deliveryAddressSelected,
+    provider: body.deliveryAddressProvider,
+    fiasId: body.deliveryAddressFiasId || null,
+    kladrId: body.deliveryAddressKladrId || null,
+    postalCode: body.deliveryAddressPostalCode || null,
+    region: body.deliveryAddressRegion || null,
+    city: body.deliveryAddressCity || null,
+    settlement: body.deliveryAddressSettlement || null,
+    street: body.deliveryAddressStreet || null,
+    house: body.deliveryAddressHouse || null,
+    block: body.deliveryAddressBlock || null,
+    latitude: body.deliveryAddressLatitude || null,
+    longitude: body.deliveryAddressLongitude || null,
+    geoQuality: body.deliveryAddressGeoQuality || null,
+    apartment: body.deliveryNoApartment
+      ? null
+      : body.deliveryApartment || null,
+    entrance: body.deliveryEntrance || null,
+    floor: body.deliveryFloor || null,
+    intercom: body.deliveryIntercom || null,
+    noApartment: body.deliveryNoApartment,
+  };
+}
+
 function validateCreateOrderBody(body: z.infer<typeof createOrderSchema>) {
   if (!isValidContactPhone(body.customerPhone)) {
     throw new HttpError(400, "Укажите корректный телефон покупателя");
@@ -764,6 +854,24 @@ function validateCreateOrderBody(body: z.infer<typeof createOrderSchema>) {
   if (body.deliveryType === "delivery") {
     if (body.deliveryAddress.trim().length < 5) {
       throw new HttpError(400, "Укажите полный адрес доставки");
+    }
+
+    if (
+      body.deliveryAddressProvider === "dadata"
+      && !body.deliveryAddressHouse.trim()
+    ) {
+      throw new HttpError(400, "Выберите адрес с номером дома");
+    }
+
+    if (
+      body.deliveryAddressSelected
+      && !body.deliveryNoApartment
+      && !body.deliveryApartment.trim()
+    ) {
+      throw new HttpError(
+        400,
+        "Укажите квартиру/офис или отметьте, что квартиры нет",
+      );
     }
 
     if (!/^\d{4}-\d{2}-\d{2}$/.test(body.deliveryDate)) {
@@ -895,6 +1003,25 @@ const checkoutDraftPatchSchema = z
     deliveryIntervalId: z.union([z.string().uuid(), z.literal("")]).optional(),
     deliveryInterval: z.string().trim().max(80).optional(),
     deliveryAddress: z.string().trim().max(1000).optional(),
+    deliveryAddressSelected: z.boolean().optional(),
+    deliveryAddressProvider: z.enum(["dadata", "saved", "manual"]).optional(),
+    deliveryAddressFiasId: z.string().trim().max(64).optional(),
+    deliveryAddressKladrId: z.string().trim().max(32).optional(),
+    deliveryAddressPostalCode: z.string().trim().max(16).optional(),
+    deliveryAddressRegion: z.string().trim().max(160).optional(),
+    deliveryAddressCity: z.string().trim().max(160).optional(),
+    deliveryAddressSettlement: z.string().trim().max(160).optional(),
+    deliveryAddressStreet: z.string().trim().max(255).optional(),
+    deliveryAddressHouse: z.string().trim().max(60).optional(),
+    deliveryAddressBlock: z.string().trim().max(60).optional(),
+    deliveryAddressLatitude: z.string().trim().max(32).optional(),
+    deliveryAddressLongitude: z.string().trim().max(32).optional(),
+    deliveryAddressGeoQuality: z.string().trim().max(8).optional(),
+    deliveryApartment: z.string().trim().max(60).optional(),
+    deliveryEntrance: z.string().trim().max(60).optional(),
+    deliveryFloor: z.string().trim().max(60).optional(),
+    deliveryIntercom: z.string().trim().max(120).optional(),
+    deliveryNoApartment: z.boolean().optional(),
     deliveryComment: z.string().trim().max(1000).optional(),
     paymentMethod: z.enum([
       "cash_on_delivery",
@@ -941,6 +1068,11 @@ function definedCheckoutDraftPatch(
 const checkoutDraftOperationSchema = z.object({
   operationId: z.string().trim().min(8).max(180),
   expectedRevision: z.number().int().min(0).optional(),
+});
+
+const addressSuggestionRequestSchema = z.object({
+  query: z.string().trim().min(3).max(300),
+  count: z.coerce.number().int().min(1).max(10).optional().default(7),
 });
 
 const customerAddressSchema = z.object({
@@ -2178,6 +2310,62 @@ export async function publicRoutes(app: FastifyInstance) {
     }
   });
 
+
+  app.post(
+    "/api/public/account/address-suggestions",
+    {
+      config: {
+        rateLimit: {
+          max: 40,
+          timeWindow: "1 minute",
+        },
+      },
+    },
+    async (request, reply) => {
+      const body = addressSuggestionRequestSchema.parse(request.body ?? {});
+      const { client } = createDb();
+
+      try {
+        const session = await getActiveCustomerSession(
+          client,
+          request.headers.cookie,
+        );
+
+        if (!session) {
+          return reply.status(401).send({
+            ok: false,
+            message: "Требуется вход",
+          });
+        }
+
+        try {
+          const result = await suggestDeliveryAddresses(body);
+
+          return {
+            ok: true,
+            provider: "dadata",
+            configured: result.configured,
+            suggestions: result.suggestions,
+          };
+        } catch (error) {
+          if (error instanceof AddressSuggestionProviderError) {
+            return reply.status(error.statusCode).send({
+              ok: false,
+              code: "address_suggestion_provider_unavailable",
+              provider: "dadata",
+              configured: true,
+              message: error.message,
+              suggestions: [],
+            });
+          }
+
+          throw error;
+        }
+      } finally {
+        await client.end();
+      }
+    },
+  );
 
   app.get("/api/public/account/checkout-options", async (request, reply) => {
     const { client } = createDb();
@@ -5857,6 +6045,10 @@ export async function publicRoutes(app: FastifyInstance) {
 
     validateCreateOrderBody(body);
 
+    const resolvedDeliveryAddress = composeOrderDeliveryAddress(body);
+    const resolvedDeliveryComment = composeOrderDeliveryComment(body);
+    const deliveryAddressDetails = orderDeliveryAddressDetails(body);
+
     const quantityByProductId = new Map<string, number>();
 
     for (const item of body.items) {
@@ -6649,10 +6841,10 @@ export async function publicRoutes(app: FastifyInstance) {
           ${body.deliveryType === "delivery" ? body.deliveryDate : null},
           ${
             body.deliveryType === "delivery"
-              ? body.deliveryAddress
+              ? resolvedDeliveryAddress
               : checkoutContent.delivery.pickupAddress || null
           },
-          ${body.deliveryComment || null},
+          ${resolvedDeliveryComment || null},
           ${recipientName},
           ${recipientPhone},
           ${body.customerComment || null},
@@ -6719,7 +6911,7 @@ export async function publicRoutes(app: FastifyInstance) {
 
               address:
                 body.deliveryType === "delivery"
-                  ? body.deliveryAddress
+                  ? resolvedDeliveryAddress
                   : checkoutContent.delivery.pickupAddress || null,
 
               pickupNote:
@@ -6727,7 +6919,9 @@ export async function publicRoutes(app: FastifyInstance) {
                   ? checkoutContent.delivery.pickupNote
                   : null,
 
-              courierComment: body.deliveryComment || null,
+              courierComment: resolvedDeliveryComment || null,
+
+              addressDetails: deliveryAddressDetails,
 
               basePrice: selectedDeliveryZone
                 ? Number(selectedDeliveryZone.price || 0)

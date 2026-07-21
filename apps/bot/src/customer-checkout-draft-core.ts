@@ -87,6 +87,25 @@ export type TelegramCheckoutDraftData = {
   deliveryIntervalId?: string;
   deliveryInterval?: string;
   deliveryAddress?: string;
+  deliveryAddressSelected?: boolean;
+  deliveryAddressProvider?: "dadata" | "saved" | "manual";
+  deliveryAddressFiasId?: string;
+  deliveryAddressKladrId?: string;
+  deliveryAddressPostalCode?: string;
+  deliveryAddressRegion?: string;
+  deliveryAddressCity?: string;
+  deliveryAddressSettlement?: string;
+  deliveryAddressStreet?: string;
+  deliveryAddressHouse?: string;
+  deliveryAddressBlock?: string;
+  deliveryAddressLatitude?: string;
+  deliveryAddressLongitude?: string;
+  deliveryAddressGeoQuality?: string;
+  deliveryApartment?: string;
+  deliveryEntrance?: string;
+  deliveryFloor?: string;
+  deliveryIntercom?: string;
+  deliveryNoApartment?: boolean;
   deliveryComment?: string;
   paymentMethod?: TelegramCheckoutDraftPaymentMethod;
   comment?: string;
@@ -205,6 +224,23 @@ export function normalizeTelegramCheckoutDraftData(
     ["deliveryIntervalId", 80],
     ["deliveryInterval", 80],
     ["deliveryAddress", 1000],
+    ["deliveryAddressProvider", 20],
+    ["deliveryAddressFiasId", 64],
+    ["deliveryAddressKladrId", 32],
+    ["deliveryAddressPostalCode", 16],
+    ["deliveryAddressRegion", 160],
+    ["deliveryAddressCity", 160],
+    ["deliveryAddressSettlement", 160],
+    ["deliveryAddressStreet", 255],
+    ["deliveryAddressHouse", 60],
+    ["deliveryAddressBlock", 60],
+    ["deliveryAddressLatitude", 32],
+    ["deliveryAddressLongitude", 32],
+    ["deliveryAddressGeoQuality", 8],
+    ["deliveryApartment", 60],
+    ["deliveryEntrance", 60],
+    ["deliveryFloor", 60],
+    ["deliveryIntercom", 120],
     ["deliveryComment", 1000],
     ["paymentMethod", 40],
     ["comment", 2000],
@@ -229,6 +265,14 @@ export function normalizeTelegramCheckoutDraftData(
     data.deliveryService = raw.deliveryService;
   }
 
+  if (
+    data.deliveryAddressProvider !== "dadata"
+    && data.deliveryAddressProvider !== "saved"
+    && data.deliveryAddressProvider !== "manual"
+  ) {
+    delete data.deliveryAddressProvider;
+  }
+
   if (!new Set([
     "cash_on_delivery",
     "transfer_after_confirm",
@@ -250,6 +294,8 @@ export function normalizeTelegramCheckoutDraftData(
     "recipientSameAsCustomer",
     "isSurprise",
     "doNotCallRecipient",
+    "deliveryAddressSelected",
+    "deliveryNoApartment",
     "privacyAccepted",
   ] as const) {
     if (typeof raw[field] === "boolean") data[field] = raw[field];

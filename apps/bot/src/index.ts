@@ -4877,6 +4877,25 @@ async function handleCheckoutMessage(message: TelegramMessage, text: string): Pr
       return true;
     }
     data.deliveryAddress = value.slice(0, 1000);
+    data.deliveryAddressSelected = true;
+    data.deliveryAddressProvider = "manual";
+    data.deliveryAddressFiasId = "";
+    data.deliveryAddressKladrId = "";
+    data.deliveryAddressPostalCode = "";
+    data.deliveryAddressRegion = "";
+    data.deliveryAddressCity = "";
+    data.deliveryAddressSettlement = "";
+    data.deliveryAddressStreet = "";
+    data.deliveryAddressHouse = "";
+    data.deliveryAddressBlock = "";
+    data.deliveryAddressLatitude = "";
+    data.deliveryAddressLongitude = "";
+    data.deliveryAddressGeoQuality = "";
+    data.deliveryApartment = "";
+    data.deliveryEntrance = "";
+    data.deliveryFloor = "";
+    data.deliveryIntercom = "";
+    data.deliveryNoApartment = true;
     await showCheckoutCardText(message.chat.id, data);
     return true;
   }
@@ -4990,6 +5009,25 @@ async function handleCheckoutDeliveryType(
     data.deliveryIntervalId = "";
     data.deliveryInterval = "";
     data.deliveryAddress = configuration.pickupAddress;
+    data.deliveryAddressSelected = true;
+    data.deliveryAddressProvider = "manual";
+    data.deliveryAddressFiasId = "";
+    data.deliveryAddressKladrId = "";
+    data.deliveryAddressPostalCode = "";
+    data.deliveryAddressRegion = "";
+    data.deliveryAddressCity = "";
+    data.deliveryAddressSettlement = "";
+    data.deliveryAddressStreet = "";
+    data.deliveryAddressHouse = "";
+    data.deliveryAddressBlock = "";
+    data.deliveryAddressLatitude = "";
+    data.deliveryAddressLongitude = "";
+    data.deliveryAddressGeoQuality = "";
+    data.deliveryApartment = "";
+    data.deliveryEntrance = "";
+    data.deliveryFloor = "";
+    data.deliveryIntercom = "";
+    data.deliveryNoApartment = true;
     await answerCallbackQuery(callbackQuery.id, "Выбран самовывоз");
     await showCheckoutCardText(chatId, data);
     return;
@@ -5109,6 +5147,25 @@ async function handleCheckoutAddress(callbackQuery: TelegramCallbackQuery, addre
   }
 
   data.deliveryAddress = formatSavedAddress(address);
+  data.deliveryAddressSelected = true;
+  data.deliveryAddressProvider = "saved";
+  data.deliveryAddressFiasId = "";
+  data.deliveryAddressKladrId = "";
+  data.deliveryAddressPostalCode = "";
+  data.deliveryAddressRegion = "";
+  data.deliveryAddressCity = address.city || "";
+  data.deliveryAddressSettlement = "";
+  data.deliveryAddressStreet = address.street || "";
+  data.deliveryAddressHouse = address.house || "";
+  data.deliveryAddressBlock = "";
+  data.deliveryAddressLatitude = "";
+  data.deliveryAddressLongitude = "";
+  data.deliveryAddressGeoQuality = "";
+  data.deliveryApartment = address.apartment || "";
+  data.deliveryEntrance = address.entrance || "";
+  data.deliveryFloor = address.floor || "";
+  data.deliveryIntercom = "";
+  data.deliveryNoApartment = !address.apartment;
   data.deliveryComment = address.comment || data.deliveryComment || "";
   await answerCallbackQuery(callbackQuery.id, "Адрес выбран");
   await showCheckoutCardText(chatId, data);

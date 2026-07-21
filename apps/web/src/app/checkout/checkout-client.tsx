@@ -482,7 +482,7 @@ export function CheckoutClient() {
     const saved = await saveDraft({ explicit: true });
 
     if (saved) {
-      router.push("/cart#checkout-delivery");
+      router.push("/checkout/delivery");
     }
   }
 

@@ -108,6 +108,25 @@ export type CustomerCheckoutDraftData = {
   deliveryIntervalId?: string;
   deliveryInterval?: string;
   deliveryAddress?: string;
+  deliveryAddressSelected?: boolean;
+  deliveryAddressProvider?: "dadata" | "saved" | "manual";
+  deliveryAddressFiasId?: string;
+  deliveryAddressKladrId?: string;
+  deliveryAddressPostalCode?: string;
+  deliveryAddressRegion?: string;
+  deliveryAddressCity?: string;
+  deliveryAddressSettlement?: string;
+  deliveryAddressStreet?: string;
+  deliveryAddressHouse?: string;
+  deliveryAddressBlock?: string;
+  deliveryAddressLatitude?: string;
+  deliveryAddressLongitude?: string;
+  deliveryAddressGeoQuality?: string;
+  deliveryApartment?: string;
+  deliveryEntrance?: string;
+  deliveryFloor?: string;
+  deliveryIntercom?: string;
+  deliveryNoApartment?: boolean;
   deliveryComment?: string;
   paymentMethod?: CustomerCheckoutDraftPaymentMethod;
   comment?: string;
@@ -430,6 +449,23 @@ export function normalizeCustomerCheckoutDraftData(
     ["deliveryIntervalId", 80],
     ["deliveryInterval", 80],
     ["deliveryAddress", 1000],
+    ["deliveryAddressProvider", 20],
+    ["deliveryAddressFiasId", 64],
+    ["deliveryAddressKladrId", 32],
+    ["deliveryAddressPostalCode", 16],
+    ["deliveryAddressRegion", 160],
+    ["deliveryAddressCity", 160],
+    ["deliveryAddressSettlement", 160],
+    ["deliveryAddressStreet", 255],
+    ["deliveryAddressHouse", 60],
+    ["deliveryAddressBlock", 60],
+    ["deliveryAddressLatitude", 32],
+    ["deliveryAddressLongitude", 32],
+    ["deliveryAddressGeoQuality", 8],
+    ["deliveryApartment", 60],
+    ["deliveryEntrance", 60],
+    ["deliveryFloor", 60],
+    ["deliveryIntercom", 120],
     ["deliveryComment", 1000],
     ["paymentMethod", 40],
     ["comment", CUSTOMER_CHECKOUT_DRAFT_MAX_COMMENT],
@@ -462,6 +498,14 @@ export function normalizeCustomerCheckoutDraftData(
   }
 
   if (
+    data.deliveryAddressProvider !== "dadata"
+    && data.deliveryAddressProvider !== "saved"
+    && data.deliveryAddressProvider !== "manual"
+  ) {
+    delete data.deliveryAddressProvider;
+  }
+
+  if (
     typeof data.paymentMethod !== "string"
     || !PAYMENT_METHODS.has(data.paymentMethod as CustomerCheckoutDraftPaymentMethod)
   ) {
@@ -479,6 +523,8 @@ export function normalizeCustomerCheckoutDraftData(
     "recipientSameAsCustomer",
     "isSurprise",
     "doNotCallRecipient",
+    "deliveryAddressSelected",
+    "deliveryNoApartment",
     "privacyAccepted",
   ] as const) {
     const value = booleanValue(raw[field]);

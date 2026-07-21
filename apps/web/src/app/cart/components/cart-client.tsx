@@ -79,6 +79,50 @@ type SavedAddress = {
   is_default: boolean;
 };
 
+type SharedDeliveryAddressDetails = {
+  deliveryAddressSelected: boolean;
+  deliveryAddressProvider: "dadata" | "saved" | "manual";
+  deliveryAddressFiasId: string;
+  deliveryAddressKladrId: string;
+  deliveryAddressPostalCode: string;
+  deliveryAddressRegion: string;
+  deliveryAddressCity: string;
+  deliveryAddressSettlement: string;
+  deliveryAddressStreet: string;
+  deliveryAddressHouse: string;
+  deliveryAddressBlock: string;
+  deliveryAddressLatitude: string;
+  deliveryAddressLongitude: string;
+  deliveryAddressGeoQuality: string;
+  deliveryApartment: string;
+  deliveryEntrance: string;
+  deliveryFloor: string;
+  deliveryIntercom: string;
+  deliveryNoApartment: boolean;
+};
+
+const EMPTY_DELIVERY_ADDRESS_DETAILS: SharedDeliveryAddressDetails = {
+  deliveryAddressSelected: false,
+  deliveryAddressProvider: "manual",
+  deliveryAddressFiasId: "",
+  deliveryAddressKladrId: "",
+  deliveryAddressPostalCode: "",
+  deliveryAddressRegion: "",
+  deliveryAddressCity: "",
+  deliveryAddressSettlement: "",
+  deliveryAddressStreet: "",
+  deliveryAddressHouse: "",
+  deliveryAddressBlock: "",
+  deliveryAddressLatitude: "",
+  deliveryAddressLongitude: "",
+  deliveryAddressGeoQuality: "",
+  deliveryApartment: "",
+  deliveryEntrance: "",
+  deliveryFloor: "",
+  deliveryIntercom: "",
+  deliveryNoApartment: false,
+};
+
 type SharedCheckoutDraft = {
   data?: {
     customerName?: string;
@@ -94,7 +138,14 @@ type SharedCheckoutDraft = {
       | "phone_call"
       | "messenger_only";
     cardText?: string;
-  };
+    deliveryType?: "delivery" | "pickup";
+    deliveryService?: "standard" | "express";
+    deliveryZoneId?: string;
+    deliveryDateText?: string;
+    deliveryIntervalId?: string;
+    deliveryAddress?: string;
+    deliveryComment?: string;
+  } & Partial<SharedDeliveryAddressDetails>;
 };
 
 function formatSavedAddress(address: SavedAddress) {
@@ -108,15 +159,6 @@ function formatSavedAddress(address: SavedAddress) {
     .join(", ");
 }
 
-function savedAddressComment(address: SavedAddress) {
-  return [
-    address.entrance ? `Подъезд ${address.entrance}` : "",
-    address.floor ? `этаж ${address.floor}` : "",
-    address.comment ?? "",
-  ]
-    .filter(Boolean)
-    .join(", ");
-}
 
 function money(value: number) {
   return `${Number(value || 0).toLocaleString("ru-RU")} ₽`;
@@ -417,8 +459,11 @@ export function CartClient() {
   const [customerEmail, setCustomerEmail] = useState("");
   const [savedAddresses, setSavedAddresses] = useState<SavedAddress[]>([]);
   const [selectedAddressId, setSelectedAddressId] = useState("");
+  const [deliveryDate, setDeliveryDate] = useState("");
   const [deliveryAddress, setDeliveryAddress] = useState("");
   const [deliveryComment, setDeliveryComment] = useState("");
+  const [deliveryAddressDetails, setDeliveryAddressDetails] =
+    useState<SharedDeliveryAddressDetails>(EMPTY_DELIVERY_ADDRESS_DETAILS);
   const [recipientSameAsCustomer, setRecipientSameAsCustomer] = useState(false);
   const [recipientName, setRecipientName] = useState("");
   const [recipientPhone, setRecipientPhone] = useState("");
@@ -570,7 +615,19 @@ export function CartClient() {
         if (preferredAddress) {
           setSelectedAddressId(preferredAddress.id);
           setDeliveryAddress(formatSavedAddress(preferredAddress));
-          setDeliveryComment(savedAddressComment(preferredAddress));
+          setDeliveryComment(preferredAddress.comment || "");
+          setDeliveryAddressDetails({
+            ...EMPTY_DELIVERY_ADDRESS_DETAILS,
+            deliveryAddressSelected: true,
+            deliveryAddressProvider: "saved",
+            deliveryAddressCity: preferredAddress.city || "",
+            deliveryAddressStreet: preferredAddress.street || "",
+            deliveryAddressHouse: preferredAddress.house || "",
+            deliveryApartment: preferredAddress.apartment || "",
+            deliveryEntrance: preferredAddress.entrance || "",
+            deliveryFloor: preferredAddress.floor || "",
+            deliveryNoApartment: !preferredAddress.apartment,
+          });
         }
 
         if (data?.telegram?.connected === true) {
@@ -619,8 +676,61 @@ export function CartClient() {
                   : "call_or_message",
               );
               setCardText(draftData.cardText || "");
+
+              if (draftData.deliveryType) {
+                setDeliveryType(draftData.deliveryType);
+              }
+              if (draftData.deliveryService) {
+                setDeliveryService(draftData.deliveryService);
+              }
+              if (draftData.deliveryZoneId) {
+                setZoneId(draftData.deliveryZoneId);
+              }
+              if (draftData.deliveryDateText) {
+                setDeliveryDate(draftData.deliveryDateText);
+              }
+              if (draftData.deliveryIntervalId) {
+                setIntervalId(draftData.deliveryIntervalId);
+              }
+              if (draftData.deliveryAddress) {
+                setDeliveryAddress(draftData.deliveryAddress);
+              }
+              if (draftData.deliveryComment !== undefined) {
+                setDeliveryComment(draftData.deliveryComment || "");
+              }
+              setDeliveryAddressDetails({
+                deliveryAddressSelected:
+                  draftData.deliveryAddressSelected === true,
+                deliveryAddressProvider:
+                  draftData.deliveryAddressProvider === "dadata"
+                    || draftData.deliveryAddressProvider === "saved"
+                    ? draftData.deliveryAddressProvider
+                    : "manual",
+                deliveryAddressFiasId: draftData.deliveryAddressFiasId || "",
+                deliveryAddressKladrId: draftData.deliveryAddressKladrId || "",
+                deliveryAddressPostalCode:
+                  draftData.deliveryAddressPostalCode || "",
+                deliveryAddressRegion: draftData.deliveryAddressRegion || "",
+                deliveryAddressCity: draftData.deliveryAddressCity || "",
+                deliveryAddressSettlement:
+                  draftData.deliveryAddressSettlement || "",
+                deliveryAddressStreet: draftData.deliveryAddressStreet || "",
+                deliveryAddressHouse: draftData.deliveryAddressHouse || "",
+                deliveryAddressBlock: draftData.deliveryAddressBlock || "",
+                deliveryAddressLatitude:
+                  draftData.deliveryAddressLatitude || "",
+                deliveryAddressLongitude:
+                  draftData.deliveryAddressLongitude || "",
+                deliveryAddressGeoQuality:
+                  draftData.deliveryAddressGeoQuality || "",
+                deliveryApartment: draftData.deliveryApartment || "",
+                deliveryEntrance: draftData.deliveryEntrance || "",
+                deliveryFloor: draftData.deliveryFloor || "",
+                deliveryIntercom: draftData.deliveryIntercom || "",
+                deliveryNoApartment: draftData.deliveryNoApartment === true,
+              });
               setCartNotice(
-                "Контакты покупателя и получателя восстановлены из общего черновика сайта и Telegram.",
+                "Контакты и доставка восстановлены из общего черновика сайта и Telegram.",
               );
             })
             .catch(() => undefined);
@@ -1002,8 +1112,8 @@ export function CartClient() {
       return;
     }
 
-    const deliveryDate = isDelivery
-      ? String(form.get("deliveryDate") ?? "").trim()
+    const submittedDeliveryDate = isDelivery
+      ? deliveryDate.trim()
       : "";
 
     const deliveryAddress = isDelivery
@@ -1012,7 +1122,7 @@ export function CartClient() {
 
     if (
       isDelivery &&
-      (!zoneId || !intervalId || !deliveryDate || deliveryAddress.length < 5)
+      (!zoneId || !intervalId || !submittedDeliveryDate || deliveryAddress.length < 5)
     ) {
       setFormError("Заполните зону, дату, интервал и полный адрес доставки.");
       return;
@@ -1051,10 +1161,11 @@ export function CartClient() {
           deliveryType,
           deliveryService: isDelivery ? deliveryService : "standard",
           deliveryAddress,
+          ...deliveryAddressDetails,
           deliveryComment: isDelivery
             ? String(form.get("deliveryComment") ?? "").trim()
             : "",
-          deliveryDate,
+          deliveryDate: submittedDeliveryDate,
           deliveryIntervalId: isDelivery ? intervalId : "",
           deliveryIntervalText: "",
           deliveryZoneId: isDelivery ? zoneId : "",
@@ -1783,6 +1894,11 @@ export function CartClient() {
                     type="date"
                     min={minDeliveryDate}
                     max={maxDeliveryDate}
+                    value={deliveryDate}
+                    onChange={(event) => {
+                      setDeliveryDate(event.target.value);
+                      setFormError("");
+                    }}
                     required
                   />
                 </label>
@@ -1823,7 +1939,19 @@ export function CartClient() {
 
                         if (address) {
                           setDeliveryAddress(formatSavedAddress(address));
-                          setDeliveryComment(savedAddressComment(address));
+                          setDeliveryComment(address.comment || "");
+                          setDeliveryAddressDetails({
+                            ...EMPTY_DELIVERY_ADDRESS_DETAILS,
+                            deliveryAddressSelected: true,
+                            deliveryAddressProvider: "saved",
+                            deliveryAddressCity: address.city || "",
+                            deliveryAddressStreet: address.street || "",
+                            deliveryAddressHouse: address.house || "",
+                            deliveryApartment: address.apartment || "",
+                            deliveryEntrance: address.entrance || "",
+                            deliveryFloor: address.floor || "",
+                            deliveryNoApartment: !address.apartment,
+                          });
                         }
 
                         setFormError("");
@@ -1849,6 +1977,12 @@ export function CartClient() {
                     onChange={(event) => {
                       setDeliveryAddress(event.target.value);
                       setSelectedAddressId("");
+                      setDeliveryAddressDetails({
+                        ...EMPTY_DELIVERY_ADDRESS_DETAILS,
+                        deliveryAddressSelected: true,
+                        deliveryAddressProvider: "manual",
+                        deliveryNoApartment: true,
+                      });
                       setFormError("");
                     }}
                     autoComplete="street-address"

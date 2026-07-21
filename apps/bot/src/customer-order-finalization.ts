@@ -25,6 +25,25 @@ export type TelegramOrderCreateBody = {
   deliveryType: "delivery" | "pickup";
   deliveryService: "standard" | "express";
   deliveryAddress: string;
+  deliveryAddressSelected: boolean;
+  deliveryAddressProvider: "dadata" | "saved" | "manual";
+  deliveryAddressFiasId: string;
+  deliveryAddressKladrId: string;
+  deliveryAddressPostalCode: string;
+  deliveryAddressRegion: string;
+  deliveryAddressCity: string;
+  deliveryAddressSettlement: string;
+  deliveryAddressStreet: string;
+  deliveryAddressHouse: string;
+  deliveryAddressBlock: string;
+  deliveryAddressLatitude: string;
+  deliveryAddressLongitude: string;
+  deliveryAddressGeoQuality: string;
+  deliveryApartment: string;
+  deliveryEntrance: string;
+  deliveryFloor: string;
+  deliveryIntercom: string;
+  deliveryNoApartment: boolean;
   deliveryComment: string;
   deliveryDate: string;
   deliveryIntervalId: string;
@@ -128,6 +147,29 @@ export function buildTelegramOrderCreateBody(
     deliveryType,
     deliveryService: draft.deliveryService === "express" ? "express" : "standard",
     deliveryAddress: stringValue(draft.deliveryAddress),
+    deliveryAddressSelected: draft.deliveryAddressSelected === true,
+    deliveryAddressProvider:
+      draft.deliveryAddressProvider === "dadata"
+      || draft.deliveryAddressProvider === "saved"
+        ? draft.deliveryAddressProvider
+        : "manual",
+    deliveryAddressFiasId: stringValue(draft.deliveryAddressFiasId),
+    deliveryAddressKladrId: stringValue(draft.deliveryAddressKladrId),
+    deliveryAddressPostalCode: stringValue(draft.deliveryAddressPostalCode),
+    deliveryAddressRegion: stringValue(draft.deliveryAddressRegion),
+    deliveryAddressCity: stringValue(draft.deliveryAddressCity),
+    deliveryAddressSettlement: stringValue(draft.deliveryAddressSettlement),
+    deliveryAddressStreet: stringValue(draft.deliveryAddressStreet),
+    deliveryAddressHouse: stringValue(draft.deliveryAddressHouse),
+    deliveryAddressBlock: stringValue(draft.deliveryAddressBlock),
+    deliveryAddressLatitude: stringValue(draft.deliveryAddressLatitude),
+    deliveryAddressLongitude: stringValue(draft.deliveryAddressLongitude),
+    deliveryAddressGeoQuality: stringValue(draft.deliveryAddressGeoQuality),
+    deliveryApartment: stringValue(draft.deliveryApartment),
+    deliveryEntrance: stringValue(draft.deliveryEntrance),
+    deliveryFloor: stringValue(draft.deliveryFloor),
+    deliveryIntercom: stringValue(draft.deliveryIntercom),
+    deliveryNoApartment: draft.deliveryNoApartment === true,
     deliveryComment: stringValue(draft.deliveryComment),
     deliveryDate: deliveryType === "delivery" ? stringValue(draft.deliveryDateText) : "",
     deliveryIntervalId:

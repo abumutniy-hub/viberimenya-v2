@@ -59,6 +59,16 @@ export const env = {
   PAYMENT_EXPIRY_SWEEP_INTERVAL_MS: Math.min(
     15 * 60_000,
     Math.max(30_000, Number(process.env.PAYMENT_EXPIRY_SWEEP_INTERVAL_MS ?? 60_000) || 60_000),
+  ),
+  DADATA_API_TOKEN: process.env.DADATA_API_TOKEN ?? "",
+  DADATA_LOCATION_BOOST_KLADR_ID:
+    (process.env.DADATA_LOCATION_BOOST_KLADR_ID ?? "")
+      .trim()
+      .replace(/[^0-9]/g, "")
+      .slice(0, 20),
+  DADATA_REQUEST_TIMEOUT_MS: Math.min(
+    10_000,
+    Math.max(1_000, Number(process.env.DADATA_REQUEST_TIMEOUT_MS ?? 4_000) || 4_000),
   )
 };
 
