@@ -610,7 +610,7 @@ export async function synchronizeCommerceCart(
   sql: CommerceCartSqlExecutor,
   params: {
     shopId: string;
-    customerId: string;
+    customerId: string | null;
     telegramChatId: string;
     items: Array<{
       productId: string;

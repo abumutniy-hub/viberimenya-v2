@@ -97,13 +97,6 @@ type CheckoutOptions = {
   paymentMethods: CheckoutPaymentOptions;
 };
 
-type AccountResponse = {
-  ok?: boolean;
-  customer?: { id: string; name: string | null; phone: string };
-  telegram?: { connected?: boolean };
-  message?: string;
-};
-
 type OptionsResponse = {
   ok?: boolean;
   options?: CheckoutOptions;
@@ -136,6 +129,7 @@ type OrderResult = {
   deliveryTariffName: string;
   trackingToken: string;
   paymentMethod: WebCheckoutPaymentMethod;
+  telegramLinkCode?: string | null;
   reused: boolean;
 };
 
@@ -149,8 +143,6 @@ type OrderResponse = {
 type PageState =
   | "loading"
   | "ready"
-  | "unauthorized"
-  | "telegram_required"
   | "empty"
   | "error";
 type SaveState = "idle" | "saving" | "saved" | "error";
@@ -168,7 +160,7 @@ function money(value: number) {
 function sourceLabel(source: unknown) {
   if (source === "telegram") return "Продолжено из Telegram";
   if (source === "max") return "Продолжено из MAX";
-  return "Общий черновик сайта и Telegram";
+  return "Черновик оформления на этом устройстве";
 }
 
 function expiryText(value: string | undefined) {
@@ -329,32 +321,16 @@ export function CheckoutReviewClient() {
     initializedRef.current = false;
 
     try {
-      const [accountResponse, optionsResponse, draftResponse, cartResponse] = await Promise.all([
-        fetch("/api/public/account/me", { credentials: "include", cache: "no-store" }),
+      const [optionsResponse, draftResponse, cartResponse] = await Promise.all([
         fetch("/api/public/account/checkout-options", { credentials: "include", cache: "no-store" }),
         fetch("/api/public/account/checkout-draft", { credentials: "include", cache: "no-store" }),
         fetch("/api/public/account/cart", { credentials: "include", cache: "no-store" }),
       ]);
 
-      if ([accountResponse, optionsResponse, draftResponse, cartResponse].some((response) => response.status === 401)) {
-        setPageState("unauthorized");
-        return;
-      }
-
-      const accountData = await readJson<AccountResponse>(accountResponse);
       const optionsData = await readJson<OptionsResponse>(optionsResponse);
       const draftData = await readJson<DraftResponse>(draftResponse);
       const cartData = await readJson<CartResponse>(cartResponse);
 
-      if (accountData.telegram?.connected !== true
-        || draftData.code === "telegram_not_connected"
-        || cartData.code === "telegram_not_connected") {
-        setPageState("telegram_required");
-        return;
-      }
-      if (!accountResponse.ok || !accountData.customer) {
-        throw new Error(accountData.message || "Не удалось загрузить профиль");
-      }
       if (!optionsResponse.ok || !optionsData.options) {
         throw new Error(optionsData.message || "Не удалось загрузить настройки заказа");
       }
@@ -566,18 +542,33 @@ export function CheckoutReviewClient() {
       }
 
       try {
+        if (data.order.telegramLinkCode) {
+          window.sessionStorage.setItem(
+            `viberimenya_order_telegram_code:${data.order.trackingToken}`,
+            data.order.telegramLinkCode,
+          );
+        }
+      } catch {
+        // Код также остаётся связан с заказом на сервере.
+      }
+
+      try {
         window.localStorage.setItem("viberimenya_cart", "[]");
         window.dispatchEvent(new Event("viberimenya_cart_changed"));
       } catch {
         // Заказ уже создан; локальная очистка не должна ломать успешный переход.
       }
-      void clearLinkedCustomerCart();
-      void fetch("/api/public/account/checkout-draft", {
-        method: "DELETE",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ operationId: createOperationId("site-order-success") }),
-      }).catch(() => null);
+      await Promise.allSettled([
+        clearLinkedCustomerCart(),
+        fetch("/api/public/account/checkout-draft", {
+          method: "DELETE",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            operationId: createOperationId("site-order-success"),
+          }),
+        }),
+      ]);
 
       const suffix = data.order.reused ? "?created=reused" : "?created=1";
       router.replace(`/order/track/${encodeURIComponent(data.order.trackingToken)}${suffix}`);
@@ -597,38 +588,6 @@ export function CheckoutReviewClient() {
           <h1>Собираем итог заказа</h1>
           <p>Проверяем корзину, цены, доставку, бонусы и способы оплаты.</p>
           <div className={styles.loadingBar} />
-        </section>
-      </main>
-    );
-  }
-
-  if (pageState === "unauthorized") {
-    return (
-      <main className={styles.page}>
-        <section className={styles.stateCard}>
-          <span className={styles.eyebrow}>Защищённое оформление</span>
-          <h1>Войдите в личный кабинет</h1>
-          <p>Вход нужен для безопасного расчёта и создания заказа.</p>
-          <div className={styles.stateActions}>
-            <Link className={styles.primaryLink} href="/account">Войти</Link>
-            <Link className={styles.secondaryLink} href="/cart">В корзину</Link>
-          </div>
-        </section>
-      </main>
-    );
-  }
-
-  if (pageState === "telegram_required") {
-    return (
-      <main className={styles.page}>
-        <section className={styles.stateCard}>
-          <span className={styles.eyebrow}>Единый заказ</span>
-          <h1>Подключите Telegram</h1>
-          <p>Он нужен для общего черновика, уведомлений и продолжения оформления между устройствами.</p>
-          <div className={styles.stateActions}>
-            <Link className={styles.primaryLink} href="/account">Подключить</Link>
-            <Link className={styles.secondaryLink} href="/cart">В корзину</Link>
-          </div>
         </section>
       </main>
     );
@@ -697,7 +656,7 @@ export function CheckoutReviewClient() {
             <small>{expiryText(draft.expiresAt)}</small>
           </div>
           <span className={saveState === "error" ? `${styles.saveBadge} ${styles.saveBadgeError}` : styles.saveBadge}>
-            {saveState === "saving" ? "Сохраняем" : saveState === "error" ? "Проверьте" : "Синхронизировано"}
+            {saveState === "saving" ? "Сохраняем" : saveState === "error" ? "Проверьте" : "Сохранено"}
           </span>
         </section>
 
@@ -815,7 +774,7 @@ export function CheckoutReviewClient() {
                     <input id="bonusToSpend" type="number" min="0" max={quote?.bonusAvailable || 0} value={form.bonusToSpend} onChange={(event: ChangeEvent<HTMLInputElement>) => updateForm("bonusToSpend", Math.max(0, Math.trunc(Number(event.target.value) || 0)))} />
                     <button type="button" disabled={!quote?.bonusAvailable || saveState === "saving"} onClick={() => updateForm("bonusToSpend", quote?.bonusAvailable || 0)}>Все</button>
                   </div>
-                  <small>Доступно: {money(quote?.bonusAvailable || 0)}</small>
+                  <small>Доступно: {money(quote?.bonusAvailable || 0)}. Бонусы доступны после входа через Telegram.</small>
                 </label>
               </div>
             </section>

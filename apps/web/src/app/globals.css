@@ -16299,3 +16299,43 @@ body {
     width: fit-content;
   }
 }
+
+
+/* GUEST CHECKOUT TELEGRAM CONNECT 17B-2C.3.4 */
+.track-telegram-connect {
+  display: grid;
+  gap: 14px;
+}
+
+.track-telegram-connect h2,
+.track-telegram-connect p {
+  margin: 0;
+}
+
+.track-telegram-code {
+  width: fit-content;
+  padding: 12px 18px;
+  border-radius: 14px;
+  background: #f6ece8;
+  color: #512729;
+  font-size: clamp(24px, 5vw, 34px);
+  font-weight: 800;
+  letter-spacing: 0.14em;
+}
+
+
+/* CHECKOUT ENTRY FIX 17B-2C.3.4 */
+.checkout-submit-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff !important;
+  text-decoration: none;
+  font-weight: 900;
+}
+
+.checkout-submit-button.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+  box-shadow: none;
+}

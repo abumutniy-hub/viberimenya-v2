@@ -287,6 +287,7 @@ export function TrackClient({ token }: { token: string }) {
   const [paymentError, setPaymentError] = useState(false);
   const [paymentClock, setPaymentClock] = useState(() => Date.now());
   const [createdNotice, setCreatedNotice] = useState("");
+  const [telegramLinkCode, setTelegramLinkCode] = useState("");
   const paymentActionHandled = useRef(false);
 
   const loadOrder = useCallback(
@@ -324,6 +325,16 @@ export function TrackClient({ token }: { token: string }) {
   );
 
   useEffect(() => {
+    try {
+      setTelegramLinkCode(
+        window.sessionStorage.getItem(
+          `viberimenya_order_telegram_code:${token}`,
+        ) || "",
+      );
+    } catch {
+      setTelegramLinkCode("");
+    }
+
     const url = new URL(window.location.href);
     const created = url.searchParams.get("created");
 
@@ -336,7 +347,7 @@ export function TrackClient({ token }: { token: string }) {
       url.searchParams.delete("created");
       window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
     }
-  }, []);
+  }, [token]);
 
   useEffect(() => {
     void loadOrder(false);
@@ -597,6 +608,26 @@ export function TrackClient({ token }: { token: string }) {
         <section className="track-alert created">
           <strong>Заказ принят</strong>
           <p>{createdNotice}</p>
+        </section>
+      ) : null}
+
+      {telegramLinkCode ? (
+        <section className="track-card track-telegram-connect">
+          <div>
+            <p className="eyebrow">Необязательно</p>
+            <h2>Подключите Telegram</h2>
+            <p>Получайте статусы заказа и входите в личный кабинет без SMS и пароля.</p>
+          </div>
+          <div className="track-telegram-code">{telegramLinkCode}</div>
+          <p>Откройте бота, нажмите «🔗 Привязать аккаунт» и отправьте этот код. Код действует 30 минут.</p>
+          <a
+            className="track-dark-link"
+            href="https://t.me/viberimenya_bot"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Открыть Telegram-бота
+          </a>
         </section>
       ) : null}
 

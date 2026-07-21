@@ -1399,10 +1399,9 @@ export function CartClient() {
       <section className="checkout-form checkout-form-v2 checkout-launch-entry">
         <div className="checkout-guided-entry">
           <div>
-            <strong>Безопасное пошаговое оформление</strong>
-            <span>Контакты, доставка, скидки и оплата проверяются на отдельных шагах и сохраняются в общем черновике.</span>
+            <strong>Пошаговое оформление без регистрации</strong>
+            <span>Контакты, доставка, скидки и оплата проверяются на отдельных шагах. Telegram можно подключить после заказа.</span>
           </div>
-          <Link href="/checkout">Начать</Link>
         </div>
 
         <div className="checkout-total">
@@ -1433,18 +1432,18 @@ export function CartClient() {
           </div>
         ) : null}
 
-        <Link
-          href="/checkout"
-          className="checkout-submit-button"
-          aria-disabled={
-            !ordersEnabled
-            || items.length === 0
-            || hasUnavailableItems
-            || !minimumOrderReached
-          }
-        >
-          Продолжить оформление
-        </Link>
+        {!ordersEnabled
+          || items.length === 0
+          || hasUnavailableItems
+          || !minimumOrderReached ? (
+          <span className="checkout-submit-button is-disabled" aria-disabled="true">
+            Оформить заказ
+          </span>
+        ) : (
+          <Link href="/checkout" className="checkout-submit-button">
+            Оформить заказ
+          </Link>
+        )}
 
         <p className="checkout-submit-note">
           Заказ будет создан только после финальной серверной проверки цен, остатков, доставки, промокода и бонусов.

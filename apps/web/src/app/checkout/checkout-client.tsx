@@ -72,6 +72,11 @@ type DraftResponse = {
   draft?: CheckoutDraftSnapshot | null;
   contactValidation?: ServerContactValidation | null;
   currentRevision?: number;
+  identity?: {
+    authenticated?: boolean;
+    telegramConnected?: boolean;
+    guest?: boolean;
+  };
 };
 
 type SaveDraftResponse = DraftResponse & {
@@ -81,8 +86,6 @@ type SaveDraftResponse = DraftResponse & {
 type PageState =
   | "loading"
   | "ready"
-  | "unauthorized"
-  | "telegram_required"
   | "error";
 
 type SaveState = "idle" | "saving" | "saved" | "error";
@@ -123,7 +126,7 @@ function formFromProfileAndDraft(
 
   return {
     customerName: String(data.customerName || customer.name || ""),
-    customerPhone: customer.phone,
+    customerPhone: String(data.customerPhone || customer.phone || ""),
     customerEmail: String(data.customerEmail ?? customer.email ?? ""),
     contactPreference: safeContactPreference(data.contactPreference),
     recipientSameAsCustomer: same,
@@ -131,7 +134,7 @@ function formFromProfileAndDraft(
       ? String(data.customerName || customer.name || "")
       : String(data.recipientName || ""),
     recipientPhone: same
-      ? customer.phone
+      ? String(data.customerPhone || customer.phone || "")
       : String(data.recipientPhone || ""),
     isSurprise: same ? false : data.isSurprise === true,
     doNotCallRecipient: same ? false : data.doNotCallRecipient === true,
@@ -160,7 +163,7 @@ function issueMap(
 function sourceLabel(source: unknown) {
   if (source === "telegram") return "Продолжено из Telegram";
   if (source === "max") return "Продолжено из MAX";
-  return "Общий черновик сайта и Telegram";
+  return "Черновик оформления на этом устройстве";
 }
 
 function expiryText(value: string | undefined) {
@@ -177,11 +180,33 @@ function expiryText(value: string | undefined) {
   }).format(new Date(timestamp))}`;
 }
 
+function checkoutCartItems() {
+  try {
+    const parsed = JSON.parse(
+      window.localStorage.getItem("viberimenya_cart") || "[]",
+    ) as Array<Record<string, unknown>>;
+    const quantities = new Map<string, number>();
+
+    for (const item of Array.isArray(parsed) ? parsed : []) {
+      const productId = String(item.productId ?? item.id ?? "").trim();
+      const quantity = Math.min(99, Math.max(1, Math.trunc(Number(item.quantity) || 1)));
+      if (!productId) continue;
+      quantities.set(productId, Math.min(99, (quantities.get(productId) || 0) + quantity));
+    }
+
+    return Array.from(quantities, ([productId, quantity]) => ({
+      productId,
+      quantity,
+    }));
+  } catch {
+    return [];
+  }
+}
+
 export function CheckoutClient() {
   const router = useRouter();
   const [pageState, setPageState] = useState<PageState>("loading");
   const [pageMessage, setPageMessage] = useState("");
-  const [customer, setCustomer] = useState<CustomerProfile | null>(null);
   const [draft, setDraft] = useState<CheckoutDraftSnapshot | null>(null);
   const [serverValidation, setServerValidation] =
     useState<ServerContactValidation | null>(null);
@@ -190,6 +215,7 @@ export function CheckoutClient() {
   );
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [saveMessage, setSaveMessage] = useState("");
+  const [authenticated, setAuthenticated] = useState(false);
   const [showValidation, setShowValidation] = useState(false);
   const initializedRef = useRef(false);
   const lastSavedFingerprintRef = useRef("");
@@ -206,23 +232,28 @@ export function CheckoutClient() {
         credentials: "include",
         cache: "no-store",
       });
+      const accountData = accountResponse.ok
+        ? await accountResponse.json() as AccountResponse
+        : {};
+      const localItems = checkoutCartItems();
 
-      if (accountResponse.status === 401) {
-        setPageState("unauthorized");
-        return;
-      }
+      if (localItems.length > 0) {
+        const syncResponse = await fetch("/api/public/account/cart/sync", {
+          method: "POST",
+          credentials: "include",
+          cache: "no-store",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            operationId: createOperationId("site-checkout-cart-sync"),
+            mode: "replace",
+            items: localItems,
+          }),
+        });
+        const syncData = await syncResponse.json().catch(() => ({})) as { message?: string };
 
-      const accountData = await accountResponse.json() as AccountResponse;
-
-      if (!accountResponse.ok || !accountData.customer) {
-        throw new Error(accountData.message || "Не удалось загрузить профиль");
-      }
-
-      setCustomer(accountData.customer);
-
-      if (accountData.telegram?.connected !== true) {
-        setPageState("telegram_required");
-        return;
+        if (!syncResponse.ok) {
+          throw new Error(syncData.message || "Не удалось подготовить корзину");
+        }
       }
 
       const draftResponse = await fetch(
@@ -234,27 +265,23 @@ export function CheckoutClient() {
       );
       const draftData = await draftResponse.json() as DraftResponse;
 
-      if (
-        draftResponse.status === 409
-        && draftData.code === "telegram_not_connected"
-      ) {
-        setPageState("telegram_required");
-        return;
-      }
-
       if (!draftResponse.ok) {
         throw new Error(
-          draftData.message || "Не удалось загрузить общий черновик",
+          draftData.message || "Не удалось загрузить черновик оформления",
         );
       }
 
+      const profile = accountData.customer || {
+        id: "",
+        name: null,
+        phone: "",
+        email: null,
+      };
       const nextDraft = draftData.draft || null;
-      const nextForm = formFromProfileAndDraft(
-        accountData.customer,
-        nextDraft,
-      );
+      const nextForm = formFromProfileAndDraft(profile, nextDraft);
 
       setDraft(nextDraft);
+      setAuthenticated(draftData.identity?.authenticated === true);
       setServerValidation(draftData.contactValidation || null);
       setForm(nextForm);
       lastSavedFingerprintRef.current = webCheckoutContactFingerprint(nextForm);
@@ -262,9 +289,11 @@ export function CheckoutClient() {
       setPageState("ready");
       setSaveState("saved");
       setSaveMessage(
-        nextDraft
-          ? sourceLabel(nextDraft.data._core?.sourceChannel)
-          : "Можно начать оформление на сайте и продолжить в Telegram",
+        draftData.identity?.telegramConnected
+          ? "Оформление синхронизировано с Telegram"
+          : draftData.identity?.authenticated
+            ? "Оформление сохранено в личном кабинете"
+            : "Оформление доступно без регистрации",
       );
     } catch (error) {
       setPageMessage(
@@ -398,19 +427,6 @@ export function CheckoutClient() {
         );
       }
 
-      if (response.status === 401) {
-        setPageState("unauthorized");
-        return null;
-      }
-
-      if (
-        response.status === 409
-        && data.code === "telegram_not_connected"
-      ) {
-        setPageState("telegram_required");
-        return null;
-      }
-
       if (!response.ok || !data.draft) {
         throw new Error(data.message || "Не удалось сохранить данные");
       }
@@ -491,55 +507,9 @@ export function CheckoutClient() {
       <main className={styles.page} aria-busy="true">
         <section className={styles.stateCard}>
           <span className={styles.eyebrow}>Оформление заказа</span>
-          <h1>Загружаем общий черновик</h1>
-          <p>Проверяем профиль и синхронизацию с Telegram.</p>
+          <h1>Подготавливаем оформление</h1>
+          <p>Сохраняем корзину и открываем безопасный черновик заказа.</p>
           <div className={styles.loadingBar} />
-        </section>
-      </main>
-    );
-  }
-
-  if (pageState === "unauthorized") {
-    return (
-      <main className={styles.page}>
-        <section className={styles.stateCard}>
-          <span className={styles.eyebrow}>Защищённое оформление</span>
-          <h1>Войдите в личный кабинет</h1>
-          <p>
-            Вход нужен, чтобы сохранить контакты на сервере и продолжить
-            оформление с другого устройства или из Telegram.
-          </p>
-          <div className={styles.stateActions}>
-            <Link className={styles.primaryLink} href="/account">
-              Войти
-            </Link>
-            <Link className={styles.secondaryLink} href="/cart">
-              Вернуться в корзину
-            </Link>
-          </div>
-        </section>
-      </main>
-    );
-  }
-
-  if (pageState === "telegram_required") {
-    return (
-      <main className={styles.page}>
-        <section className={styles.stateCard}>
-          <span className={styles.eyebrow}>Единый черновик</span>
-          <h1>Подключите Telegram</h1>
-          <p>
-            Общий checkout хранится в едином профиле. После подключения можно
-            начать на сайте и продолжить в Telegram без повторного заполнения.
-          </p>
-          <div className={styles.stateActions}>
-            <Link className={styles.primaryLink} href="/account#telegram">
-              Подключить Telegram
-            </Link>
-            <Link className={styles.secondaryLink} href="/cart">
-              Оформить обычным способом
-            </Link>
-          </div>
         </section>
       </main>
     );
@@ -582,8 +552,8 @@ export function CheckoutClient() {
             <span className={styles.eyebrow}>Шаг 1 из 4</span>
             <h1>Покупатель и получатель</h1>
             <p>
-              Контакты сохраняются в общем серверном черновике и доступны в
-              Telegram после синхронизации.
+              Оформите заказ без регистрации. После заказа можно подключить
+              Telegram для уведомлений и личного кабинета.
             </p>
           </div>
           <div className={styles.progress} aria-label="Прогресс оформления">
@@ -609,7 +579,7 @@ export function CheckoutClient() {
               ? "Сохраняем…"
               : saveState === "error"
                 ? "Нужна проверка"
-                : "Синхронизировано"}
+                : "Сохранено"}
           </span>
         </div>
 
@@ -645,18 +615,30 @@ export function CheckoutClient() {
               </label>
 
               <label className={styles.field}>
-                <span>Подтверждённый телефон</span>
+                <span>{authenticated ? "Подтверждённый телефон" : "Ваш телефон *"}</span>
                 <input
                   id="customerPhone"
                   value={form.customerPhone}
-                  readOnly
-                  aria-readonly="true"
+                  readOnly={authenticated}
+                  aria-readonly={authenticated ? "true" : "false"}
+                  onChange={(event) => {
+                    if (!authenticated) {
+                      updateForm(
+                        "customerPhone",
+                        event.target.value.slice(0, 32),
+                      );
+                    }
+                  }}
                   inputMode="tel"
                   autoComplete="tel"
+                  maxLength={32}
+                  placeholder="+7 999 000-00-00"
                   aria-invalid={visibleIssues.has("customerPhone")}
                 />
                 <small>
-                  Телефон связан с вашим профилем и Telegram-идентификацией.
+                  {authenticated
+                    ? "Телефон подтверждён через Telegram и защищён от изменения."
+                    : "По этому номеру мы свяжемся с вами по заказу. Регистрация не требуется."}
                 </small>
                 {visibleIssues.get("customerPhone") ? (
                   <small className={styles.fieldError}>
@@ -815,7 +797,7 @@ export function CheckoutClient() {
             ) : (
               <div className={styles.recipientSummary}>
                 <span>Получатель</span>
-                <strong>{form.customerName || customer?.name || "Покупатель"}</strong>
+                <strong>{form.customerName || "Покупатель"}</strong>
                 <small>{form.customerPhone}</small>
               </div>
             )}

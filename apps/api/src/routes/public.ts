@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { and, eq, asc, desc } from "drizzle-orm";
@@ -36,6 +36,13 @@ import {
   synchronizeCommerceCart,
 } from "../modules/customers/customer-commerce-cart.service";
 import {
+  createGuestCheckoutToken,
+  GUEST_CHECKOUT_COOKIE,
+  GUEST_CHECKOUT_TTL_SECONDS,
+  guestCheckoutScopeId,
+  validGuestCheckoutToken,
+} from "../modules/customers/customer-guest-checkout.service";
+import {
   createSecureCustomerSession,
   customerMagicTokenCandidates,
   customerSessionTokenCandidates,
@@ -51,7 +58,6 @@ import {
   getCustomerCheckoutDraft,
   getCustomerCheckoutOptions,
   quoteCustomerCheckoutDraft,
-  resolveCustomerCheckoutDraftScope,
   resolveTelegramCheckoutDraftCustomer,
   saveCustomerCheckoutDraft,
   validateCustomerCheckoutDraftContacts,
@@ -926,6 +932,29 @@ function clearCustomerSessionCookie() {
   return `${CUSTOMER_SESSION_COOKIE}=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0${customerCookieSecuritySuffix()}`;
 }
 
+function buildGuestCheckoutCookie(token: string) {
+  return `${GUEST_CHECKOUT_COOKIE}=${encodeURIComponent(token)}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${GUEST_CHECKOUT_TTL_SECONDS}${customerCookieSecuritySuffix()}`;
+}
+
+function ensureGuestCheckoutScope(
+  request: FastifyRequest,
+  reply: FastifyReply,
+) {
+  const current = getCookieValue(
+    request.headers.cookie,
+    GUEST_CHECKOUT_COOKIE,
+  );
+  const token = validGuestCheckoutToken(current)
+    ? current.toLowerCase()
+    : createGuestCheckoutToken();
+
+  if (token !== current) {
+    reply.header("Set-Cookie", buildGuestCheckoutCookie(token));
+  }
+
+  return guestCheckoutScopeId(token);
+}
+
 type PublicSqlClient = ReturnType<typeof createDb>["client"];
 
 type ActiveCustomerSession = {
@@ -947,6 +976,56 @@ async function getActiveCustomerSession(
   if (!token) return null;
 
   return resolveActiveCustomerSession(client, token);
+}
+
+async function resolveSiteCheckoutContext(
+  client: PublicSqlClient,
+  params: {
+    shopId: string;
+    request: FastifyRequest;
+    reply: FastifyReply;
+  },
+) {
+  const session = await getActiveCustomerSession(
+    client,
+    params.request.headers.cookie,
+  );
+
+  if (session && session.shop_id === params.shopId) {
+    const linkedScope = await resolveCustomerCommerceCartScope(client, {
+      shopId: params.shopId,
+      customerId: session.customer_id,
+    });
+
+    if (linkedScope.linked) {
+      return {
+        shopId: params.shopId,
+        customerId: session.customer_id,
+        telegramChatId: linkedScope.telegramChatId,
+        authenticated: true,
+        telegramConnected: true,
+        guest: false,
+      };
+    }
+
+    return {
+      shopId: params.shopId,
+      customerId: session.customer_id,
+      telegramChatId: ensureGuestCheckoutScope(params.request, params.reply),
+      authenticated: true,
+      telegramConnected: false,
+      guest: true,
+    };
+  }
+
+  return {
+    shopId: params.shopId,
+    customerId: null,
+    telegramChatId: ensureGuestCheckoutScope(params.request, params.reply),
+    authenticated: false,
+    telegramConnected: false,
+    guest: true,
+  };
 }
 
 function publicCommerceCartSnapshot<T extends { telegramChatId: unknown }>(
@@ -2323,20 +2402,14 @@ export async function publicRoutes(app: FastifyInstance) {
     },
     async (request, reply) => {
       const body = addressSuggestionRequestSchema.parse(request.body ?? {});
-      const { client } = createDb();
+      const { client, shop } = await getShopContext();
 
       try {
-        const session = await getActiveCustomerSession(
-          client,
-          request.headers.cookie,
-        );
-
-        if (!session) {
-          return reply.status(401).send({
-            ok: false,
-            message: "Требуется вход",
-          });
-        }
+        await resolveSiteCheckoutContext(client, {
+          shopId: shop.id,
+          request,
+          reply,
+        });
 
         try {
           const result = await suggestDeliveryAddresses(body);
@@ -2368,71 +2441,57 @@ export async function publicRoutes(app: FastifyInstance) {
   );
 
   app.get("/api/public/account/checkout-options", async (request, reply) => {
-    const { client } = createDb();
+    const { client, shop } = await getShopContext();
 
     try {
-      const session = await getActiveCustomerSession(
-        client,
-        request.headers.cookie,
-      );
-
-      if (!session) {
-        return reply.status(401).send({
-          ok: false,
-          message: "Требуется вход",
-        });
-      }
-
+      const context = await resolveSiteCheckoutContext(client, {
+        shopId: shop.id,
+        request,
+        reply,
+      });
       const options = await getCustomerCheckoutOptions(client, {
-        shopId: session.shop_id,
-        customerId: session.customer_id,
+        shopId: context.shopId,
+        customerId: context.customerId,
       });
 
-      return { ok: true, options };
+      return {
+        ok: true,
+        options,
+        identity: {
+          authenticated: context.authenticated,
+          telegramConnected: context.telegramConnected,
+          guest: context.guest,
+        },
+      };
     } finally {
       await client.end();
     }
   });
 
   app.get("/api/public/account/checkout-draft", async (request, reply) => {
-    const { client } = createDb();
+    const { client, shop } = await getShopContext();
 
     try {
-      const session = await getActiveCustomerSession(
-        client,
-        request.headers.cookie,
-      );
-
-      if (!session) {
-        return reply.status(401).send({
-          ok: false,
-          message: "Требуется вход",
-        });
-      }
-
-      const scope = await resolveCustomerCheckoutDraftScope(client, {
-        shopId: session.shop_id,
-        customerId: session.customer_id,
+      const context = await resolveSiteCheckoutContext(client, {
+        shopId: shop.id,
+        request,
+        reply,
       });
-
-      if (!scope.linked) {
-        return reply.status(409).send({
-          ok: false,
-          code: "telegram_not_connected",
-          message: "Подключите Telegram, чтобы продолжать оформление на разных устройствах.",
-        });
-      }
-
       const draft = await getCustomerCheckoutDraft(client, {
-        shopId: session.shop_id,
-        customerId: session.customer_id,
-        telegramChatId: scope.telegramChatId,
+        shopId: context.shopId,
+        customerId: context.customerId,
+        telegramChatId: context.telegramChatId,
         source: "site",
       });
 
       return {
         ok: true,
         draft,
+        identity: {
+          authenticated: context.authenticated,
+          telegramConnected: context.telegramConnected,
+          guest: context.guest,
+        },
         contactValidation: draft
           ? validateCustomerCheckoutDraftContacts(draft.data)
           : null,
@@ -2444,34 +2503,21 @@ export async function publicRoutes(app: FastifyInstance) {
 
   app.put("/api/public/account/checkout-draft", async (request, reply) => {
     const body = checkoutDraftSaveSchema.parse(request.body ?? {});
-    const { client } = createDb();
+    const { client, shop } = await getShopContext();
 
     try {
-      const session = await getActiveCustomerSession(
-        client,
-        request.headers.cookie,
-      );
-
-      if (!session) {
-        return reply.status(401).send({
-          ok: false,
-          message: "Требуется вход",
-        });
-      }
+      const context = await resolveSiteCheckoutContext(client, {
+        shopId: shop.id,
+        request,
+        reply,
+      });
 
       try {
-        const result = await client.begin(async (transaction) => {
-          const scope = await resolveCustomerCheckoutDraftScope(transaction, {
-            shopId: session.shop_id,
-            customerId: session.customer_id,
-          });
-
-          if (!scope.linked) return null;
-
-          return saveCustomerCheckoutDraft(transaction, {
-            shopId: session.shop_id,
-            customerId: session.customer_id,
-            telegramChatId: scope.telegramChatId,
+        const result = await client.begin(async (transaction) =>
+          saveCustomerCheckoutDraft(transaction, {
+            shopId: context.shopId,
+            customerId: context.customerId,
+            telegramChatId: context.telegramChatId,
             source: "site",
             operationId: body.operationId,
             ...(body.expectedRevision === undefined
@@ -2479,20 +2525,17 @@ export async function publicRoutes(app: FastifyInstance) {
               : { expectedRevision: body.expectedRevision }),
             step: body.step as CustomerCheckoutDraftStep,
             patch: definedCheckoutDraftPatch(body.data),
-          });
-        });
-
-        if (!result) {
-          return reply.status(409).send({
-            ok: false,
-            code: "telegram_not_connected",
-            message: "Подключите Telegram, чтобы синхронизировать оформление.",
-          });
-        }
+          })
+        );
 
         return {
           ok: true,
           ...result,
+          identity: {
+            authenticated: context.authenticated,
+            telegramConnected: context.telegramConnected,
+            guest: context.guest,
+          },
           contactValidation: validateCustomerCheckoutDraftContacts(
             result.draft.data,
           ),
@@ -2516,49 +2559,28 @@ export async function publicRoutes(app: FastifyInstance) {
 
   app.post("/api/public/account/checkout-draft/quote", async (request, reply) => {
     const body = checkoutDraftOperationSchema.parse(request.body ?? {});
-    const { client } = createDb();
+    const { client, shop } = await getShopContext();
 
     try {
-      const session = await getActiveCustomerSession(
-        client,
-        request.headers.cookie,
-      );
-
-      if (!session) {
-        return reply.status(401).send({
-          ok: false,
-          message: "Требуется вход",
-        });
-      }
+      const context = await resolveSiteCheckoutContext(client, {
+        shopId: shop.id,
+        request,
+        reply,
+      });
 
       try {
-        const result = await client.begin(async (transaction) => {
-          const scope = await resolveCustomerCheckoutDraftScope(transaction, {
-            shopId: session.shop_id,
-            customerId: session.customer_id,
-          });
-
-          if (!scope.linked) return null;
-
-          return quoteCustomerCheckoutDraft(transaction, {
-            shopId: session.shop_id,
-            customerId: session.customer_id,
-            telegramChatId: scope.telegramChatId,
+        const result = await client.begin(async (transaction) =>
+          quoteCustomerCheckoutDraft(transaction, {
+            shopId: context.shopId,
+            customerId: context.customerId,
+            telegramChatId: context.telegramChatId,
             source: "site",
             operationId: body.operationId,
             ...(body.expectedRevision === undefined
               ? {}
               : { expectedRevision: body.expectedRevision }),
-          });
-        });
-
-        if (!result) {
-          return reply.status(409).send({
-            ok: false,
-            code: "telegram_not_connected",
-            message: "Подключите Telegram, чтобы рассчитать общий черновик.",
-          });
-        }
+          })
+        );
 
         return { ok: true, ...result };
       } catch (error) {
@@ -2589,45 +2611,23 @@ export async function publicRoutes(app: FastifyInstance) {
   app.delete("/api/public/account/checkout-draft", async (request, reply) => {
     const body = checkoutDraftOperationSchema.pick({ operationId: true })
       .parse(request.body ?? {});
-    const { client } = createDb();
+    const { client, shop } = await getShopContext();
 
     try {
-      const session = await getActiveCustomerSession(
-        client,
-        request.headers.cookie,
-      );
-
-      if (!session) {
-        return reply.status(401).send({
-          ok: false,
-          message: "Требуется вход",
-        });
-      }
-
-      const result = await client.begin(async (transaction) => {
-        const scope = await resolveCustomerCheckoutDraftScope(transaction, {
-          shopId: session.shop_id,
-          customerId: session.customer_id,
-        });
-
-        if (!scope.linked) return null;
-
-        return cancelCustomerCheckoutDraft(transaction, {
-          shopId: session.shop_id,
-          customerId: session.customer_id,
-          telegramChatId: scope.telegramChatId,
+      const context = await resolveSiteCheckoutContext(client, {
+        shopId: shop.id,
+        request,
+        reply,
+      });
+      const result = await client.begin(async (transaction) =>
+        cancelCustomerCheckoutDraft(transaction, {
+          shopId: context.shopId,
+          customerId: context.customerId,
+          telegramChatId: context.telegramChatId,
           source: "site",
           operationId: body.operationId,
-        });
-      });
-
-      if (!result) {
-        return reply.status(409).send({
-          ok: false,
-          code: "telegram_not_connected",
-          message: "Подключите Telegram, чтобы управлять общим черновиком.",
-        });
-      }
+        })
+      );
 
       return { ok: true, ...result };
     } finally {
@@ -2814,43 +2814,27 @@ export async function publicRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/public/account/cart", async (request, reply) => {
-    const { client } = createDb();
+    const { client, shop } = await getShopContext();
 
     try {
-      const session = await getActiveCustomerSession(
-        client,
-        request.headers.cookie,
-      );
-
-      if (!session) {
-        return reply.status(401).send({
-          ok: false,
-          message: "Требуется вход",
-        });
-      }
-
-      const scope = await resolveCustomerCommerceCartScope(client, {
-        shopId: session.shop_id,
-        customerId: session.customer_id,
+      const context = await resolveSiteCheckoutContext(client, {
+        shopId: shop.id,
+        request,
+        reply,
       });
-
-      if (!scope.linked) {
-        return reply.status(409).send({
-          ok: false,
-          code: "telegram_not_connected",
-          message:
-            "Подключите Telegram, чтобы корзина синхронизировалась между сайтом и ботом.",
-        });
-      }
-
       const cart = await getCommerceCartSnapshot(client, {
-        shopId: session.shop_id,
-        telegramChatId: scope.telegramChatId,
+        shopId: context.shopId,
+        telegramChatId: context.telegramChatId,
       });
 
       return {
         ok: true,
         cart: publicCommerceCartSnapshot(cart),
+        identity: {
+          authenticated: context.authenticated,
+          telegramConnected: context.telegramConnected,
+          guest: context.guest,
+        },
       };
     } finally {
       await client.end();
@@ -2873,52 +2857,34 @@ export async function publicRoutes(app: FastifyInstance) {
           .default([]),
       })
       .parse(request.body ?? {});
-    const { client } = createDb();
+    const { client, shop } = await getShopContext();
 
     try {
-      const session = await getActiveCustomerSession(
-        client,
-        request.headers.cookie,
-      );
-
-      if (!session) {
-        return reply.status(401).send({
-          ok: false,
-          message: "Требуется вход",
-        });
-      }
-
-      const result = await client.begin(async (transaction) => {
-        const scope = await resolveCustomerCommerceCartScope(transaction, {
-          shopId: session.shop_id,
-          customerId: session.customer_id,
-        });
-
-        if (!scope.linked) return null;
-
-        return synchronizeCommerceCart(transaction, {
-          shopId: session.shop_id,
-          customerId: session.customer_id,
-          telegramChatId: scope.telegramChatId,
+      const context = await resolveSiteCheckoutContext(client, {
+        shopId: shop.id,
+        request,
+        reply,
+      });
+      const result = await client.begin(async (transaction) =>
+        synchronizeCommerceCart(transaction, {
+          shopId: context.shopId,
+          customerId: context.customerId,
+          telegramChatId: context.telegramChatId,
           items: body.items,
           mode: body.mode,
           operationId: body.operationId,
-        });
-      });
-
-      if (!result) {
-        return reply.status(409).send({
-          ok: false,
-          code: "telegram_not_connected",
-          message:
-            "Подключите Telegram, чтобы корзина синхронизировалась между сайтом и ботом.",
-        });
-      }
+        })
+      );
 
       return {
         ok: true,
         ...result,
         cart: publicCommerceCartSnapshot(result.cart),
+        identity: {
+          authenticated: context.authenticated,
+          telegramConnected: context.telegramConnected,
+          guest: context.guest,
+        },
       };
     } finally {
       await client.end();
@@ -2928,65 +2894,32 @@ export async function publicRoutes(app: FastifyInstance) {
   app.put(
     "/api/public/account/cart/items/:productId",
     async (request, reply) => {
-      const params = z
-        .object({
-          productId: z.string().uuid(),
-        })
-        .parse(request.params);
-      const body = z
-        .object({
-          operationId: z.string().trim().min(8).max(180),
-          quantity: z.number().int().min(0).max(99),
-        })
-        .parse(request.body ?? {});
-      const { client } = createDb();
+      const params = z.object({ productId: z.string().uuid() }).parse(request.params);
+      const body = z.object({
+        operationId: z.string().trim().min(8).max(180),
+        quantity: z.number().int().min(0).max(99),
+      }).parse(request.body ?? {});
+      const { client, shop } = await getShopContext();
 
       try {
-        const session = await getActiveCustomerSession(
-          client,
-          request.headers.cookie,
-        );
-
-        if (!session) {
-          return reply.status(401).send({
-            ok: false,
-            message: "Требуется вход",
-          });
-        }
-
-        const result = await client.begin(async (transaction) => {
-          const scope = await resolveCustomerCommerceCartScope(transaction, {
-            shopId: session.shop_id,
-            customerId: session.customer_id,
-          });
-
-          if (!scope.linked) return null;
-
-          return setCommerceCartQuantity(transaction, {
-            shopId: session.shop_id,
-            customerId: session.customer_id,
-            telegramChatId: scope.telegramChatId,
+        const context = await resolveSiteCheckoutContext(client, {
+          shopId: shop.id,
+          request,
+          reply,
+        });
+        const result = await client.begin(async (transaction) =>
+          setCommerceCartQuantity(transaction, {
+            shopId: context.shopId,
+            customerId: context.customerId,
+            telegramChatId: context.telegramChatId,
             productId: params.productId,
             quantity: body.quantity,
             source: "site",
             operationId: body.operationId,
-          });
-        });
+          })
+        );
 
-        if (!result) {
-          return reply.status(409).send({
-            ok: false,
-            code: "telegram_not_connected",
-            message:
-              "Подключите Telegram, чтобы корзина синхронизировалась между сайтом и ботом.",
-          });
-        }
-
-        return {
-          ok: true,
-          ...result,
-          cart: publicCommerceCartSnapshot(result.cart),
-        };
+        return { ok: true, ...result, cart: publicCommerceCartSnapshot(result.cart) };
       } finally {
         await client.end();
       }
@@ -2996,65 +2929,32 @@ export async function publicRoutes(app: FastifyInstance) {
   app.post(
     "/api/public/account/cart/items/:productId/increment",
     async (request, reply) => {
-      const params = z
-        .object({
-          productId: z.string().uuid(),
-        })
-        .parse(request.params);
-      const body = z
-        .object({
-          operationId: z.string().trim().min(8).max(180),
-          delta: z.union([z.literal(-1), z.literal(1)]),
-        })
-        .parse(request.body ?? {});
-      const { client } = createDb();
+      const params = z.object({ productId: z.string().uuid() }).parse(request.params);
+      const body = z.object({
+        operationId: z.string().trim().min(8).max(180),
+        delta: z.union([z.literal(-1), z.literal(1)]),
+      }).parse(request.body ?? {});
+      const { client, shop } = await getShopContext();
 
       try {
-        const session = await getActiveCustomerSession(
-          client,
-          request.headers.cookie,
-        );
-
-        if (!session) {
-          return reply.status(401).send({
-            ok: false,
-            message: "Требуется вход",
-          });
-        }
-
-        const result = await client.begin(async (transaction) => {
-          const scope = await resolveCustomerCommerceCartScope(transaction, {
-            shopId: session.shop_id,
-            customerId: session.customer_id,
-          });
-
-          if (!scope.linked) return null;
-
-          return incrementCommerceCartQuantity(transaction, {
-            shopId: session.shop_id,
-            customerId: session.customer_id,
-            telegramChatId: scope.telegramChatId,
+        const context = await resolveSiteCheckoutContext(client, {
+          shopId: shop.id,
+          request,
+          reply,
+        });
+        const result = await client.begin(async (transaction) =>
+          incrementCommerceCartQuantity(transaction, {
+            shopId: context.shopId,
+            customerId: context.customerId,
+            telegramChatId: context.telegramChatId,
             productId: params.productId,
             delta: body.delta,
             source: "site",
             operationId: body.operationId,
-          });
-        });
+          })
+        );
 
-        if (!result) {
-          return reply.status(409).send({
-            ok: false,
-            code: "telegram_not_connected",
-            message:
-              "Подключите Telegram, чтобы корзина синхронизировалась между сайтом и ботом.",
-          });
-        }
-
-        return {
-          ok: true,
-          ...result,
-          cart: publicCommerceCartSnapshot(result.cart),
-        };
+        return { ok: true, ...result, cart: publicCommerceCartSnapshot(result.cart) };
       } finally {
         await client.end();
       }
@@ -3062,57 +2962,28 @@ export async function publicRoutes(app: FastifyInstance) {
   );
 
   app.delete("/api/public/account/cart", async (request, reply) => {
-    const body = z
-      .object({
-        operationId: z.string().trim().min(8).max(180),
-      })
-      .parse(request.body ?? {});
-    const { client } = createDb();
+    const body = z.object({
+      operationId: z.string().trim().min(8).max(180),
+    }).parse(request.body ?? {});
+    const { client, shop } = await getShopContext();
 
     try {
-      const session = await getActiveCustomerSession(
-        client,
-        request.headers.cookie,
-      );
-
-      if (!session) {
-        return reply.status(401).send({
-          ok: false,
-          message: "Требуется вход",
-        });
-      }
-
-      const result = await client.begin(async (transaction) => {
-        const scope = await resolveCustomerCommerceCartScope(transaction, {
-          shopId: session.shop_id,
-          customerId: session.customer_id,
-        });
-
-        if (!scope.linked) return null;
-
-        return clearCommerceCart(transaction, {
-          shopId: session.shop_id,
-          customerId: session.customer_id,
-          telegramChatId: scope.telegramChatId,
+      const context = await resolveSiteCheckoutContext(client, {
+        shopId: shop.id,
+        request,
+        reply,
+      });
+      const result = await client.begin(async (transaction) =>
+        clearCommerceCart(transaction, {
+          shopId: context.shopId,
+          customerId: context.customerId,
+          telegramChatId: context.telegramChatId,
           source: "site",
           operationId: body.operationId,
-        });
-      });
+        })
+      );
 
-      if (!result) {
-        return reply.status(409).send({
-          ok: false,
-          code: "telegram_not_connected",
-          message:
-            "Подключите Telegram, чтобы корзина синхронизировалась между сайтом и ботом.",
-        });
-      }
-
-      return {
-        ok: true,
-        ...result,
-        cart: publicCommerceCartSnapshot(result.cart),
-      };
+      return { ok: true, ...result, cart: publicCommerceCartSnapshot(result.cart) };
     } finally {
       await client.end();
     }
@@ -6076,6 +5947,9 @@ export async function publicRoutes(app: FastifyInstance) {
     const { client } = createDb();
 
     try {
+      const activeCustomerSession = telegramChatId
+        ? null
+        : await getActiveCustomerSession(client, request.headers.cookie);
       const transactionResult = await client.begin(async (transaction) => {
         const shopRows = await transaction<
           {
@@ -6286,21 +6160,7 @@ export async function publicRoutes(app: FastifyInstance) {
             LIMIT 1
           `;
 
-          const customerSession = await createSecureCustomerSession(
-            transaction,
-            {
-              shopId: shop.id,
-              customerId: existingOrder.customer_id,
-              userAgent:
-                String(request.headers["user-agent"] ?? "") || null,
-              ip: request.ip || null,
-              source: "order_reuse",
-            },
-          );
-          const customerSessionToken = customerSession.rawToken;
-
           return {
-            customerSessionToken,
             response: {
               ok: true,
               order: {
@@ -6656,20 +6516,27 @@ export async function publicRoutes(app: FastifyInstance) {
         let customer = existingCustomerRows[0];
 
         if (customer) {
-          await transaction`
-          UPDATE customers
-          SET
-            name = COALESCE(
-              NULLIF(${body.customerName}, ''),
-              name
-            ),
-            email = COALESCE(
-              ${customerEmail},
-              email
-            ),
-            updated_at = NOW()
-          WHERE id = ${customer.id}
-        `;
+          const mayUpdateCustomerProfile = Boolean(
+            telegramChatId
+            || activeCustomerSession?.customer_id === customer.id,
+          );
+
+          if (mayUpdateCustomerProfile) {
+            await transaction`
+              UPDATE customers
+              SET
+                name = COALESCE(
+                  NULLIF(${body.customerName}, ''),
+                  name
+                ),
+                email = COALESCE(
+                  ${customerEmail},
+                  email
+                ),
+                updated_at = NOW()
+              WHERE id = ${customer.id}
+            `;
+          }
         } else {
           const customerRows = await transaction<
             {
@@ -7386,21 +7253,7 @@ export async function publicRoutes(app: FastifyInstance) {
         `;
         }
 
-        const customerSession = await createSecureCustomerSession(
-          transaction,
-          {
-            shopId: shop.id,
-            customerId: customer.id,
-            userAgent:
-              String(request.headers["user-agent"] ?? "") || null,
-            ip: request.ip || null,
-            source: "order_created",
-          },
-        );
-        const customerSessionToken = customerSession.rawToken;
-
         return {
-          customerSessionToken,
           response: {
             ok: true,
             order: {
@@ -7422,11 +7275,6 @@ export async function publicRoutes(app: FastifyInstance) {
           },
         };
       });
-
-      reply.header(
-        "Set-Cookie",
-        buildCustomerSessionCookie(transactionResult.customerSessionToken),
-      );
 
       return reply.status(201).send(transactionResult.response);
     } catch (error) {

@@ -41,13 +41,6 @@ type CheckoutDraftSnapshot = {
   updatedAt: string;
 };
 
-type AccountResponse = {
-  ok?: boolean;
-  customer?: { id: string; name: string | null; phone: string };
-  telegram?: { connected?: boolean };
-  message?: string;
-};
-
 type OptionsResponse = {
   ok?: boolean;
   options?: CheckoutDeliveryOptions;
@@ -72,8 +65,6 @@ type SuggestionResponse = {
 type PageState =
   | "loading"
   | "ready"
-  | "unauthorized"
-  | "telegram_required"
   | "error";
 type SaveState = "idle" | "saving" | "saved" | "error";
 
@@ -86,7 +77,7 @@ function createOperationId(prefix: string) {
 function sourceLabel(source: unknown) {
   if (source === "telegram") return "Продолжено из Telegram";
   if (source === "max") return "Продолжено из MAX";
-  return "Общий черновик сайта и Telegram";
+  return "Черновик оформления на этом устройстве";
 }
 
 function expiryText(value: string | undefined) {
@@ -140,34 +131,14 @@ export function CheckoutDeliveryClient() {
     initializedRef.current = false;
 
     try {
-      const [accountResponse, optionsResponse] = await Promise.all([
-        fetch("/api/public/account/me", {
-          credentials: "include",
-          cache: "no-store",
-        }),
-        fetch("/api/public/account/checkout-options", {
-          credentials: "include",
-          cache: "no-store",
-        }),
-      ]);
-
-      if (accountResponse.status === 401 || optionsResponse.status === 401) {
-        setPageState("unauthorized");
-        return;
-      }
-
-      const accountData = await accountResponse.json() as AccountResponse;
+      const optionsResponse = await fetch("/api/public/account/checkout-options", {
+        credentials: "include",
+        cache: "no-store",
+      });
       const optionsData = await optionsResponse.json() as OptionsResponse;
 
-      if (!accountResponse.ok || !accountData.customer) {
-        throw new Error(accountData.message || "Не удалось загрузить профиль");
-      }
       if (!optionsResponse.ok || !optionsData.options) {
         throw new Error(optionsData.message || "Не удалось загрузить доставку");
-      }
-      if (accountData.telegram?.connected !== true) {
-        setPageState("telegram_required");
-        return;
       }
 
       const draftResponse = await fetch("/api/public/account/checkout-draft", {
@@ -176,13 +147,6 @@ export function CheckoutDeliveryClient() {
       });
       const draftData = await draftResponse.json() as DraftResponse;
 
-      if (
-        draftResponse.status === 409
-        && draftData.code === "telegram_not_connected"
-      ) {
-        setPageState("telegram_required");
-        return;
-      }
       if (!draftResponse.ok) {
         throw new Error(draftData.message || "Не удалось загрузить черновик");
       }
@@ -216,7 +180,7 @@ export function CheckoutDeliveryClient() {
       setSaveMessage(
         nextDraft
           ? sourceLabel(nextDraft.data._core?.sourceChannel)
-          : "Можно продолжить оформление на сайте или в Telegram",
+          : "Доставка сохраняется без обязательной регистрации",
       );
     } catch (error) {
       setPageMessage(
@@ -287,10 +251,6 @@ export function CheckoutDeliveryClient() {
         const data = await response.json() as SuggestionResponse;
         if (requestNumber !== suggestionRequestRef.current) return;
 
-        if (response.status === 401) {
-          setPageState("unauthorized");
-          return;
-        }
         if (!response.ok) {
           setSuggestions([]);
           setSuggestionState("error");
@@ -392,17 +352,6 @@ export function CheckoutDeliveryClient() {
           false,
         );
       }
-      if (response.status === 401) {
-        setPageState("unauthorized");
-        return null;
-      }
-      if (
-        response.status === 409
-        && data.code === "telegram_not_connected"
-      ) {
-        setPageState("telegram_required");
-        return null;
-      }
       if (!response.ok || !data.draft) {
         throw new Error(data.message || "Не удалось сохранить доставку");
       }
@@ -468,40 +417,8 @@ export function CheckoutDeliveryClient() {
         <section className={styles.stateCard}>
           <span className={styles.eyebrow}>Шаг 2 из 4</span>
           <h1>Загружаем доставку</h1>
-          <p>Получаем зоны, интервалы, сохранённые адреса и общий черновик.</p>
+          <p>Получаем зоны, интервалы и сохранённый черновик оформления.</p>
           <div className={styles.loadingBar} />
-        </section>
-      </main>
-    );
-  }
-
-  if (pageState === "unauthorized") {
-    return (
-      <main className={styles.page}>
-        <section className={styles.stateCard}>
-          <span className={styles.eyebrow}>Защищённое оформление</span>
-          <h1>Войдите в личный кабинет</h1>
-          <p>Вход нужен для безопасного сохранения адреса и доставки.</p>
-          <div className={styles.stateActions}>
-            <Link className={styles.primaryLink} href="/account">Войти</Link>
-            <Link className={styles.secondaryLink} href="/cart">В корзину</Link>
-          </div>
-        </section>
-      </main>
-    );
-  }
-
-  if (pageState === "telegram_required") {
-    return (
-      <main className={styles.page}>
-        <section className={styles.stateCard}>
-          <span className={styles.eyebrow}>Единый черновик</span>
-          <h1>Подключите Telegram</h1>
-          <p>После подключения адрес и дата будут одинаковыми на сайте и в боте.</p>
-          <div className={styles.stateActions}>
-            <Link className={styles.primaryLink} href="/account#telegram">Подключить Telegram</Link>
-            <Link className={styles.secondaryLink} href="/cart">Оформить в корзине</Link>
-          </div>
         </section>
       </main>
     );
@@ -554,7 +471,7 @@ export function CheckoutDeliveryClient() {
             <small>{expiryText(draft?.expiresAt)}</small>
           </div>
           <span className={`${styles.saveBadge} ${saveState === "error" ? styles.saveBadgeError : ""}`}>
-            {saveState === "saving" ? "Сохраняем…" : saveState === "error" ? "Нужна проверка" : "Синхронизировано"}
+            {saveState === "saving" ? "Сохраняем…" : saveState === "error" ? "Нужна проверка" : "Сохранено"}
           </span>
         </div>
 
