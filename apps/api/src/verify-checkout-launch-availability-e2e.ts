@@ -19,6 +19,14 @@ const offline = resolveCheckoutPaymentAvailability({
 assert(offline.transfer, "при отключённой ЮKassa остаётся оплата после подтверждения");
 assert(!offline.online, "онлайн-оплата не показывается без ЮKassa");
 assert(checkoutPaymentMethodAvailable("transfer_after_confirm", offline), "fallback оплаты принимается сервером");
+const cashOnlyWithoutYooKassa = resolveCheckoutPaymentAvailability({
+  onlineEnabled: false,
+  cashEnabled: true,
+  transferEnabled: false,
+  yooKassaConfigured: false,
+});
+assert(cashOnlyWithoutYooKassa.transfer, "оплата после подтверждения остаётся доступной даже при включённой оплате при получении");
+assert(checkoutPaymentMethodAvailable("transfer_after_confirm", cashOnlyWithoutYooKassa), "API принимает перевод после подтверждения без ЮKassa");
 assert(resolveCheckoutPickupAddress("", "Москва, ул. Тестовая, 1") === "Москва, ул. Тестовая, 1", "самовывоз использует адрес магазина");
 const now = new Date("2026-07-21T17:00:00.000Z");
 assert(!checkoutIntervalAvailableForDate({ deliveryDate: "2026-07-21", intervalEndsAt: "20:00", now }), "завершившийся интервал сегодня закрыт");

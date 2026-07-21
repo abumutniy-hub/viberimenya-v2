@@ -143,7 +143,7 @@ export function availableWebCheckoutPaymentMethods(
   options: CheckoutPaymentOptions,
 ): WebCheckoutPaymentMethod[] {
   const methods: WebCheckoutPaymentMethod[] = [];
-  if (options.transfer) methods.push("transfer_after_confirm");
+  if (options.transfer || !options.online) methods.push("transfer_after_confirm");
   if (options.cash) methods.push("cash_on_delivery");
   if (options.online) methods.push("online_card", "sbp");
   return methods;

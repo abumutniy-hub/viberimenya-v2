@@ -14,7 +14,7 @@ export function resolveCheckoutPaymentAvailability(params: {
   const online = params.onlineEnabled === true && params.yooKassaConfigured;
   const cash = params.cashEnabled !== false;
   const configuredTransfer = params.transferEnabled !== false;
-  const transferFallback = !online && !cash && !configuredTransfer;
+  const transferFallback = !online && !configuredTransfer;
 
   return {
     online,

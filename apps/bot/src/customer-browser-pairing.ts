@@ -84,7 +84,7 @@ export function selectBrowserPairingForContact<
 }
 
 export function parsePairingStartPayload(value: string) {
-  const match = /^pair_([a-f0-9]{32})$/i.exec(value.trim());
+  const match = /^pair_([a-z0-9_-]{16,64})$/i.exec(value.trim());
   return match?.[1]?.toLowerCase() || "";
 }
 

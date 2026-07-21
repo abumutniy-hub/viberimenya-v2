@@ -1289,7 +1289,7 @@ async function loadBrowserPairingByToken(
     WHERE tokens.shop_id = ${shopId}
       AND tokens.provider = 'telegram'
       AND tokens.purpose = 'browser_pairing_login'
-      AND tokens.token = ${storedToken}
+      AND tokens.token IN (${storedToken}, ${rawToken})
       AND tokens.status IN ('pending', 'opened')
       AND tokens.consumed_at IS NULL
       AND tokens.expires_at > NOW()
@@ -1320,7 +1320,11 @@ async function loadBrowserPairingByCode(
     WHERE tokens.shop_id = ${shopId}
       AND tokens.provider = 'telegram'
       AND tokens.purpose = 'browser_pairing_login'
-      AND tokens.metadata ->> 'codeHash' = ${codeHash}
+      AND (
+        tokens.metadata ->> 'codeHash' = ${codeHash}
+        OR tokens.metadata ->> 'manualCodeHash' = ${codeHash}
+        OR tokens.token = ${rawCode.replace(/\D/g, "")}
+      )
       AND tokens.status IN ('pending', 'opened')
       AND tokens.consumed_at IS NULL
       AND tokens.expires_at > NOW()
@@ -1730,9 +1734,28 @@ async function handleBrowserPairingToken(
   if (!pairing) {
     await sendTelegramMessage(
       message.chat.id,
-      "Ссылка входа уже использована или устарела. Вернитесь на сайт и создайте новый запрос.",
+      [
+        "Ссылка входа не распознана, но активный запрос можно восстановить.",
+        "",
+        "Нажмите кнопку ниже и передайте свой номер Telegram.",
+        "Номер должен совпадать с номером, введённым на сайте.",
+      ].join("\n"),
       {
-        reply_markup: await mainKeyboardForChat(message.chat.id),
+        reply_markup: {
+          keyboard: [
+            [
+              {
+                text: "📱 Поделиться моим номером",
+                request_contact: true,
+              },
+            ],
+            [{ text: "Отменить вход" }],
+          ],
+          resize_keyboard: true,
+          one_time_keyboard: true,
+          is_persistent: false,
+          input_field_placeholder: "Подтвердите свой номер",
+        },
       },
     );
     return true;
@@ -10925,6 +10948,14 @@ async function handleUpdate(update: TelegramUpdate) {
 
   if (customerMenuHandled) {
     return;
+  }
+
+  if (/^[0-9\s-]{6,12}$/.test(text)) {
+    const browserPairingHandled =
+      await handleBrowserPairingCode(message, text);
+    if (browserPairingHandled) {
+      return;
+    }
   }
 
   const checkoutHandled = await handleCheckoutMessage(message, text);

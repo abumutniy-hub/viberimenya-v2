@@ -44,6 +44,11 @@ assertCondition(
   "Некорректный deep-link принят",
 );
 assertCondition(
+  parsePairingStartPayload("pair_AbCdEf0123456789_-token")
+    === "abcdef0123456789_-token",
+  "Совместимый Telegram deep-link не разобран",
+);
+assertCondition(
   isPairingManualCode("482 731"),
   "Резервный код не распознан",
 );
