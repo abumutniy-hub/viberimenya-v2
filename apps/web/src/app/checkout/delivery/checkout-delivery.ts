@@ -190,6 +190,57 @@ export function moscowTodayIso(now = new Date()) {
   }).format(now);
 }
 
+
+function moscowClock(now = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Moscow",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(now);
+  const value = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value || "";
+  return {
+    date: `${value("year")}-${value("month")}-${value("day")}`,
+    minutes: Number(value("hour")) * 60 + Number(value("minute")),
+  };
+}
+
+function intervalEndMinutes(value: string) {
+  const match = /^(\d{1,2}):(\d{2})/.exec(value.trim());
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hours < 0 || hours > 24 || minutes < 0 || minutes > 59) return null;
+  if (hours === 24 && minutes !== 0) return null;
+  return hours * 60 + minutes;
+}
+
+export function checkoutIntervalAvailableForDate(
+  interval: CheckoutDeliveryInterval,
+  deliveryDate: string,
+  now = new Date(),
+) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(deliveryDate)) return false;
+  const clock = moscowClock(now);
+  if (deliveryDate > clock.date) return true;
+  if (deliveryDate < clock.date) return false;
+  const end = intervalEndMinutes(interval.endsAt);
+  return end !== null && clock.minutes < end;
+}
+
+export function availableCheckoutIntervals(
+  intervals: CheckoutDeliveryInterval[],
+  deliveryDate: string,
+  now = new Date(),
+) {
+  return intervals.filter((interval) =>
+    checkoutIntervalAvailableForDate(interval, deliveryDate, now));
+}
+
 export function emptyWebCheckoutDeliveryData(): WebCheckoutDeliveryData {
   return {
     deliveryType: "delivery",
@@ -400,10 +451,21 @@ export function validateWebCheckoutDelivery(
     });
   }
 
-  if (!options.intervals.some((interval) => interval.id === value.deliveryIntervalId)) {
+  const selectedInterval = options.intervals.find(
+    (interval) => interval.id === value.deliveryIntervalId,
+  );
+  if (!selectedInterval) {
     issues.push({
       field: "deliveryIntervalId",
       message: "Выберите доступный интервал доставки",
+    });
+  } else if (!checkoutIntervalAvailableForDate(
+    selectedInterval,
+    value.deliveryDateText,
+  )) {
+    issues.push({
+      field: "deliveryIntervalId",
+      message: "Этот интервал уже закончился. Выберите другое время",
     });
   }
 

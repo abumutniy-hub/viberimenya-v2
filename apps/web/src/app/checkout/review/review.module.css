@@ -6,3 +6,12 @@
 .totalRows{display:grid;gap:12px;margin:22px 0;padding-bottom:18px;border-bottom:1px solid rgba(104,45,61,.1)}.totalRows div,.totalMain{display:flex;align-items:center;justify-content:space-between;gap:16px}.totalRows span{color:#806b72;font-size:11px}.totalRows strong{color:#3c2630;font-size:12px}.discountRow strong{color:#315b3e!important}.totalMain{margin-bottom:20px}.totalMain span{color:#3c2630;font-size:13px;font-weight:850}.totalMain strong{color:#7d1736;font-family:Georgia,serif;font-size:28px}.consent{display:flex;align-items:flex-start;gap:10px;margin:16px 0;color:#6e5961;font-size:10px;line-height:1.5}.consent input{margin-top:2px}.consent a{color:#7d1736}.paused{margin-bottom:12px;padding:11px;border-radius:14px;color:#7f3939;background:#fff0f0;font-size:10px;font-weight:750}.submitButton,.recalculateButton{width:100%;margin-top:8px}.submitButton{min-height:52px}.fieldError{margin:7px 0;color:#8b3d3d;font-size:10px}.idempotencyNote{display:block;margin-top:13px;color:#99858c;font-size:9px;line-height:1.5;text-align:center}
 @media(max-width:900px){.layout{grid-template-columns:1fr}.totalCard{position:static}.header{grid-template-columns:1fr auto}.backLink{grid-column:1/-1;justify-self:start}.fields,.discountGrid{grid-template-columns:1fr}}
 @media(max-width:620px){.page{padding-top:20px}.shell{width:min(100% - 20px,1180px)}.header{gap:12px}.progress span{width:26px;height:26px}.card,.totalCard{padding:17px;border-radius:22px}.summaryGrid{grid-template-columns:1fr}.deliverySummary{grid-column:auto}.cardHeading{grid-template-columns:auto minmax(0,1fr)}.cardHeading>a{grid-column:2}.item{grid-template-columns:48px minmax(0,1fr)}.itemImage{width:48px;height:48px}.item>b{grid-column:2}.syncNotice{align-items:flex-start;flex-direction:column}.saveBadge{align-self:flex-start}.titleBlock h1{font-size:36px}}
+
+/* Release 17B-2C.3.6 — commercial mobile review */
+@media (max-width: 760px) {
+  .page { padding-bottom: calc(28px + env(safe-area-inset-bottom)); }
+  .card { padding: 17px; border-radius: 22px; }
+  .totalCard { padding: 18px; border-radius: 22px; }
+  .totalMain strong { font-size: 24px; }
+  .submitButton { min-height: 54px; }
+}

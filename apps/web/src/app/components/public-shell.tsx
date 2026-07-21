@@ -219,6 +219,8 @@ export function PublicShell({
       "/checkout"
     );
 
+  const checkoutActive = pathname.startsWith("/checkout");
+
   const year = new Date().getFullYear();
 
   const brandName =
@@ -437,7 +439,7 @@ export function PublicShell({
         {children}
       </main>
 
-      <footer className="vm-clean-footer">
+      {!checkoutActive ? <footer className="vm-clean-footer">
         <div className="vm-clean-container vm-clean-footer-grid">
           <section className="vm-clean-footer-brand">
             <Link
@@ -551,9 +553,9 @@ export function PublicShell({
             </span>
           </div>
         </div>
-      </footer>
+      </footer> : null}
 
-      <MobileTabbar settings={settings} />
+      {!checkoutActive ? <MobileTabbar settings={settings} /> : null}
       <CookieConsent
         enabled={settings.analytics.enabled}
         yandexMetrikaId={settings.analytics.yandexMetrikaId}

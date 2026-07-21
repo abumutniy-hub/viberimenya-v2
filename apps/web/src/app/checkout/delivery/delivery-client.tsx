@@ -12,6 +12,7 @@ import {
 import styles from "./delivery.module.css";
 import {
   addDaysIso,
+  availableCheckoutIntervals,
   buildWebCheckoutDeliveryPatch,
   clearStructuredDeliveryAddress,
   emptyWebCheckoutDeliveryData,
@@ -191,9 +192,16 @@ export function CheckoutDeliveryClient() {
   }, []);
 
   useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
     void loadPage();
   }, [loadPage]);
 
+  const availableIntervals = useMemo(
+    () => options
+      ? availableCheckoutIntervals(options.intervals, form.deliveryDateText)
+      : [],
+    [form.deliveryDateText, options],
+  );
   const validation = useMemo(
     () => options
       ? validateWebCheckoutDelivery(form, options)
@@ -204,6 +212,17 @@ export function CheckoutDeliveryClient() {
     () => issueMap(showValidation ? validation.issues : []),
     [showValidation, validation.issues],
   );
+
+  useEffect(() => {
+    if (!form.deliveryIntervalId) return;
+    if (availableIntervals.some((item) => item.id === form.deliveryIntervalId)) return;
+    setForm((current) => ({
+      ...current,
+      deliveryIntervalId: "",
+      deliveryInterval: "",
+    }));
+    setSaveState("idle");
+  }, [availableIntervals, form.deliveryIntervalId]);
 
   const updateForm = useCallback(<K extends keyof WebCheckoutDeliveryData>(
     field: K,
@@ -500,7 +519,7 @@ export function CheckoutDeliveryClient() {
               onClick={() => updateForm("deliveryType", "pickup")}
             >
               <strong>Самовывоз</strong>
-              <small>{options.pickup.enabled ? options.pickup.address || "Адрес уточнит менеджер" : "Сейчас недоступен"}</small>
+              <small>{options.pickup.enabled ? options.pickup.address || "Адрес магазина не указан" : "Сейчас недоступен"}</small>
             </button>
           </div>
           {visibleIssues.get("deliveryType") ? <p className={styles.formError}>{visibleIssues.get("deliveryType")}</p> : null}
@@ -575,7 +594,15 @@ export function CheckoutDeliveryClient() {
                       max={maxDate}
                       value={form.deliveryDateText}
                       aria-invalid={Boolean(visibleIssues.get("deliveryDateText"))}
-                      onChange={(event) => updateForm("deliveryDateText", event.target.value)}
+                      onChange={(event) => {
+                        setForm((current) => ({
+                          ...current,
+                          deliveryDateText: event.target.value,
+                          deliveryIntervalId: "",
+                          deliveryInterval: "",
+                        }));
+                        setSaveState("idle");
+                      }}
                     />
                     {visibleIssues.get("deliveryDateText") ? <small className={styles.fieldError}>{visibleIssues.get("deliveryDateText")}</small> : null}
                   </label>
@@ -586,15 +613,19 @@ export function CheckoutDeliveryClient() {
                       value={form.deliveryIntervalId}
                       aria-invalid={Boolean(visibleIssues.get("deliveryIntervalId"))}
                       onChange={(event) => {
-                        const selected = options.intervals.find((item) => item.id === event.target.value);
+                        const selected = availableIntervals.find((item) => item.id === event.target.value);
                         setForm((current) => ({ ...current, deliveryIntervalId: event.target.value, deliveryInterval: selected?.name || "" }));
                         setSaveState("idle");
                       }}
                     >
                       <option value="">Выберите интервал</option>
-                      {options.intervals.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                      {availableIntervals.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
                     </select>
-                    {visibleIssues.get("deliveryIntervalId") ? <small className={styles.fieldError}>{visibleIssues.get("deliveryIntervalId")}</small> : null}
+                    {availableIntervals.length === 0 && form.deliveryDateText ? (
+                      <small className={styles.fieldError}>На выбранную дату доступных интервалов уже нет</small>
+                    ) : visibleIssues.get("deliveryIntervalId") ? (
+                      <small className={styles.fieldError}>{visibleIssues.get("deliveryIntervalId")}</small>
+                    ) : null}
                   </label>
                 </div>
               </section>
@@ -733,20 +764,16 @@ export function CheckoutDeliveryClient() {
           <section className={styles.card}>
             <div className={styles.pickupSummary}>
               <strong>Адрес самовывоза</strong>
-              <p>{options.pickup.address || "Адрес и время готовности подтвердит менеджер."}</p>
+              <p>{options.pickup.address || "Укажите адрес магазина в настройках CRM."}</p>
             </div>
           </section>
         )}
 
         <footer className={styles.footer}>
-          <div>
-            <strong>{saveMessage || "Изменения сохраняются автоматически"}</strong>
-            <small>Ключ адресного сервиса не передаётся в браузер.</small>
-          </div>
           <div className={styles.footerActions}>
             <Link className={styles.secondaryLink} href="/checkout">Назад</Link>
             <button className={styles.primaryButton} type="button" disabled={saveState === "saving" || !options.acceptingOrders} onClick={() => void continueCheckout()}>
-              К проверке заказа
+              К итогам
             </button>
           </div>
         </footer>

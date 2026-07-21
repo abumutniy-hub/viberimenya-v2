@@ -1,6 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import { isYooKassaConfigured } from "../payments/yookassa.service";
 import {
+  checkoutIntervalAvailableForDate,
+  checkoutPaymentMethodAvailable,
+  resolveCheckoutPaymentAvailability,
+  resolveCheckoutPickupAddress,
+} from "../checkout/checkout-availability";
+import {
   getCommerceCartSnapshot,
   resolveCustomerCommerceCartScope,
   type CommerceCartSqlExecutor,
@@ -1193,8 +1199,8 @@ export async function quoteCustomerCheckoutDraft(
     }
 
     const intervalRows = data.deliveryIntervalId
-      ? await sql<{ id: string; name: string }[]>`
-          SELECT id, name
+      ? await sql<{ id: string; name: string; ends_at: string }[]>`
+          SELECT id, name, ends_at
           FROM delivery_intervals
           WHERE shop_id = ${params.shopId}
             AND id = ${data.deliveryIntervalId}
@@ -1203,11 +1209,22 @@ export async function quoteCustomerCheckoutDraft(
         `
       : [];
 
-    if (!intervalRows[0]) {
+    const selectedInterval = intervalRows[0];
+    if (!selectedInterval) {
       addIssue(issues, {
         code: "delivery_interval_required",
         field: "deliveryIntervalId",
         message: "Выберите доступный интервал доставки",
+        severity: "error",
+      });
+    } else if (!checkoutIntervalAvailableForDate({
+      deliveryDate: data.deliveryDateText || "",
+      intervalEndsAt: selectedInterval.ends_at,
+    })) {
+      addIssue(issues, {
+        code: "delivery_interval_expired",
+        field: "deliveryIntervalId",
+        message: "Этот интервал уже закончился. Выберите другое время",
         severity: "error",
       });
     }
@@ -1230,15 +1247,14 @@ export async function quoteCustomerCheckoutDraft(
   }
 
   const paymentMethod = data.paymentMethod || "transfer_after_confirm";
-  const paymentEnabled =
-    paymentMethod === "cash_on_delivery"
-      ? settingsRow?.is_cash_payment_enabled !== false
-      : paymentMethod === "transfer_after_confirm"
-        ? settingsRow?.is_transfer_payment_enabled !== false
-        : settingsRow?.is_online_payment_enabled === true
-          && isYooKassaConfigured();
+  const paymentAvailability = resolveCheckoutPaymentAvailability({
+    onlineEnabled: settingsRow?.is_online_payment_enabled,
+    cashEnabled: settingsRow?.is_cash_payment_enabled,
+    transferEnabled: settingsRow?.is_transfer_payment_enabled,
+    yooKassaConfigured: isYooKassaConfigured(),
+  });
 
-  if (!paymentEnabled) {
+  if (!checkoutPaymentMethodAvailable(paymentMethod, paymentAvailability)) {
     addIssue(issues, {
       code: "payment_method_unavailable",
       field: "paymentMethod",
@@ -1475,12 +1491,14 @@ export async function getCustomerCheckoutOptions(
   const [settingsRows, zones, intervals, addresses, customerRows] = await Promise.all([
     sql<{
       settings: unknown;
+      address: string | null;
       is_online_payment_enabled: boolean;
       is_cash_payment_enabled: boolean;
       is_transfer_payment_enabled: boolean;
     }[]>`
       SELECT
         settings,
+        address,
         is_online_payment_enabled,
         is_cash_payment_enabled,
         is_transfer_payment_enabled
@@ -1557,11 +1575,21 @@ export async function getCustomerCheckoutOptions(
   ]);
   const settingsRow = settingsRows[0];
   const delivery = checkoutSettings(settingsRow?.settings);
+  const pickupAddress = resolveCheckoutPickupAddress(
+    delivery.pickupAddress,
+    settingsRow?.address,
+  );
+  const paymentAvailability = resolveCheckoutPaymentAvailability({
+    onlineEnabled: settingsRow?.is_online_payment_enabled,
+    cashEnabled: settingsRow?.is_cash_payment_enabled,
+    transferEnabled: settingsRow?.is_transfer_payment_enabled,
+    yooKassaConfigured: isYooKassaConfigured(),
+  });
 
   return {
     pickup: {
       enabled: delivery.pickupEnabled,
-      address: delivery.pickupAddress,
+      address: pickupAddress,
     },
     minimumOrderAmount: delivery.minimumOrderAmount,
     acceptingOrders: delivery.acceptingOrders && !delivery.maintenanceMode,
@@ -1569,10 +1597,10 @@ export async function getCustomerCheckoutOptions(
       ? delivery.maintenanceMessage
       : delivery.ordersPausedMessage,
     paymentMethods: {
-      cashOnDelivery: settingsRow?.is_cash_payment_enabled !== false,
-      transferAfterConfirm: settingsRow?.is_transfer_payment_enabled !== false,
-      onlineCard: settingsRow?.is_online_payment_enabled === true,
-      sbp: settingsRow?.is_online_payment_enabled === true,
+      cashOnDelivery: paymentAvailability.cash,
+      transferAfterConfirm: paymentAvailability.transfer,
+      onlineCard: paymentAvailability.online,
+      sbp: paymentAvailability.online,
     },
     zones: zones.map((zone) => ({
       id: zone.id,

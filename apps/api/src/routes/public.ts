@@ -21,6 +21,12 @@ import {
   resolveProductAvailability
 } from "../lib/catalog-product";
 import { isYooKassaConfigured } from "../modules/payments/yookassa.service";
+import {
+  checkoutIntervalAvailableForDate,
+  checkoutPaymentMethodAvailable,
+  resolveCheckoutPaymentAvailability,
+  resolveCheckoutPickupAddress,
+} from "../modules/checkout/checkout-availability";
 import { listPublicCatalogCategories } from "../modules/catalog/public-category.service";
 import {
   AddressSuggestionProviderError,
@@ -5971,6 +5977,7 @@ export async function publicRoutes(app: FastifyInstance) {
         const checkoutSettingsRows = await transaction<
           {
             settings: unknown;
+            address: string | null;
             is_online_payment_enabled: boolean;
             is_cash_payment_enabled: boolean;
             is_transfer_payment_enabled: boolean;
@@ -5978,6 +5985,7 @@ export async function publicRoutes(app: FastifyInstance) {
         >`
           SELECT
             settings,
+            address,
             is_online_payment_enabled,
             is_cash_payment_enabled,
             is_transfer_payment_enabled
@@ -5990,6 +5998,10 @@ export async function publicRoutes(app: FastifyInstance) {
         const checkoutContent = readContentSettings(
           checkoutSettings?.settings,
         );
+        const checkoutPickupAddress = resolveCheckoutPickupAddress(
+          checkoutContent.delivery.pickupAddress,
+          checkoutSettings?.address,
+        );
 
         if (
           body.deliveryType === "pickup"
@@ -6001,36 +6013,19 @@ export async function publicRoutes(app: FastifyInstance) {
           );
         }
 
-        if (
-          body.paymentMethod === "cash_on_delivery"
-          && checkoutSettings?.is_cash_payment_enabled === false
-        ) {
-          throw new HttpError(
-            400,
-            "Оплата при получении временно недоступна",
-          );
-        }
+        const paymentAvailability = resolveCheckoutPaymentAvailability({
+          onlineEnabled: checkoutSettings?.is_online_payment_enabled,
+          cashEnabled: checkoutSettings?.is_cash_payment_enabled,
+          transferEnabled: checkoutSettings?.is_transfer_payment_enabled,
+          yooKassaConfigured: isYooKassaConfigured(),
+        });
 
-        if (
-          body.paymentMethod === "transfer_after_confirm"
-          && checkoutSettings?.is_transfer_payment_enabled === false
-        ) {
+        if (!checkoutPaymentMethodAvailable(body.paymentMethod, paymentAvailability)) {
           throw new HttpError(
             400,
-            "Оплата переводом временно недоступна",
-          );
-        }
-
-        if (
-          (body.paymentMethod === "online_card" || body.paymentMethod === "sbp")
-          && (
-            checkoutSettings?.is_online_payment_enabled !== true
-            || !isYooKassaConfigured()
-          )
-        ) {
-          throw new HttpError(
-            400,
-            "Онлайн-оплата пока не подключена",
+            body.paymentMethod === "online_card" || body.paymentMethod === "sbp"
+              ? "Онлайн-оплата пока не подключена"
+              : "Выбранный способ оплаты временно недоступен",
           );
         }
 
@@ -6366,11 +6361,13 @@ export async function publicRoutes(app: FastifyInstance) {
                 {
                   id: string;
                   name: string;
+                  ends_at: string;
                 }[]
               >`
                 SELECT
                   id,
-                  name
+                  name,
+                  ends_at
                 FROM delivery_intervals
                 WHERE shop_id = ${shop.id}
                   AND id =
@@ -6383,11 +6380,13 @@ export async function publicRoutes(app: FastifyInstance) {
                   {
                     id: string;
                     name: string;
+                    ends_at: string;
                   }[]
                 >`
                   SELECT
                     id,
-                    name
+                    name,
+                    ends_at
                   FROM delivery_intervals
                   WHERE shop_id = ${shop.id}
                     AND name =
@@ -6401,6 +6400,16 @@ export async function publicRoutes(app: FastifyInstance) {
 
           if (!interval) {
             throw new HttpError(400, "Выберите доступный интервал доставки");
+          }
+
+          if (!checkoutIntervalAvailableForDate({
+            deliveryDate: body.deliveryDate,
+            intervalEndsAt: interval.ends_at,
+          })) {
+            throw new HttpError(
+              400,
+              "Выбранный интервал уже закончился. Выберите другое время",
+            );
           }
 
           selectedDeliveryInterval = {
@@ -6709,7 +6718,7 @@ export async function publicRoutes(app: FastifyInstance) {
           ${
             body.deliveryType === "delivery"
               ? resolvedDeliveryAddress
-              : checkoutContent.delivery.pickupAddress || null
+              : checkoutPickupAddress || null
           },
           ${resolvedDeliveryComment || null},
           ${recipientName},
@@ -6779,7 +6788,7 @@ export async function publicRoutes(app: FastifyInstance) {
               address:
                 body.deliveryType === "delivery"
                   ? resolvedDeliveryAddress
-                  : checkoutContent.delivery.pickupAddress || null,
+                  : checkoutPickupAddress || null,
 
               pickupNote:
                 body.deliveryType === "pickup"
@@ -7328,7 +7337,10 @@ export async function publicRoutes(app: FastifyInstance) {
         intervals,
         pickup: {
           enabled: content.delivery.pickupEnabled,
-          address: content.delivery.pickupAddress,
+          address: resolveCheckoutPickupAddress(
+            content.delivery.pickupAddress,
+            settings?.address,
+          ),
           note: content.delivery.pickupNote,
         },
         minimumOrderAmount:
@@ -7341,11 +7353,19 @@ export async function publicRoutes(app: FastifyInstance) {
         acceptingOrders: content.launch.acceptingOrders,
         maintenanceMode: content.launch.maintenanceMode,
         ordersPausedMessage: content.launch.ordersPausedMessage,
-        paymentMethods: {
-          online: settings?.isOnlinePaymentEnabled === true && isYooKassaConfigured(),
-          cash: settings?.isCashPaymentEnabled !== false,
-          transfer: settings?.isTransferPaymentEnabled !== false,
-        },
+        paymentMethods: (() => {
+          const availability = resolveCheckoutPaymentAvailability({
+            onlineEnabled: settings?.isOnlinePaymentEnabled,
+            cashEnabled: settings?.isCashPaymentEnabled,
+            transferEnabled: settings?.isTransferPaymentEnabled,
+            yooKassaConfigured: isYooKassaConfigured(),
+          });
+          return {
+            online: availability.online,
+            cash: availability.cash,
+            transfer: availability.transfer,
+          };
+        })(),
       };
     } finally {
       await client.end();

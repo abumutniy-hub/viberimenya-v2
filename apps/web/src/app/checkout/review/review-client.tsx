@@ -186,19 +186,19 @@ function paymentTitle(method: WebCheckoutPaymentMethod) {
 
 function paymentDescription(method: WebCheckoutPaymentMethod) {
   if (method === "online_card" || method === "sbp") {
-    return "Ссылка появится на странице заказа после проверки и подтверждения менеджером.";
+    return "После оформления откроется безопасная страница оплаты.";
   }
   if (method === "cash_on_delivery") {
-    return "Оплата производится при получении заказа, если способ разрешён магазином.";
+    return "Оплатите заказ при получении.";
   }
-  return "Менеджер подтвердит заказ и отправит реквизиты или инструкцию по оплате.";
+  return "Менеджер подтвердит заказ и отправит реквизиты.";
 }
 
 function deliverySummary(data: CheckoutDraftSnapshot["data"], options: CheckoutOptions) {
   if (data.deliveryType === "pickup") {
     return {
       title: "Самовывоз",
-      text: options.pickup.address || "Адрес подтвердит менеджер",
+      text: options.pickup.address || "Адрес магазина не указан",
       detail: options.pickup.note || "Время готовности появится после подтверждения заказа",
     };
   }
@@ -374,6 +374,7 @@ export function CheckoutReviewClient() {
   }, [requestQuote]);
 
   useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
     void loadPage();
   }, [loadPage]);
 
@@ -506,7 +507,7 @@ export function CheckoutReviewClient() {
 
     setSubmitting(true);
     setSaveState("saving");
-    setSaveMessage("Проверяем цены, остатки и создаём заказ…");
+    setSaveMessage("Оформляем заказ…");
 
     try {
       const saved = await saveDraft(form, true, "confirm");
@@ -758,7 +759,7 @@ export function CheckoutReviewClient() {
             <section className={styles.card}>
               <div className={styles.cardHeading}>
                 <span>4</span>
-                <div><h2>Скидки и бонусы</h2><p>Итог всегда пересчитывается на сервере</p></div>
+                <div><h2>Скидки и бонусы</h2><p>Промокод и доступные бонусы</p></div>
               </div>
               <div className={styles.discountGrid}>
                 <label className={styles.field}>
@@ -785,7 +786,9 @@ export function CheckoutReviewClient() {
                 <div><h2>Способ оплаты</h2><p>Выберите доступный вариант</p></div>
               </div>
               <div className={styles.paymentMethods} id="paymentMethod">
-                {paymentMethods.map((method) => (
+                {paymentMethods.length === 0 ? (
+                  <p className={styles.fieldError}>Способы оплаты временно недоступны</p>
+                ) : paymentMethods.map((method) => (
                   <label className={form.paymentMethod === method ? `${styles.paymentMethod} ${styles.paymentMethodActive}` : styles.paymentMethod} key={method}>
                     <input type="radio" name="paymentMethod" value={method} checked={form.paymentMethod === method} onChange={() => updateForm("paymentMethod", method)} />
                     <span><strong>{paymentTitle(method)}</strong><small>{paymentDescription(method)}</small></span>
@@ -821,7 +824,7 @@ export function CheckoutReviewClient() {
               {submitting ? "Создаём заказ…" : quote ? `Оформить заказ на ${money(quote.total)}` : "Пересчитываем итог…"}
             </button>
             <button className={styles.recalculateButton} type="button" disabled={submitting || saveState === "saving"} onClick={() => void saveAndQuote(form, true)}>Пересчитать</button>
-            <small className={styles.idempotencyNote}>Повторное нажатие не создаст второй заказ. Цены, скидки, остатки и бонусы повторно проверяются сервером.</small>
+
           </aside>
         </div>
       </div>

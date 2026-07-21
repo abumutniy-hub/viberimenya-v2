@@ -18,6 +18,7 @@ import {
   pairingCancelCallback,
   pairingPhoneMatches,
   parsePairingStartPayload,
+  selectBrowserPairingForContact,
 } from "./customer-browser-pairing";
 import {
   normalizeTelegramCheckoutDraftData,
@@ -1267,14 +1268,6 @@ type BrowserPairingRecord = {
   phone: string;
 };
 
-function pairingMetadataText(
-  metadata: Record<string, unknown>,
-  key: string,
-) {
-  const value = metadata[key];
-  return typeof value === "string" ? value : "";
-}
-
 async function loadBrowserPairingByToken(
   shopId: string,
   rawToken: string,
@@ -1517,10 +1510,9 @@ async function confirmBrowserPairing(
     }
 
     if (
-      pairingMetadataText(
-        pairing.metadata,
-        "candidateTelegramId",
-      ) !== telegramId
+      (typeof pairing.metadata.candidateTelegramId === "string"
+        ? pairing.metadata.candidateTelegramId
+        : "") !== telegramId
     ) {
       return {
         ok: false as const,
@@ -1738,7 +1730,7 @@ async function handleBrowserPairingToken(
   if (!pairing) {
     await sendTelegramMessage(
       message.chat.id,
-      "Запрос входа уже использован, отменён или срок его действия истёк.",
+      "Ссылка входа уже использована или устарела. Вернитесь на сайт и создайте новый запрос.",
       {
         reply_markup: await mainKeyboardForChat(message.chat.id),
       },
@@ -1795,16 +1787,53 @@ async function handleBrowserPairingContact(
     WHERE tokens.shop_id = ${shopId}
       AND tokens.provider = 'telegram'
       AND tokens.purpose = 'browser_pairing_login'
-      AND tokens.status = 'opened'
+      AND tokens.status IN ('pending', 'opened')
       AND tokens.consumed_at IS NULL
       AND tokens.expires_at > NOW()
-      AND tokens.metadata ->> 'candidateTelegramId' = ${telegramId}
-    ORDER BY tokens.created_at DESC
-    LIMIT 1
+    ORDER BY
+      CASE WHEN tokens.metadata ->> 'candidateTelegramId' = ${telegramId}
+        THEN 0 ELSE 1 END,
+      tokens.created_at DESC
+    LIMIT 20
   `;
-  const pairing = rows[0];
+  const ownContact = message.contact.phone_number;
+  const pairing = selectBrowserPairingForContact(
+    rows,
+    telegramId,
+    ownContact,
+  );
 
-  if (!pairing) return false;
+  if (!pairing) {
+    await sendTelegramMessage(
+      message.chat.id,
+      "Активный запрос входа не найден. Вернитесь на сайт и нажмите «Открыть Telegram» ещё раз.",
+      { reply_markup: await mainKeyboardForChat(message.chat.id) },
+    );
+    return true;
+  }
+
+  await sql`
+    UPDATE customer_link_tokens
+    SET
+      status = 'opened',
+      metadata = metadata || ${JSON.stringify({
+        candidateTelegramId: telegramId,
+        candidateUsername: message.from?.username || null,
+        candidateFirstName: message.from?.first_name || null,
+        candidateLastName: message.from?.last_name || null,
+        openedAt: new Date().toISOString(),
+        recoveredFromContact: true,
+      })}::jsonb,
+      updated_at = NOW()
+    WHERE id = ${pairing.id}
+      AND status IN ('pending', 'opened')
+      AND consumed_at IS NULL
+      AND expires_at > NOW()
+  `;
+  pairing.metadata = {
+    ...pairing.metadata,
+    candidateTelegramId: telegramId,
+  };
 
   if (
     !message.contact.user_id
@@ -3518,12 +3547,14 @@ async function getTelegramCheckoutConfiguration(): Promise<TelegramCheckoutConfi
 
   const rows = await sql<{
     settings: unknown;
+    address: string | null;
     is_online_payment_enabled: boolean;
     is_cash_payment_enabled: boolean;
     is_transfer_payment_enabled: boolean;
   }[]>`
     SELECT
       settings,
+      address,
       is_online_payment_enabled,
       is_cash_payment_enabled,
       is_transfer_payment_enabled
@@ -3536,14 +3567,20 @@ async function getTelegramCheckoutConfiguration(): Promise<TelegramCheckoutConfi
   const delivery = checkoutRecord(settings.delivery);
   const site = checkoutRecord(settings.site);
 
+  const online = row?.is_online_payment_enabled === true
+    && Boolean(process.env.YOOKASSA_SHOP_ID && process.env.YOOKASSA_SECRET_KEY);
+  const cash = row?.is_cash_payment_enabled !== false;
+  const configuredTransfer = row?.is_transfer_payment_enabled !== false;
+  const transfer = configuredTransfer || (!online && !cash && !configuredTransfer);
+
   return {
     pickupEnabled: delivery.pickupEnabled !== false,
-    pickupAddress: valueToText(delivery.pickupAddress),
+    pickupAddress: valueToText(delivery.pickupAddress) || valueToText(row?.address),
     policyUrl: valueToText(site.policyUrl),
     paymentMethods: {
-      cash: row?.is_cash_payment_enabled !== false,
-      transfer: row?.is_transfer_payment_enabled !== false,
-      online: row?.is_online_payment_enabled === true,
+      cash,
+      transfer,
+      online,
     },
   };
 }

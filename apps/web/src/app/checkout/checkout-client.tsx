@@ -306,6 +306,7 @@ export function CheckoutClient() {
   }, []);
 
   useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
     void loadCheckout();
   }, [loadCheckout]);
 
@@ -805,19 +806,6 @@ export function CheckoutClient() {
         </div>
 
         <footer className={styles.actions}>
-          <div className={styles.saveStatus} aria-live="polite">
-            <strong>
-              {saveState === "saving"
-                ? "Сохраняем черновик"
-                : saveState === "error"
-                  ? "Проверьте данные"
-                  : "Данные защищены"}
-            </strong>
-            <small>
-              {saveMessage || "Изменения автоматически сохраняются на сервере"}
-            </small>
-          </div>
-
           <div className={styles.actionButtons}>
             <Link className={styles.secondaryLink} href="/cart">
               Назад
@@ -828,7 +816,7 @@ export function CheckoutClient() {
               disabled={saveState === "saving"}
               onClick={() => void continueToDelivery()}
             >
-              Продолжить к доставке
+              Продолжить
             </button>
           </div>
         </footer>

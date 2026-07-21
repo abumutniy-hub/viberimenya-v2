@@ -6,6 +6,7 @@ import {
   pairingCancelCallback,
   pairingPhoneMatches,
   parsePairingStartPayload,
+  selectBrowserPairingForContact,
 } from "./customer-browser-pairing";
 
 function assertCondition(
@@ -61,6 +62,38 @@ assertCondition(
   "Разные номера были приняты",
 );
 pass("номер Telegram обязан совпасть с номером сайта");
+
+const recoveredPairing = selectBrowserPairingForContact(
+  [
+    { phone: "+7 999 123-45-67", metadata: {} },
+    {
+      phone: "+7 999 123-45-67",
+      metadata: { candidateTelegramId: "123456" },
+    },
+  ],
+  "123456",
+  "8 (999) 123-45-67",
+);
+assertCondition(
+  recoveredPairing !== null,
+  "Активный запрос не восстановлен после передачи контакта",
+);
+assertCondition(
+  recoveredPairing?.metadata
+    && typeof recoveredPairing.metadata === "object"
+    && (recoveredPairing.metadata as Record<string, unknown>).candidateTelegramId === "123456",
+  "Не выбран запрос, открытый этим Telegram",
+);
+const recoveredWithoutDeepLink = selectBrowserPairingForContact(
+  [{ phone: "+7 999 123-45-67", metadata: {} }],
+  "999999",
+  "+7 999 123-45-67",
+);
+assertCondition(
+  recoveredWithoutDeepLink !== null,
+  "Запрос не восстановлен по совпавшему номеру после потери deep-link состояния",
+);
+pass("передача контакта восстанавливает активный запрос даже после сбоя deep-link");
 
 const pairingId = "00000000-0000-4000-8000-000000000123";
 assertCondition(

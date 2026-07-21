@@ -590,3 +590,27 @@
   .footerActions { grid-template-columns: 1fr; }
   .secondaryLink { width: 100%; box-sizing: border-box; }
 }
+
+
+/* Release 17B-2C.3.6 — compact delivery footer */
+.footer { justify-content: flex-end; padding: 12px 14px; }
+.footerActions { width: 100%; justify-content: flex-end; }
+@media (max-width: 760px) {
+  .page { padding-bottom: calc(92px + env(safe-area-inset-bottom)); }
+  .footer {
+    position: fixed;
+    z-index: 45;
+    right: 8px;
+    bottom: max(8px, env(safe-area-inset-bottom));
+    left: 8px;
+    display: block;
+    padding: 8px;
+    border-radius: 18px;
+  }
+  .footerActions { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; }
+  .primaryButton, .secondaryLink { min-height: 52px; }
+}
+@media (max-width: 440px) {
+  .footerActions { grid-template-columns: auto minmax(0, 1fr); }
+  .secondaryLink { width: auto; }
+}

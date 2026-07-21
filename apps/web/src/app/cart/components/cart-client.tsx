@@ -1445,9 +1445,7 @@ export function CartClient() {
           </Link>
         )}
 
-        <p className="checkout-submit-note">
-          Заказ будет создан только после финальной серверной проверки цен, остатков, доставки, промокода и бонусов.
-        </p>
+
       </section>
     </section>
   );

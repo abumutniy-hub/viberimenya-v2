@@ -568,3 +568,22 @@
     transform: none;
   }
 }
+
+
+/* Release 17B-2C.3.6 — compact commercial checkout */
+.actions { justify-content: flex-end; padding: 12px 14px; }
+.actionButtons { width: 100%; justify-content: flex-end; }
+@media (max-width: 600px) {
+  .page { padding-bottom: calc(92px + env(safe-area-inset-bottom)); }
+  .actions {
+    right: 8px;
+    bottom: max(8px, env(safe-area-inset-bottom));
+    left: 8px;
+    display: block;
+    padding: 8px;
+    border-radius: 18px;
+  }
+  .actionButtons { grid-template-columns: auto minmax(0, 1fr); gap: 8px; }
+  .primaryButton, .secondaryLink { min-height: 52px; }
+  .secondaryLink { padding: 0 14px; }
+}

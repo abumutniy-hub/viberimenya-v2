@@ -59,6 +59,30 @@ export function pairingPhoneMatches(
   );
 }
 
+
+export function browserPairingMetadataText(
+  metadata: unknown,
+  key: string,
+) {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return "";
+  const value = (metadata as Record<string, unknown>)[key];
+  return typeof value === "string" ? value : "";
+}
+
+export function selectBrowserPairingForContact<
+  T extends { phone: string; metadata: unknown },
+>(
+  rows: T[],
+  telegramId: string,
+  contactPhone: string,
+) {
+  return rows.find((item) =>
+    browserPairingMetadataText(item.metadata, "candidateTelegramId") === telegramId
+      && pairingPhoneMatches(item.phone, contactPhone))
+    || rows.find((item) => pairingPhoneMatches(item.phone, contactPhone))
+    || null;
+}
+
 export function parsePairingStartPayload(value: string) {
   const match = /^pair_([a-f0-9]{32})$/i.exec(value.trim());
   return match?.[1]?.toLowerCase() || "";
