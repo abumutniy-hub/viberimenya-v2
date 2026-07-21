@@ -1,8 +1,11 @@
 import { fetchAdmin, type AdminRow } from "../lib/admin-api";
 import {
   LaunchSettingsForm,
+  type ControlOrder,
   type LaunchSettings,
+  type LaunchSummary,
   type ReadinessItem,
+  type RecentOrder,
 } from "./launch-settings-form";
 
 export const dynamic = "force-dynamic";
@@ -10,6 +13,9 @@ export const dynamic = "force-dynamic";
 type LaunchResponse = {
   settings?: AdminRow;
   readiness?: ReadinessItem[];
+  summary?: LaunchSummary;
+  recentOrders?: RecentOrder[];
+  controlOrder?: ControlOrder | null;
 };
 
 function record(value: unknown): Record<string, unknown> {
@@ -63,6 +69,18 @@ function buildInitial(value: unknown): LaunchSettings {
   };
 }
 
+const emptySummary: LaunchSummary = {
+  score: 0,
+  total: 0,
+  passed: 0,
+  criticalBlockers: 1,
+  warnings: 0,
+  configurationReady: false,
+  controlOrderReady: false,
+  readyForLaunch: false,
+  status: "blocked",
+};
+
 export default async function AdminLaunchPage() {
   const data = await fetchAdmin<LaunchResponse>("/api/admin/launch");
   const settings = record(data?.settings?.settings);
@@ -71,15 +89,18 @@ export default async function AdminLaunchPage() {
     <div className="admin-page">
       <div className="admin-page-head">
         <div>
-          <span>Подготовка магазина</span>
+          <span>Контроль основного запуска</span>
           <h1>Запуск сайта</h1>
-          <p>Приём заказов, технический режим, SEO, аналитика и юридические документы.</p>
+          <p>Автоматические блокеры, контрольный заказ, приём заказов, SEO и юридические документы.</p>
         </div>
       </div>
 
       <LaunchSettingsForm
         initial={buildInitial(settings)}
         readiness={data?.readiness ?? []}
+        summary={data?.summary ?? emptySummary}
+        recentOrders={data?.recentOrders ?? []}
+        controlOrder={data?.controlOrder ?? null}
       />
     </div>
   );

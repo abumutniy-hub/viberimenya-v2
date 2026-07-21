@@ -36,6 +36,7 @@ import {
   prepareYooKassaRefund
 } from "./payments";
 import {
+  isYooKassaConfigured,
   testYooKassaCredentials,
   yookassaPublicStatus
 } from "../modules/payments/yookassa.service";
@@ -44,6 +45,12 @@ import {
   persistYooKassaRuntimeSettings
 } from "../modules/payments/yookassa-settings.service";
 import { unlinkCustomerTelegramIdentity } from "../modules/customers/customer-telegram-identity.service";
+import {
+  buildControlOrderItems,
+  buildLaunchSummary,
+  type ControlOrderSnapshot,
+  type LaunchReadinessItem
+} from "../modules/launch/launch-readiness";
 
 type ShopRow = {
   id: string;
@@ -9626,26 +9633,50 @@ export async function adminRoutes(app: FastifyInstance) {
     try {
       const shop = await getShop(client);
 
-      const [settingsRows, readinessRows] = await Promise.all([
+      const [settingsRows, readinessRows, recentOrders] = await Promise.all([
         client<{
           settings: unknown;
           phone: string | null;
           address: string | null;
+          is_online_payment_enabled: boolean;
+          is_cash_payment_enabled: boolean;
+          is_transfer_payment_enabled: boolean;
         }[]>`
-          SELECT settings, phone, address
+          SELECT
+            settings,
+            phone,
+            address,
+            is_online_payment_enabled,
+            is_cash_payment_enabled,
+            is_transfer_payment_enabled
           FROM shop_settings
           WHERE shop_id = ${shop.id}
           LIMIT 1
         `,
         client<{
           active_products: number;
+          available_products: number;
           products_without_photo: number;
+          products_without_price: number;
           active_categories: number;
           active_zones: number;
           active_intervals: number;
           legal_name: string | null;
           inn: string | null;
           email: string | null;
+          privacy_text: string | null;
+          consent_text: string | null;
+          offer_text: string | null;
+          delivery_text: string | null;
+          returns_text: string | null;
+          active_managers: number;
+          active_florists: number;
+          active_couriers: number;
+          linked_managers: number;
+          linked_florists: number;
+          linked_couriers: number;
+          failed_notifications: number;
+          stale_notifications: number;
         }[]>`
           SELECT
             (
@@ -9659,6 +9690,20 @@ export async function adminRoutes(app: FastifyInstance) {
               FROM products p
               WHERE p.shop_id = ${shop.id}
                 AND p.status = 'active'
+                AND COALESCE(p.price, 0) > 0
+                AND COALESCE(
+                  NULLIF(p.metadata #>> '{catalog,availability}', ''),
+                  CASE
+                    WHEN COALESCE(p.stock_quantity, 0) > 0 THEN 'available'
+                    ELSE 'unavailable'
+                  END
+                ) = 'available'
+            ) AS available_products,
+            (
+              SELECT COUNT(*)::int
+              FROM products p
+              WHERE p.shop_id = ${shop.id}
+                AND p.status = 'active'
                 AND NOT EXISTS (
                   SELECT 1
                   FROM product_images image
@@ -9666,6 +9711,13 @@ export async function adminRoutes(app: FastifyInstance) {
                     AND image.product_id = p.id
                 )
             ) AS products_without_photo,
+            (
+              SELECT COUNT(*)::int
+              FROM products p
+              WHERE p.shop_id = ${shop.id}
+                AND p.status = 'active'
+                AND COALESCE(p.price, 0) <= 0
+            ) AS products_without_price,
             (
               SELECT COUNT(*)::int
               FROM categories c
@@ -9690,104 +9742,586 @@ export async function adminRoutes(app: FastifyInstance) {
               sh.legal_name
             ) AS legal_name,
             settings.settings #>> '{site,inn}' AS inn,
-            settings.settings #>> '{site,email}' AS email
+            settings.settings #>> '{site,email}' AS email,
+            settings.settings #>> '{legal,privacyText}' AS privacy_text,
+            settings.settings #>> '{legal,consentText}' AS consent_text,
+            settings.settings #>> '{legal,offerText}' AS offer_text,
+            settings.settings #>> '{legal,deliveryText}' AS delivery_text,
+            settings.settings #>> '{legal,returnsText}' AS returns_text,
+            (
+              SELECT COUNT(*)::int
+              FROM shop_users su
+              WHERE su.shop_id = ${shop.id}
+                AND su.is_active = true
+                AND su.role IN ('owner', 'admin', 'manager')
+            ) AS active_managers,
+            (
+              SELECT COUNT(*)::int
+              FROM shop_users su
+              WHERE su.shop_id = ${shop.id}
+                AND su.is_active = true
+                AND su.role = 'florist'
+            ) AS active_florists,
+            (
+              SELECT COUNT(*)::int
+              FROM shop_users su
+              WHERE su.shop_id = ${shop.id}
+                AND su.is_active = true
+                AND su.role = 'courier'
+            ) AS active_couriers,
+            (
+              SELECT COUNT(DISTINCT su.user_id)::int
+              FROM shop_users su
+              JOIN telegram_accounts ta
+                ON ta.shop_id = su.shop_id
+               AND ta.user_id = su.user_id
+               AND ta.is_active = true
+               AND ta.notifications_enabled = true
+              WHERE su.shop_id = ${shop.id}
+                AND su.is_active = true
+                AND su.role IN ('owner', 'admin', 'manager')
+            ) AS linked_managers,
+            (
+              SELECT COUNT(DISTINCT su.user_id)::int
+              FROM shop_users su
+              JOIN telegram_accounts ta
+                ON ta.shop_id = su.shop_id
+               AND ta.user_id = su.user_id
+               AND ta.is_active = true
+               AND ta.notifications_enabled = true
+              WHERE su.shop_id = ${shop.id}
+                AND su.is_active = true
+                AND su.role = 'florist'
+            ) AS linked_florists,
+            (
+              SELECT COUNT(DISTINCT su.user_id)::int
+              FROM shop_users su
+              JOIN telegram_accounts ta
+                ON ta.shop_id = su.shop_id
+               AND ta.user_id = su.user_id
+               AND ta.is_active = true
+               AND ta.notifications_enabled = true
+              WHERE su.shop_id = ${shop.id}
+                AND su.is_active = true
+                AND su.role = 'courier'
+            ) AS linked_couriers,
+            (
+              SELECT COUNT(*)::int
+              FROM notification_outbox outbox
+              WHERE outbox.shop_id = ${shop.id}
+                AND outbox.created_at > NOW() - INTERVAL '24 hours'
+                AND outbox.status = 'dead'
+            ) AS failed_notifications,
+            (
+              SELECT COUNT(*)::int
+              FROM notification_outbox outbox
+              WHERE outbox.shop_id = ${shop.id}
+                AND outbox.status IN ('pending', 'processing')
+                AND outbox.created_at < NOW() - INTERVAL '15 minutes'
+            ) AS stale_notifications
           FROM shops sh
           LEFT JOIN shop_settings settings
             ON settings.shop_id = sh.id
           WHERE sh.id = ${shop.id}
           LIMIT 1
+        `,
+        client<{
+          id: string;
+          order_number: string;
+          status: string;
+          payment_status: string;
+          payment_method: string;
+          total: number;
+          customer_name: string | null;
+          created_at: string;
+        }[]>`
+          SELECT
+            o.id,
+            o.order_number,
+            o.status::text AS status,
+            o.payment_status::text AS payment_status,
+            o.payment_method::text AS payment_method,
+            o.total,
+            COALESCE(NULLIF(o.metadata #>> '{customer,name}', ''), c.name) AS customer_name,
+            o.created_at
+          FROM orders o
+          LEFT JOIN customers c ON c.id = o.customer_id
+          WHERE o.shop_id = ${shop.id}
+          ORDER BY o.created_at DESC
+          LIMIT 12
         `
       ]);
 
       const settingsRow = settingsRows[0] ?? null;
       const readiness = readinessRows[0] ?? {
         active_products: 0,
+        available_products: 0,
         products_without_photo: 0,
+        products_without_price: 0,
         active_categories: 0,
         active_zones: 0,
         active_intervals: 0,
         legal_name: null,
         inn: null,
-        email: null
+        email: null,
+        privacy_text: null,
+        consent_text: null,
+        offer_text: null,
+        delivery_text: null,
+        returns_text: null,
+        active_managers: 0,
+        active_florists: 0,
+        active_couriers: 0,
+        linked_managers: 0,
+        linked_florists: 0,
+        linked_couriers: 0,
+        failed_notifications: 0,
+        stale_notifications: 0
       };
+      const settings = (
+        settingsRow?.settings
+        && typeof settingsRow.settings === "object"
+        && !Array.isArray(settingsRow.settings)
+      )
+        ? settingsRow.settings as Record<string, unknown>
+        : {};
+      const launchSettings = (
+        settings.launch
+        && typeof settings.launch === "object"
+        && !Array.isArray(settings.launch)
+      )
+        ? settings.launch as Record<string, unknown>
+        : {};
+      const launchValidation = (
+        settings.launchValidation
+        && typeof settings.launchValidation === "object"
+        && !Array.isArray(settings.launchValidation)
+      )
+        ? settings.launchValidation as Record<string, unknown>
+        : {};
+      const selectedOrderId = String(launchValidation.controlOrderId ?? "").trim();
+      const yookassaConfigured = isYooKassaConfigured();
+      const onlinePaymentsEnabled = settingsRow?.is_online_payment_enabled === true;
+      const anyPaymentEnabled = onlinePaymentsEnabled
+        || settingsRow?.is_cash_payment_enabled !== false
+        || settingsRow?.is_transfer_payment_enabled !== false;
+      const customLegalDocuments = [
+        readiness.privacy_text,
+        readiness.consent_text,
+        readiness.offer_text,
+        readiness.delivery_text,
+        readiness.returns_text
+      ].filter((value) => String(value ?? "").trim().length >= 20).length;
+      const legalDocumentsReady = Boolean(
+        String(readiness.legal_name ?? "").trim()
+        && String(readiness.inn ?? "").trim()
+      );
 
-      const items = [
+      const items: LaunchReadinessItem[] = [
+        {
+          key: "accepting_orders",
+          label: "Приём новых заказов",
+          ok: launchSettings.acceptingOrders !== false,
+          value: launchSettings.acceptingOrders === false ? "Выключен" : "Включён",
+          critical: true,
+          section: "store",
+          hint: "Включается в блоке «Приём заказов» на этой странице."
+        },
+        {
+          key: "maintenance",
+          label: "Технический режим",
+          ok: launchSettings.maintenanceMode !== true,
+          value: launchSettings.maintenanceMode === true ? "Включён" : "Выключен",
+          critical: true,
+          section: "store"
+        },
         {
           key: "products",
           label: "Опубликованные товары",
           ok: Number(readiness.active_products) > 0,
           value: String(Number(readiness.active_products) || 0),
-          critical: true
+          critical: true,
+          section: "store"
+        },
+        {
+          key: "available_products",
+          label: "Товары доступны для покупки",
+          ok: Number(readiness.available_products) > 0,
+          value: String(Number(readiness.available_products) || 0),
+          critical: true,
+          section: "store"
         },
         {
           key: "photos",
           label: "Товары без фотографии",
           ok: Number(readiness.products_without_photo) === 0,
           value: String(Number(readiness.products_without_photo) || 0),
-          critical: true
+          critical: true,
+          section: "store"
+        },
+        {
+          key: "prices",
+          label: "Товары без корректной цены",
+          ok: Number(readiness.products_without_price) === 0,
+          value: String(Number(readiness.products_without_price) || 0),
+          critical: true,
+          section: "store"
         },
         {
           key: "categories",
           label: "Активные категории",
           ok: Number(readiness.active_categories) > 0,
           value: String(Number(readiness.active_categories) || 0),
-          critical: true
+          critical: true,
+          section: "store"
         },
         {
           key: "zones",
           label: "Зоны доставки",
           ok: Number(readiness.active_zones) > 0,
           value: String(Number(readiness.active_zones) || 0),
-          critical: true
+          critical: true,
+          section: "operations"
         },
         {
           key: "intervals",
           label: "Интервалы доставки",
           ok: Number(readiness.active_intervals) > 0,
           value: String(Number(readiness.active_intervals) || 0),
-          critical: true
+          critical: true,
+          section: "operations"
+        },
+        {
+          key: "managers",
+          label: "Активный менеджер",
+          ok: Number(readiness.active_managers) > 0,
+          value: String(Number(readiness.active_managers) || 0),
+          critical: true,
+          section: "operations"
+        },
+        {
+          key: "florists",
+          label: "Активный флорист",
+          ok: Number(readiness.active_florists) > 0,
+          value: String(Number(readiness.active_florists) || 0),
+          critical: true,
+          section: "operations"
+        },
+        {
+          key: "couriers",
+          label: "Активный курьер",
+          ok: Number(readiness.active_couriers) > 0,
+          value: String(Number(readiness.active_couriers) || 0),
+          critical: true,
+          section: "operations"
+        },
+        {
+          key: "telegram_managers",
+          label: "Telegram менеджера",
+          ok: Number(readiness.linked_managers) > 0,
+          value: String(Number(readiness.linked_managers) || 0),
+          critical: true,
+          section: "communications"
+        },
+        {
+          key: "telegram_florists",
+          label: "Telegram флориста",
+          ok: Number(readiness.linked_florists) > 0,
+          value: String(Number(readiness.linked_florists) || 0),
+          critical: true,
+          section: "communications"
+        },
+        {
+          key: "telegram_couriers",
+          label: "Telegram курьера",
+          ok: Number(readiness.linked_couriers) > 0,
+          value: String(Number(readiness.linked_couriers) || 0),
+          critical: true,
+          section: "communications"
+        },
+        {
+          key: "notification_failures",
+          label: "Критические ошибки уведомлений за 24 часа",
+          ok: Number(readiness.failed_notifications) === 0,
+          value: String(Number(readiness.failed_notifications) || 0),
+          critical: true,
+          section: "communications"
+        },
+        {
+          key: "notification_queue",
+          label: "Зависшие уведомления",
+          ok: Number(readiness.stale_notifications) === 0,
+          value: String(Number(readiness.stale_notifications) || 0),
+          critical: false,
+          section: "communications"
+        },
+        {
+          key: "payment_methods",
+          label: "Доступен способ оплаты",
+          ok: anyPaymentEnabled,
+          value: anyPaymentEnabled ? "Настроен" : "Нет доступных способов",
+          critical: true,
+          section: "payments"
+        },
+        {
+          key: "yookassa",
+          label: "ЮKassa для карты и СБП",
+          ok: !onlinePaymentsEnabled || yookassaConfigured,
+          value: onlinePaymentsEnabled
+            ? yookassaConfigured ? "Настроена" : "Нет ключей"
+            : "Онлайн-оплата выключена",
+          critical: onlinePaymentsEnabled,
+          section: "payments",
+          hint: "Если онлайн-оплата включена, Shop ID и секретный ключ должны пройти тест в разделе финансов."
         },
         {
           key: "legal",
           label: "Юридическое наименование",
           ok: Boolean(String(readiness.legal_name ?? "").trim()),
           value: String(readiness.legal_name ?? "").trim() || "Не заполнено",
-          critical: true
+          critical: true,
+          section: "legal"
         },
         {
           key: "inn",
           label: "ИНН",
           ok: Boolean(String(readiness.inn ?? "").trim()),
           value: String(readiness.inn ?? "").trim() || "Не заполнено",
-          critical: true
+          critical: true,
+          section: "legal"
+        },
+        {
+          key: "legal_documents",
+          label: "Юридические документы",
+          ok: legalDocumentsReady,
+          value: legalDocumentsReady
+            ? customLegalDocuments === 5
+              ? "5 из 5 сохранены"
+              : `Базовые шаблоны; собственных: ${customLegalDocuments} из 5`
+            : "Не хватает реквизитов",
+          critical: true,
+          section: "legal",
+          hint: "Если собственный текст не заполнен, сайт использует опубликованные базовые шаблоны с реквизитами магазина."
+        },
+        {
+          key: "custom_legal_documents",
+          label: "Собственные тексты документов",
+          ok: customLegalDocuments === 5,
+          value: `${customLegalDocuments} из 5`,
+          critical: false,
+          section: "legal"
         },
         {
           key: "email",
           label: "Email магазина",
           ok: Boolean(String(readiness.email ?? "").trim()),
           value: String(readiness.email ?? "").trim() || "Не заполнено",
-          critical: false
+          critical: false,
+          section: "legal"
         },
         {
           key: "phone",
           label: "Телефон магазина",
           ok: Boolean(String(settingsRow?.phone ?? "").trim()),
           value: String(settingsRow?.phone ?? "").trim() || "Не заполнено",
-          critical: true
+          critical: true,
+          section: "legal"
         },
         {
           key: "address",
           label: "Адрес магазина",
           ok: Boolean(String(settingsRow?.address ?? "").trim()),
           value: String(settingsRow?.address ?? "").trim() || "Не заполнено",
-          critical: false
+          critical: false,
+          section: "legal"
         }
       ];
+
+      let controlOrder: ControlOrderSnapshot | null = null;
+
+      if (selectedOrderId) {
+        const controlRows = await client<{
+          id: string;
+          order_number: string;
+          status: string;
+          payment_status: string;
+          payment_method: string;
+          payment_provider: string | null;
+          tracking_token: string | null;
+          manager_id: string | null;
+          florist_id: string | null;
+          courier_id: string | null;
+          bouquet_photo_url: string | null;
+          bouquet_approval_status: string | null;
+          delivery_proof_photo_url: string | null;
+          bonus_earned: number;
+          sent_notifications: number;
+          failed_notifications: number;
+          status_history: string[] | null;
+        }[]>`
+          SELECT
+            o.id,
+            o.order_number,
+            o.status::text AS status,
+            o.payment_status::text AS payment_status,
+            o.payment_method::text AS payment_method,
+            (
+              SELECT p.provider
+              FROM payments p
+              WHERE p.order_id = o.id
+              ORDER BY p.created_at DESC
+              LIMIT 1
+            ) AS payment_provider,
+            o.tracking_token,
+            o.manager_id,
+            o.florist_id,
+            o.courier_id,
+            o.bouquet_photo_url,
+            o.metadata #>> '{bouquetApproval,status}' AS bouquet_approval_status,
+            o.metadata #>> '{delivery,proofPhotoUrl}' AS delivery_proof_photo_url,
+            o.bonus_earned,
+            (
+              SELECT COUNT(*)::int
+              FROM notification_outbox no
+              WHERE no.order_id = o.id
+                AND no.status = 'sent'
+            ) AS sent_notifications,
+            (
+              SELECT COUNT(*)::int
+              FROM notification_outbox no
+              WHERE no.order_id = o.id
+                AND no.status IN ('dead', 'partial')
+            ) AS failed_notifications,
+            ARRAY(
+              SELECT DISTINCT history.to_status::text
+              FROM order_status_history history
+              WHERE history.order_id = o.id
+              ORDER BY history.to_status::text
+            ) AS status_history
+          FROM orders o
+          WHERE o.shop_id = ${shop.id}
+            AND o.id = ${selectedOrderId}::uuid
+          LIMIT 1
+        `;
+        const row = controlRows[0];
+
+        if (row) {
+          controlOrder = {
+            id: row.id,
+            orderNumber: row.order_number,
+            status: row.status,
+            paymentStatus: row.payment_status,
+            paymentMethod: row.payment_method,
+            paymentProvider: row.payment_provider,
+            trackingToken: row.tracking_token,
+            managerId: row.manager_id,
+            floristId: row.florist_id,
+            courierId: row.courier_id,
+            bouquetPhotoUrl: row.bouquet_photo_url,
+            bouquetApprovalStatus: row.bouquet_approval_status,
+            deliveryProofPhotoUrl: row.delivery_proof_photo_url,
+            bonusEarned: Number(row.bonus_earned || 0),
+            sentNotifications: Number(row.sent_notifications || 0),
+            failedNotifications: Number(row.failed_notifications || 0),
+            statusHistory: Array.isArray(row.status_history) ? row.status_history : []
+          };
+        }
+      }
+
+      const controlItems = buildControlOrderItems(controlOrder, onlinePaymentsEnabled);
+      const allItems = [...items, ...controlItems];
 
       return {
         ok: true,
         settings: settingsRow,
-        readiness: items
+        readiness: allItems,
+        summary: buildLaunchSummary(allItems),
+        controlOrder,
+        recentOrders: recentOrders.map((order) => ({
+          id: order.id,
+          orderNumber: order.order_number,
+          status: order.status,
+          paymentStatus: order.payment_status,
+          paymentMethod: order.payment_method,
+          total: Number(order.total || 0),
+          customerName: order.customer_name,
+          createdAt: order.created_at,
+          selected: order.id === selectedOrderId
+        })),
+        payment: {
+          onlineEnabled: onlinePaymentsEnabled,
+          yookassaConfigured
+        }
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
+  app.post("/api/admin/launch/test-order", async (request, reply) => {
+    const body = z.object({
+      orderId: z.string().uuid().nullable()
+    }).parse(request.body ?? {});
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+
+      if (body.orderId) {
+        const orderRows = await client<{ id: string }[]>`
+          SELECT id
+          FROM orders
+          WHERE id = ${body.orderId}::uuid
+            AND shop_id = ${shop.id}
+          LIMIT 1
+        `;
+
+        if (!orderRows[0]) {
+          return reply.status(404).send({
+            ok: false,
+            message: "Заказ не найден"
+          });
+        }
+      }
+
+      const selectedAt = body.orderId ? new Date().toISOString() : null;
+      await client`
+        INSERT INTO shop_settings (
+          shop_id,
+          settings,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          ${shop.id},
+          jsonb_build_object(
+            'launchValidation',
+            jsonb_build_object(
+              'controlOrderId', ${body.orderId},
+              'selectedAt', ${selectedAt}
+            )
+          ),
+          NOW(),
+          NOW()
+        )
+        ON CONFLICT (shop_id)
+        DO UPDATE SET
+          settings = jsonb_set(
+            COALESCE(shop_settings.settings, '{}'::jsonb),
+            '{launchValidation}',
+            COALESCE(shop_settings.settings -> 'launchValidation', '{}'::jsonb)
+              || jsonb_build_object(
+                'controlOrderId', ${body.orderId},
+                'selectedAt', ${selectedAt}
+              ),
+            true
+          ),
+          updated_at = NOW()
+      `;
+
+      return {
+        ok: true,
+        controlOrderId: body.orderId
       };
     } finally {
       await client.end();

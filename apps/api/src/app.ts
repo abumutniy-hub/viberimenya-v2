@@ -10,6 +10,14 @@ import { paymentRoutes } from "./routes/payments";
 import { env } from "./lib/env";
 import { HttpError } from "./lib/http-error";
 
+function getErrorStatusCode(error: unknown): number | null {
+  if (typeof error !== "object" || error === null || !("statusCode" in error)) {
+    return null;
+  }
+
+  return typeof error.statusCode === "number" ? error.statusCode : null;
+}
+
 function allowedCorsOrigins() {
   const origins = new Set<string>();
   const appUrl = new URL(env.APP_URL);
@@ -83,6 +91,13 @@ export async function buildApi() {
       return reply.status(error.statusCode).send({
         ok: false,
         error: error.message
+      });
+    }
+
+    if (getErrorStatusCode(error) === 400) {
+      return reply.status(400).send({
+        ok: false,
+        error: "Invalid request"
       });
     }
 
