@@ -286,6 +286,7 @@ export function TrackClient({ token }: { token: string }) {
   const [paymentMessage, setPaymentMessage] = useState("");
   const [paymentError, setPaymentError] = useState(false);
   const [paymentClock, setPaymentClock] = useState(() => Date.now());
+  const [createdNotice, setCreatedNotice] = useState("");
   const paymentActionHandled = useRef(false);
 
   const loadOrder = useCallback(
@@ -321,6 +322,21 @@ export function TrackClient({ token }: { token: string }) {
     },
     [token],
   );
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const created = url.searchParams.get("created");
+
+    if (created === "1" || created === "reused") {
+      setCreatedNotice(
+        created === "reused"
+          ? "Заказ уже был создан ранее. Повторный запрос распознан, второй заказ не добавлен."
+          : "Заказ успешно оформлен. Менеджер проверит состав, время и способ оплаты.",
+      );
+      url.searchParams.delete("created");
+      window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    }
+  }, []);
 
   useEffect(() => {
     void loadOrder(false);
@@ -576,6 +592,13 @@ export function TrackClient({ token }: { token: string }) {
           </button>
         </div>
       </section>
+
+      {createdNotice ? (
+        <section className="track-alert created">
+          <strong>Заказ принят</strong>
+          <p>{createdNotice}</p>
+        </section>
+      ) : null}
 
       {order.status === "problem" || order.status === "cancelled" ? (
         <section className={`track-alert ${order.status}`}>

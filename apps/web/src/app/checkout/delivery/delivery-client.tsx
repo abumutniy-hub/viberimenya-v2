@@ -459,7 +459,7 @@ export function CheckoutDeliveryClient() {
     }
 
     const saved = await saveDraft(true);
-    if (saved) router.push("/cart#checkout-delivery");
+    if (saved) router.push("/checkout/review");
   }
 
   if (pageState === "loading") {
@@ -829,7 +829,7 @@ export function CheckoutDeliveryClient() {
           <div className={styles.footerActions}>
             <Link className={styles.secondaryLink} href="/checkout">Назад</Link>
             <button className={styles.primaryButton} type="button" disabled={saveState === "saving" || !options.acceptingOrders} onClick={() => void continueCheckout()}>
-              Продолжить оформление
+              К проверке заказа
             </button>
           </div>
         </footer>

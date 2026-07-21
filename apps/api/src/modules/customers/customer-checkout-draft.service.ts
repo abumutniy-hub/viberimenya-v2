@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { isYooKassaConfigured } from "../payments/yookassa.service";
 import {
   getCommerceCartSnapshot,
   resolveCustomerCommerceCartScope,
@@ -1234,7 +1235,8 @@ export async function quoteCustomerCheckoutDraft(
       ? settingsRow?.is_cash_payment_enabled !== false
       : paymentMethod === "transfer_after_confirm"
         ? settingsRow?.is_transfer_payment_enabled !== false
-        : settingsRow?.is_online_payment_enabled === true;
+        : settingsRow?.is_online_payment_enabled === true
+          && isYooKassaConfigured();
 
   if (!paymentEnabled) {
     addIssue(issues, {
