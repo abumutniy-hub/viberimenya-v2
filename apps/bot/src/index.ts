@@ -158,12 +158,14 @@ const RUN_ONCE = process.env.BOT_RUN_ONCE === "true";
 const POLL_INTERVAL_MS = envNumber("BOT_POLL_INTERVAL_MS", 1000, 300, 2000);
 const TELEGRAM_UPDATES_TIMEOUT_SECONDS = envNumber("BOT_GET_UPDATES_TIMEOUT_SECONDS", 5, 1, 25);
 const SITE_URL = process.env.APP_URL || process.env.PUBLIC_SITE_URL || process.env.NEXT_PUBLIC_SITE_URL || "https://viberimenya.ru";
-const INTERNAL_API_URL = process.env.INTERNAL_API_URL || "http://127.0.0.1:4001";
-const INTERNAL_ORDER_TOKEN = TELEGRAM_BOT_TOKEN
+const INTERNAL_API_URL = process.env.COMMERCE_CORE_URL
+  || process.env.INTERNAL_API_URL
+  || "http://127.0.0.1:4001";
+const INTERNAL_ORDER_TOKEN = process.env.COMMERCE_TELEGRAM_SERVICE_TOKEN || (TELEGRAM_BOT_TOKEN
   ? createHash("sha256")
       .update(`viberimenya:telegram-order-create:v1:${TELEGRAM_BOT_TOKEN}`)
       .digest("hex")
-  : "";
+  : "");
 const DEFAULT_SHOP_SLUG = process.env.DEFAULT_SHOP_SLUG || "viberimenya";
 const UPLOADS_DIR = process.env.UPLOADS_DIR || resolve(process.cwd(), "../../storage/uploads");
 const NOTIFICATION_SOURCE = (process.env.BOT_NOTIFICATION_SOURCE || "outbox").trim().toLowerCase();
@@ -4354,7 +4356,7 @@ async function showCheckoutConfirm(chatId: number, data: TelegramCheckoutData) {
       ...issueLines,
       "",
       quote?.readyForConfirmation
-        ? "Все данные готовы. На этапе 17B-2C.1C эта кнопка создаст и зарезервирует заказ атомарно."
+        ? "Все данные готовы. Нажмите кнопку ниже, чтобы оформить заказ."
         : "Исправьте отмеченные пункты и повторите расчёт.",
     ]),
     rows,
@@ -11101,6 +11103,20 @@ function formatEvent(event: NotificationEvent): string {
       ].filter(Boolean).join("\n");
     }
 
+    if (event.type === "order_payment_expired") {
+      const bonusReturned = Number(payloadValue(payload, "bonusReturned", "bonus_returned") || 0);
+      const promoRestored = payloadValue(payload, "promoRestored", "promo_restored") === true;
+
+      return [
+        `⌛ Срок оплаты заказа ${orderTitle} истёк`,
+        "",
+        "Заказ отменён, зарезервированные товары снова доступны.",
+        bonusReturned > 0 ? `Бонусы возвращены: ${bonusReturned}` : "",
+        promoRestored ? "Промокод восстановлен." : "",
+        trackingUrl ? `Страница заказа: ${trackingUrl}` : ""
+      ].filter(Boolean).join("\n");
+    }
+
     if (event.type === "order_refunded") {
       const refundAmount = payloadValue(
         payload,
@@ -11231,6 +11247,15 @@ function formatEvent(event: NotificationEvent): string {
       `💰 Заказ ${orderTitle} оплачен`,
       totalText ? `Сумма: ${totalText}` : "",
       customerPhone ? `Телефон: ${customerPhone}` : "",
+      trackingUrl ? `Ссылка: ${trackingUrl}` : ""
+    ].filter(Boolean).join("\n");
+  }
+
+  if (event.type === "order_payment_expired") {
+    return [
+      `⌛ Истёк срок оплаты заказа ${orderTitle}`,
+      totalText ? `Сумма: ${totalText}` : "",
+      "Заказ отменён, резерв товаров и применённые льготы освобождены.",
       trackingUrl ? `Ссылка: ${trackingUrl}` : ""
     ].filter(Boolean).join("\n");
   }
@@ -11951,6 +11976,7 @@ async function sendOutboxEventToRecipient(
   const orderId = payloadText(payload, "orderId", "order_id");
   const crmUrl = absoluteUrl(payloadValue(payload, "crmUrl", "crm_url"));
   const trackingUrl = absoluteUrl(payloadValue(payload, "trackingUrl", "tracking_url"));
+  const paymentUrl = absoluteUrl(payloadValue(payload, "paymentUrl", "payment_url"));
   const deliveryAddressText = payloadText(payload, "deliveryAddressText", "delivery_address_text");
   const actionButtonRows: TelegramInlineKeyboardButton[][] = [];
 
@@ -11994,6 +12020,10 @@ async function sendOutboxEventToRecipient(
   }
 
   if (event.recipient_type === "customer" && trackingUrl) {
+    if (event.type === "payment_link_added" && paymentUrl) {
+      actionButtonRows.push([{ text: "💳 Оплатить заказ", url: paymentUrl }]);
+    }
+
     actionButtonRows.push([{ text: "Открыть заказ", url: trackingUrl }]);
   }
 

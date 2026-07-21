@@ -15,6 +15,13 @@
       "when": 1784455214097,
       "tag": "0001_event_core_outbox",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1784627701566,
+      "tag": "0002_payment_core_yookassa",
+      "breakpoints": true
     }
   ]
 }

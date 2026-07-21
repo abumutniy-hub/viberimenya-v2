@@ -56,7 +56,6 @@ type FinanceResponse = {
     shopId: string;
     secretKeyConfigured: boolean;
     receiptsEnabled: boolean;
-    testModeHint: boolean;
   };
 };
 
@@ -67,7 +66,6 @@ type YooKassaSettingsResponse = {
     enabled: boolean;
     shopId: string;
     secretKeyConfigured: boolean;
-    testMode: boolean;
     receiptsEnabled: boolean;
     webhookUrl: string;
   };
@@ -76,11 +74,15 @@ type YooKassaSettingsResponse = {
 type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 
 const statusLabels: Record<string, string> = {
+  created: "Создан",
   pending: "Ожидает",
+  waiting_for_capture: "Ожидает подтверждения",
   paid: "Оплачен",
   failed: "Ошибка",
   refunded: "Возврат",
+  partially_refunded: "Частичный возврат",
   cancelled: "Отменён",
+  expired: "Истёк",
   not_required: "Не требуется"
 };
 
@@ -192,9 +194,6 @@ export default async function FinancePage({ searchParams }: { searchParams: Sear
                 ? "Выключена"
                 : "Ожидает ключи"}
           </strong>
-          <small>
-            Режим: {data?.provider?.testModeHint ? "тестовый" : "боевой"}
-          </small>
           <small>
             Чеки: {data?.provider?.receiptsEnabled ? "передаются через API" : "выключены"}
           </small>

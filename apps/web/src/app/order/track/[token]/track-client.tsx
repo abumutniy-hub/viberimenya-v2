@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   addRepeatOrderProducts,
   type RepeatOrderCartProduct,
@@ -56,6 +56,10 @@ type Payment = {
   paymentUrl?: string | null;
   provider?: string;
   providerPaymentId?: string | null;
+  expires_at?: string | null;
+  expiresAt?: string | null;
+  attempt_no?: number | null;
+  attemptNo?: number | null;
 } | null;
 
 type TrackResponse = {
@@ -105,11 +109,15 @@ function statusText(status: string) {
 function paymentText(status: string) {
   const map: Record<string, string> = {
     not_required: "Оплата не требуется",
+    created: "Платёж создаётся",
     pending: "Ожидает оплаты",
+    waiting_for_capture: "Оплата подтверждается",
     paid: "Оплачен",
     failed: "Ошибка оплаты",
     refunded: "Возврат",
+    partially_refunded: "Частичный возврат",
     cancelled: "Отменена",
+    expired: "Срок оплаты истёк",
   };
 
   return map[status] || status;
@@ -277,6 +285,8 @@ export function TrackClient({ token }: { token: string }) {
   const [paymentBusy, setPaymentBusy] = useState(false);
   const [paymentMessage, setPaymentMessage] = useState("");
   const [paymentError, setPaymentError] = useState(false);
+  const [paymentClock, setPaymentClock] = useState(() => Date.now());
+  const paymentActionHandled = useRef(false);
 
   const loadOrder = useCallback(
     async (silent: boolean) => {
@@ -325,13 +335,23 @@ export function TrackClient({ token }: { token: string }) {
   }, [loadOrder]);
 
   useEffect(() => {
-    const returnedFromPayment =
-      new URLSearchParams(window.location.search).get("payment") === "return";
+    if (!order || paymentActionHandled.current) return;
 
-    if (returnedFromPayment) {
-      window.setTimeout(() => void preparePayment(true), 400);
-    }
-  }, []);
+    const action = new URLSearchParams(window.location.search).get("payment");
+
+    if (action !== "return" && action !== "prepare") return;
+
+    paymentActionHandled.current = true;
+    window.setTimeout(() => void preparePayment(action === "return"), 200);
+  }, [order]);
+
+  useEffect(() => {
+    const expiresAt = payment?.expiresAt || payment?.expires_at;
+    if (!expiresAt) return;
+
+    const timer = window.setInterval(() => setPaymentClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [payment?.expiresAt, payment?.expires_at]);
 
   const canRepeat = useMemo(
     () => items.some((item) => Boolean(item.productId)),
@@ -613,8 +633,28 @@ export function TrackClient({ token }: { token: string }) {
             <p>Заказ оплачен. Спасибо!</p>
           ) : order.paymentStatus === "refunded" ? (
             <p>По заказу выполнен возврат.</p>
+          ) : order.paymentStatus === "partially_refunded" ? (
+            <p>По заказу выполнен частичный возврат.</p>
+          ) : order.paymentStatus === "expired" ? (
+            <p>Срок оплаты истёк. Резерв товаров освобождён.</p>
+          ) : order.paymentStatus === "cancelled" || order.status === "cancelled" ? (
+            <p>Заказ отменён, оплата недоступна.</p>
           ) : order.paymentMethod === "online_card" || order.paymentMethod === "sbp" ? (
             <>
+              {(() => {
+                const expiresAt = payment?.expiresAt || payment?.expires_at;
+                if (!expiresAt) return null;
+                const remaining = Math.max(0, new Date(expiresAt).getTime() - paymentClock);
+                const hours = Math.floor(remaining / 3_600_000);
+                const minutes = Math.floor((remaining % 3_600_000) / 60_000);
+                const seconds = Math.floor((remaining % 60_000) / 1000);
+                return (
+                  <p>
+                    Оплатить до: {hours > 0 ? `${hours} ч ` : ""}
+                    {String(minutes).padStart(2, "0")}:{String(seconds).padStart(2, "0")}
+                  </p>
+                );
+              })()}
               {payment?.paymentUrl || payment?.payment_url ? (
                 <>
                   <p>Безопасная ссылка на оплату готова.</p>

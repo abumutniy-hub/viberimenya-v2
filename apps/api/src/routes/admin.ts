@@ -14,6 +14,7 @@ import {
   resolveProductAvailability
 } from "../lib/catalog-product";
 import { markOrderPaid } from "../modules/orders/order-payment.service";
+import { recordPaymentEvent } from "../modules/payments/payment-audit.service";
 import {
   recordFullOrderRefund,
   rollbackOrderFinancialsOnCancellation
@@ -508,8 +509,7 @@ const yookassaSettingsSchema = z.object({
   secretKey: z.string().trim().max(300).refine(
     (value) => !/\s/.test(value),
     "Секретный ключ не должен содержать пробелы"
-  ).optional().default(""),
-  testMode: z.coerce.boolean().optional().default(true)
+  ).optional().default("")
 });
 
 function yookassaWebhookUrl() {
@@ -1260,6 +1260,7 @@ type CustomerNotificationType =
   | "order_delivered"
   | "order_problem"
   | "order_cancelled"
+  | "order_payment_expired"
   | "order_refunded";
 
 async function queueCustomerOrderNotification(
@@ -2222,7 +2223,6 @@ export async function adminRoutes(app: FastifyInstance) {
           enabled: rows[0]?.is_online_payment_enabled === true,
           shopId: runtime.shopId,
           secretKeyConfigured: Boolean(runtime.secretKey),
-          testMode: runtime.testMode,
           receiptsEnabled: env.YOOKASSA_RECEIPTS_ENABLED,
           webhookUrl: yookassaWebhookUrl()
         }
@@ -2258,7 +2258,6 @@ export async function adminRoutes(app: FastifyInstance) {
     const credentialsChanged = (
       shopId !== previous.shopId
       || Boolean(body.secretKey)
-      || body.testMode !== previous.testMode
     );
 
     if (body.shopId && body.shopId !== previous.shopId && !body.secretKey) {
@@ -2280,7 +2279,7 @@ export async function adminRoutes(app: FastifyInstance) {
     const nextRuntime = {
       shopId,
       secretKey,
-      testMode: body.testMode
+      testMode: previous.testMode
     };
 
     await persistYooKassaRuntimeSettings(nextRuntime);
@@ -2318,7 +2317,6 @@ export async function adminRoutes(app: FastifyInstance) {
           enabled: body.enabled,
           shopId,
           secretKeyConfigured: Boolean(secretKey),
-          testMode: body.testMode,
           webhookUrl: yookassaWebhookUrl()
         }
       };
@@ -2341,7 +2339,7 @@ export async function adminRoutes(app: FastifyInstance) {
         FROM payments
         WHERE shop_id = ${shop.id}
           AND provider = 'yookassa'
-          AND status = 'pending'
+          AND status IN ('created', 'pending', 'waiting_for_capture')
       `;
 
       if (Number(pendingRows[0]?.total ?? 0) > 0) {
@@ -2351,7 +2349,7 @@ export async function adminRoutes(app: FastifyInstance) {
       await persistYooKassaRuntimeSettings({
         shopId: "",
         secretKey: "",
-        testMode: true
+        testMode: previous.testMode
       });
 
       try {
@@ -2388,11 +2386,16 @@ export async function adminRoutes(app: FastifyInstance) {
       q: z.string().trim().max(120).optional().default(""),
       status: z.enum([
         "all",
+        "created",
         "pending",
+        "waiting_for_capture",
         "paid",
         "failed",
         "refunded",
-        "cancelled"
+        "partially_refunded",
+        "cancelled",
+        "expired",
+        "not_required"
       ]).optional().default("all"),
       dateFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
       dateTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
@@ -2434,8 +2437,12 @@ export async function adminRoutes(app: FastifyInstance) {
             COUNT(*) FILTER (WHERE status = 'paid')::int AS paid_count,
             COALESCE(SUM(amount) FILTER (WHERE status = 'refunded'), 0)::bigint AS refunded_amount,
             COUNT(*) FILTER (WHERE status = 'refunded')::int AS refunded_count,
-            COALESCE(SUM(amount) FILTER (WHERE status = 'pending'), 0)::bigint AS pending_amount,
-            COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_count,
+            COALESCE(SUM(amount) FILTER (
+              WHERE status IN ('created', 'pending', 'waiting_for_capture')
+            ), 0)::bigint AS pending_amount,
+            COUNT(*) FILTER (
+              WHERE status IN ('created', 'pending', 'waiting_for_capture')
+            )::int AS pending_count,
             COUNT(*) FILTER (WHERE status = 'failed')::int AS failed_count
           FROM payments
           WHERE shop_id = ${shop.id}
@@ -4278,6 +4285,23 @@ export async function adminRoutes(app: FastifyInstance) {
         `;
 
         if (nextTotal !== Number(order.total || 0)) {
+          const providerPaymentRows = await transaction<{ total: number }[]>`
+            SELECT COUNT(*)::int AS total
+            FROM payments
+            WHERE shop_id = ${shop.id}
+              AND order_id = ${order.id}
+              AND provider = 'yookassa'
+              AND provider_payment_id IS NOT NULL
+              AND status IN ('created', 'pending', 'waiting_for_capture')
+          `;
+
+          if (Number(providerPaymentRows[0]?.total ?? 0) > 0) {
+            throw new HttpError(
+              409,
+              "Сумму нельзя менять после создания платежа ЮKassa. Сначала отмените платёжную попытку"
+            );
+          }
+
           await transaction`
             UPDATE payments
             SET amount = ${nextTotal},
@@ -4287,7 +4311,8 @@ export async function adminRoutes(app: FastifyInstance) {
               FROM payments
               WHERE shop_id = ${shop.id}
                 AND order_id = ${order.id}
-                AND status = 'pending'
+                AND provider_payment_id IS NULL
+                AND status IN ('created', 'pending', 'waiting_for_capture')
               ORDER BY created_at DESC
               LIMIT 1
             )
@@ -6031,18 +6056,28 @@ export async function adminRoutes(app: FastifyInstance) {
           throw new HttpError(400, "Оплата заказа отменена");
         }
 
-        const existingRows = await transaction<{ id: string; payment_url: string | null }[]>`
-          SELECT id, payment_url
+        const existingRows = await transaction<{
+          id: string;
+          payment_url: string | null;
+          attempt_no: number;
+          status: string;
+        }[]>`
+          SELECT id, payment_url, attempt_no, status::text AS status
           FROM payments
           WHERE shop_id = ${shop.id}
             AND order_id = ${order.id}
-            AND status = 'pending'
+            AND provider = 'manual'
           ORDER BY created_at DESC
-          LIMIT 1
           FOR UPDATE
         `;
 
-        const existing = existingRows[0];
+        const existing = existingRows.find((payment) => (
+          ["created", "pending", "waiting_for_capture"].includes(payment.status)
+        ));
+        const attemptNo = existingRows.reduce(
+          (maximum, payment) => Math.max(maximum, Number(payment.attempt_no || 0)),
+          0
+        ) + 1;
         let paymentRows;
 
         if (existing) {
@@ -6060,11 +6095,12 @@ export async function adminRoutes(app: FastifyInstance) {
         } else {
           paymentRows = await transaction`
             INSERT INTO payments (
-              shop_id, order_id, provider, method, status, amount, currency,
+              shop_id, order_id, provider, attempt_no, idempotency_key, method, status, amount, currency,
               payment_url, raw_payload, created_at, updated_at
             )
             VALUES (
-              ${shop.id}, ${order.id}, 'manual', ${order.payment_method}::payment_method,
+              ${shop.id}, ${order.id}, 'manual', ${attemptNo}, ${`manual-link-${randomUUID()}`.slice(0, 64)},
+              ${order.payment_method}::payment_method,
               'pending', ${Number(order.total || 0)}, 'RUB', ${body.paymentUrl},
               ${JSON.stringify({ source: "admin_manual_link", createdByUserId: adminContext.userId })}::jsonb,
               NOW(), NOW()
@@ -6080,6 +6116,32 @@ export async function adminRoutes(app: FastifyInstance) {
         `;
 
         const linkChanged = !existing || existing.payment_url !== body.paymentUrl;
+
+        const paymentId = String(
+          (paymentRows[0] as Record<string, unknown> | undefined)?.id ?? ""
+        );
+
+        if (!paymentId) {
+          throw new HttpError(500, "Не удалось определить платёжную запись");
+        }
+
+        await recordPaymentEvent({
+          client: transaction,
+          shopId: shop.id,
+          orderId: order.id,
+          paymentId,
+          provider: "manual",
+          eventType: existing ? "payment.link_updated" : "payment.attempt_created",
+          source: "admin_manual_link",
+          previousStatus: existing ? "pending" : null,
+          nextStatus: "pending",
+          idempotencyKey: `admin-link:${randomUUID()}`,
+          payload: {
+            actorUserId: adminContext.userId,
+            attemptNo: existing?.attempt_no ?? attemptNo,
+            linkChanged
+          }
+        });
 
         if (linkChanged) {
           await addOrderOperationalHistory(transaction, {
@@ -6098,7 +6160,7 @@ export async function adminRoutes(app: FastifyInstance) {
             extraPayload: {
               amount: order.total,
               paymentUrl: body.paymentUrl,
-              paymentId: (paymentRows[0] as Record<string, unknown> | undefined)?.id ?? null
+              paymentId
             }
           });
         }

@@ -1,5 +1,6 @@
 import type { createDb } from "@viberimenya/db";
 import { HttpError } from "../../lib/http-error";
+import { recordPaymentEvent } from "../payments/payment-audit.service";
 
 type SqlClient =
   ReturnType<
@@ -7,10 +8,12 @@ type SqlClient =
   >["client"];
 
 type MarkOrderPaidParams = {
-  client: SqlClient;
+  client?: SqlClient;
+  transaction?: unknown;
   shopId: string;
   orderId: string;
   source?: "admin_manual_paid" | "yookassa_webhook" | "yookassa_sync";
+  paymentId?: string;
   providerPaymentId?: string;
   providerPayload?: unknown;
   paidAt?: string | null;
@@ -36,6 +39,7 @@ type PaymentRow = {
   id: string;
   status: string;
   provider: string;
+  provider_payment_id: string | null;
 };
 
 type EarnRow = {
@@ -74,8 +78,7 @@ export async function markOrderPaid(
 ): Promise<MarkOrderPaidResult> {
   const bonusRatePercent = 5;
 
-  return params.client.begin(
-    async (transaction) => {
+  const execute = async (transaction: SqlClient): Promise<MarkOrderPaidResult> => {
       const orderRows =
         await transaction<
           LockedOrderRow[]
@@ -269,7 +272,8 @@ export async function markOrderPaid(
             id,
             status::text
               AS status,
-            provider
+            provider,
+            provider_payment_id
           FROM payments
           WHERE shop_id =
               ${params.shopId}
@@ -372,7 +376,7 @@ export async function markOrderPaid(
                   '{}'::jsonb
                 )
                 || jsonb_build_object(
-                  ${paymentAuditKey},
+                  ${paymentAuditKey}::text,
                   CAST(
                     ${JSON.stringify(
                       paymentAudit
@@ -391,16 +395,26 @@ export async function markOrderPaid(
         `;
       }
 
-      const latestPayment =
-        paymentRows[0];
+      const selectedPayment = params.paymentId
+        ? paymentRows.find((payment) => payment.id === params.paymentId)
+        : params.providerPaymentId
+          ? paymentRows.find(
+              (payment) => payment.provider_payment_id === params.providerPaymentId
+            ) ?? paymentRows[0]
+          : paymentRows[0];
+
+      if (params.paymentId && !selectedPayment) {
+        throw new HttpError(409, "Платёжная попытка заказа не найдена");
+      }
 
       let paymentCreated = false;
+      let paymentId = selectedPayment?.id ?? null;
 
       const paymentRepaired =
         wasAlreadyPaid
         && paidPayments.length === 0;
 
-      if (latestPayment) {
+      if (selectedPayment) {
         await transaction`
           UPDATE payments
           SET
@@ -430,15 +444,16 @@ export async function markOrderPaid(
           WHERE shop_id =
               ${params.shopId}
             AND id =
-              ${latestPayment.id}
+              ${selectedPayment.id}
         `;
       } else {
-        await transaction`
+        const createdPaymentRows = await transaction<{ id: string }[]>`
           INSERT INTO payments (
             shop_id,
             order_id,
             provider,
             provider_payment_id,
+            idempotency_key,
             method,
             status,
             amount,
@@ -458,6 +473,11 @@ export async function markOrderPaid(
                 : "manual"
             },
             ${params.providerPaymentId ?? null},
+            ${(
+              (params.source ?? "").startsWith("yookassa")
+                ? `yookassa-paid-${params.providerPaymentId ?? order.id}`
+                : `manual-paid-${order.id}`
+            ).slice(0, 64)},
             ${order.payment_method}
               ::payment_method,
             'paid',
@@ -474,10 +494,39 @@ export async function markOrderPaid(
             NOW(),
             NOW()
           )
+          RETURNING id
         `;
 
         paymentCreated = true;
+        paymentId = createdPaymentRows[0]?.id ?? null;
       }
+
+      if (!paymentId) {
+        throw new HttpError(500, "Не удалось определить платёжную запись");
+      }
+
+      await recordPaymentEvent({
+        client: transaction,
+        shopId: params.shopId,
+        orderId: order.id,
+        paymentId,
+        provider: (params.source ?? "").startsWith("yookassa") ? "yookassa" : "manual",
+        eventType: "payment.paid",
+        source: params.source ?? "admin_manual_paid",
+        previousStatus: (selectedPayment?.status ?? order.payment_status) as
+          | "created"
+          | "pending"
+          | "waiting_for_capture"
+          | "paid"
+          | "failed"
+          | "cancelled"
+          | "expired",
+        nextStatus: "paid",
+        providerEventId: params.providerPaymentId ?? null,
+        idempotencyKey: `paid:${params.source ?? "admin_manual_paid"}:${params.providerPaymentId ?? order.id}`,
+        payload: paymentAudit,
+        occurredAt: params.paidAt ?? null,
+      });
 
       if (
         !wasAlreadyPaid
@@ -741,6 +790,17 @@ export async function markOrderPaid(
         paymentCreated,
         paymentRepaired
       };
-    }
+    };
+
+  if (params.transaction) {
+    return execute(params.transaction as SqlClient);
+  }
+
+  if (!params.client) {
+    throw new HttpError(500, "Не передано подключение к базе данных");
+  }
+
+  return params.client.begin(
+    async (transaction) => execute(transaction as unknown as SqlClient)
   );
 }

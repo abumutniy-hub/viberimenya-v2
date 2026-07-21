@@ -62,11 +62,15 @@ function statusText(status: string) {
 function paymentText(status: string) {
   const map: Record<string, string> = {
     not_required: "Оплата не требуется",
+    created: "Платёж создаётся",
     pending: "Ожидает оплаты",
+    waiting_for_capture: "Оплата подтверждается",
     paid: "Оплачен",
     failed: "Ошибка оплаты",
     refunded: "Возврат",
+    partially_refunded: "Частичный возврат",
     cancelled: "Оплата отменена",
+    expired: "Срок оплаты истёк",
   };
 
   return map[status] || status;

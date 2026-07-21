@@ -80,6 +80,10 @@ const LOCAL_TELEGRAM_ORDER_SOURCE = "telegram-bot";
 const TELEGRAM_ORDER_TOKEN_CONTEXT = "viberimenya:telegram-order-create:v1";
 
 function telegramOrderInternalToken() {
+  const serviceToken = (process.env.COMMERCE_TELEGRAM_SERVICE_TOKEN || "").trim();
+
+  if (serviceToken) return serviceToken;
+
   const botToken = process.env.TELEGRAM_BOT_TOKEN || "";
 
   if (!botToken) return "";
@@ -120,9 +124,12 @@ function localTelegramChatId(request: FastifyRequest): string | null {
     "::1",
     "::ffff:127.0.0.1",
   ].includes(remoteAddress);
+  const remoteServiceEnabled = Boolean(
+    (process.env.COMMERCE_TELEGRAM_SERVICE_TOKEN || "").trim()
+  );
 
   if (
-    !isLoopback
+    (!isLoopback && !remoteServiceEnabled)
     || source !== LOCAL_TELEGRAM_ORDER_SOURCE
     || typeof rawChatId !== "string"
     || !/^\d{1,20}$/.test(rawChatId)
@@ -5510,6 +5517,8 @@ export async function publicRoutes(app: FastifyInstance) {
           amount,
           currency,
           payment_url,
+          attempt_no,
+          expires_at,
           paid_at,
           created_at
         FROM payments

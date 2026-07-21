@@ -6,7 +6,6 @@ type YooKassaSettings = {
   enabled: boolean;
   shopId: string;
   secretKeyConfigured: boolean;
-  testMode: boolean;
   receiptsEnabled: boolean;
   webhookUrl: string;
 };
@@ -45,7 +44,6 @@ export function YooKassaSettingsCard({
   initialSettings: YooKassaSettings;
 }) {
   const [enabled, setEnabled] = useState(initialSettings.enabled);
-  const [testMode, setTestMode] = useState(initialSettings.testMode);
   const [shopId, setShopId] = useState(initialSettings.shopId);
   const [secretKey, setSecretKey] = useState("");
   const [busy, setBusy] = useState<"save" | "test" | "clear" | null>(null);
@@ -57,7 +55,6 @@ export function YooKassaSettingsCard({
   function payload() {
     return {
       enabled,
-      testMode,
       shopId: shopId.trim(),
       secretKey: secretKey.trim()
     };
@@ -176,18 +173,6 @@ export function YooKassaSettingsCard({
             <small>После сохранения ключ больше не показывается в CRM.</small>
           </label>
         </div>
-
-        <label className="admin-yookassa-switch compact">
-          <input
-            type="checkbox"
-            checked={testMode}
-            onChange={(event) => setTestMode(event.target.checked)}
-          />
-          <span>
-            <strong>Тестовый магазин</strong>
-            <small>Используйте тестовые Shop ID и ключ. Реальные деньги не списываются.</small>
-          </span>
-        </label>
 
         <div className="admin-yookassa-webhook">
           <span>Webhook для личного кабинета ЮKassa</span>

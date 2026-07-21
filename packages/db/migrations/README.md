@@ -9,9 +9,10 @@ The only active Drizzle migration source is:
 
 `packages/db/drizzle`
 
-It contains one canonical production baseline generated from the
-actual PostgreSQL `public` schema and tested on a clean temporary
-database.
+It contains the canonical production baseline followed by reviewed,
+versioned Event Core and Payment Core migrations. Every new migration
+is tested on a temporary copy of the production database before it is
+applied to production.
 
 ## Preserved history
 

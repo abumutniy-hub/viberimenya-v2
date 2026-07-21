@@ -1,5 +1,6 @@
 import type { createDb } from "@viberimenya/db";
 import { HttpError } from "../../lib/http-error";
+import { recordPaymentEvent } from "../payments/payment-audit.service";
 
 type SqlClient = ReturnType<typeof createDb>["client"];
 
@@ -19,7 +20,7 @@ type CancellationRollbackParams = {
   transaction: any;
   shopId: string;
   orderId: string;
-  actorUserId: string;
+  actorUserId: string | null;
 };
 
 type RefundResult = {
@@ -43,6 +44,7 @@ type CancellationRollbackResult = {
   bonusReturned: number;
   balanceAfter: number | null;
   promoRestored: boolean;
+  releasedUnits: number;
 };
 
 function objectValue(value: unknown): Record<string, unknown> {
@@ -200,6 +202,8 @@ export async function rollbackOrderFinancialsOnCancellation(
     bonus_earned: number;
     metadata: Record<string, unknown> | null;
     rollback_state: string | null;
+    reservation_state: string | null;
+    reservation_count: number;
   }[]>`
     SELECT
       id,
@@ -210,7 +214,13 @@ export async function rollbackOrderFinancialsOnCancellation(
       bonus_spent,
       bonus_earned,
       metadata,
-      metadata #>> '{financial,cancellationRollback,state}' AS rollback_state
+      metadata #>> '{financial,cancellationRollback,state}' AS rollback_state,
+      metadata #>> '{inventoryReservation,state}' AS reservation_state,
+      CASE
+        WHEN jsonb_typeof(metadata #> '{inventoryReservation,items}') = 'array'
+        THEN jsonb_array_length(metadata #> '{inventoryReservation,items}')
+        ELSE 0
+      END::int AS reservation_count
     FROM orders
     WHERE shop_id = ${params.shopId}
       AND id = ${params.orderId}
@@ -232,11 +242,21 @@ export async function rollbackOrderFinancialsOnCancellation(
   }
 
   if (order.rollback_state === "completed") {
+    const releasedUnits = await releaseReservedInventory(params.transaction, {
+      shopId: params.shopId,
+      orderId: order.id,
+      reservationState: order.reservation_state,
+      reservationCount: order.reservation_count,
+      actorUserId: params.actorUserId,
+      releaseReason: "order_cancellation_repair"
+    });
+
     return {
-      changed: false,
+      changed: releasedUnits > 0,
       bonusReturned: 0,
       balanceAfter: null,
-      promoRestored: false
+      promoRestored: false,
+      releasedUnits
     };
   }
 
@@ -246,7 +266,8 @@ export async function rollbackOrderFinancialsOnCancellation(
       changed: false,
       bonusReturned: 0,
       balanceAfter: null,
-      promoRestored: false
+      promoRestored: false,
+      releasedUnits: 0
     };
   }
 
@@ -261,6 +282,15 @@ export async function rollbackOrderFinancialsOnCancellation(
   const promoCode = textValue(metadata.promoCode);
   const bonusReturned = Math.max(0, Number(order.bonus_spent || 0));
   let balanceAfter: number | null = null;
+
+  const releasedUnits = await releaseReservedInventory(params.transaction, {
+    shopId: params.shopId,
+    orderId: order.id,
+    reservationState: order.reservation_state,
+    reservationCount: order.reservation_count,
+    actorUserId: params.actorUserId,
+    releaseReason: "order_cancellation"
+  });
 
   if (order.customer_id) {
     const customerRows = await params.transaction<{
@@ -331,6 +361,19 @@ export async function rollbackOrderFinancialsOnCancellation(
     promoCode
   });
 
+  const cancellablePayments = await params.transaction<{
+    id: string;
+    provider: string;
+    status: "created" | "pending" | "waiting_for_capture" | "failed";
+  }[]>`
+    SELECT id, provider, status::text AS status
+    FROM payments
+    WHERE shop_id = ${params.shopId}
+      AND order_id = ${order.id}
+      AND status IN ('created', 'pending', 'waiting_for_capture', 'failed')
+    FOR UPDATE
+  `;
+
   await params.transaction`
     UPDATE payments
     SET
@@ -338,21 +381,44 @@ export async function rollbackOrderFinancialsOnCancellation(
       raw_payload = COALESCE(raw_payload, '{}'::jsonb)
         || jsonb_build_object(
           'cancelledAt', NOW(),
-          'cancelledByUserId', ${params.actorUserId},
+          'cancelledByUserId', ${params.actorUserId}::uuid,
           'source', 'order_cancellation'
         ),
       updated_at = NOW()
     WHERE shop_id = ${params.shopId}
       AND order_id = ${order.id}
-      AND status IN ('pending', 'failed')
+      AND status IN ('created', 'pending', 'waiting_for_capture', 'failed')
   `;
+
+  for (const payment of cancellablePayments) {
+    await recordPaymentEvent({
+      client: params.transaction,
+      shopId: params.shopId,
+      orderId: order.id,
+      paymentId: payment.id,
+      provider: payment.provider,
+      eventType: "payment.cancelled",
+      source: "order_cancellation",
+      previousStatus: payment.status,
+      nextStatus: "cancelled",
+      idempotencyKey: `order-cancelled:${order.id}:${payment.id}`,
+      payload: {
+        actorUserId: params.actorUserId,
+        bonusReturned,
+        promoRestored,
+        releasedUnits,
+      },
+    });
+  }
 
   const rollbackPatch = {
     state: "completed",
     completedAt: new Date().toISOString(),
     completedByUserId: params.actorUserId,
     bonusReturned,
-    promoRestored
+    balanceAfter,
+    promoRestored,
+    releasedUnits
   };
 
   await params.transaction`
@@ -361,8 +427,12 @@ export async function rollbackOrderFinancialsOnCancellation(
       payment_status = 'cancelled',
       metadata = jsonb_set(
         COALESCE(metadata, '{}'::jsonb),
-        '{financial,cancellationRollback}',
-        CAST(${JSON.stringify(rollbackPatch)} AS jsonb),
+        '{financial}',
+        COALESCE(metadata -> 'financial', '{}'::jsonb)
+          || jsonb_build_object(
+            'cancellationRollback',
+            CAST(${JSON.stringify(rollbackPatch)} AS jsonb)
+          ),
         true
       ),
       updated_at = NOW()
@@ -374,7 +444,8 @@ export async function rollbackOrderFinancialsOnCancellation(
     changed: true,
     bonusReturned,
     balanceAfter,
-    promoRestored
+    promoRestored,
+    releasedUnits
   };
 }
 
@@ -576,8 +647,9 @@ export async function recordFullOrderRefund(
     const paymentRows = await transaction<{
       id: string;
       status: string;
+      provider: string;
     }[]>`
-      SELECT id, status::text AS status
+      SELECT id, status::text AS status, provider
       FROM payments
       WHERE shop_id = ${params.shopId}
         AND order_id = ${order.id}
@@ -606,6 +678,7 @@ export async function recordFullOrderRefund(
     };
 
     let paymentCreated = false;
+    let refundedPaymentId = paidPayments[0]?.id ?? null;
 
     if (paidPayments[0]) {
       await transaction`
@@ -619,11 +692,12 @@ export async function recordFullOrderRefund(
           AND id = ${paidPayments[0].id}
       `;
     } else {
-      await transaction`
+      const createdPaymentRows = await transaction<{ id: string }[]>`
         INSERT INTO payments (
           shop_id,
           order_id,
           provider,
+          idempotency_key,
           method,
           status,
           amount,
@@ -638,6 +712,7 @@ export async function recordFullOrderRefund(
           ${params.shopId},
           ${order.id},
           'manual',
+          ${`manual-refund-repair-${order.id}`.slice(0, 64)},
           ${order.payment_method}::payment_method,
           'refunded',
           ${amount},
@@ -648,10 +723,31 @@ export async function recordFullOrderRefund(
           NOW(),
           NOW()
         )
+        RETURNING id
       `;
 
       paymentCreated = true;
+      refundedPaymentId = createdPaymentRows[0]?.id ?? null;
     }
+
+    if (!refundedPaymentId) {
+      throw new HttpError(500, "Не удалось определить платёж возврата");
+    }
+
+    await recordPaymentEvent({
+      client: transaction,
+      shopId: params.shopId,
+      orderId: order.id,
+      paymentId: refundedPaymentId,
+      provider: paidPayments[0]?.provider ?? "manual",
+      eventType: "payment.refunded",
+      source: params.source ?? "admin_manual_full_refund",
+      previousStatus: paidPayments[0] ? "paid" : null,
+      nextStatus: "refunded",
+      providerEventId: params.providerRefundId ?? null,
+      idempotencyKey: `refund:${params.providerRefundId ?? order.id}`,
+      payload: refundAudit,
+    });
 
     await transaction`
       UPDATE payments
@@ -666,7 +762,7 @@ export async function recordFullOrderRefund(
         updated_at = NOW()
       WHERE shop_id = ${params.shopId}
         AND order_id = ${order.id}
-        AND status IN ('pending', 'failed')
+        AND status IN ('created', 'pending', 'waiting_for_capture', 'failed')
     `;
 
     const isActiveOrder =
@@ -724,8 +820,12 @@ export async function recordFullOrderRefund(
         END,
         metadata = jsonb_set(
           COALESCE(metadata, '{}'::jsonb),
-          '{financial,refund}',
-          CAST(${JSON.stringify(refundPatch)} AS jsonb),
+          '{financial}',
+          COALESCE(metadata -> 'financial', '{}'::jsonb)
+            || jsonb_build_object(
+              'refund',
+              CAST(${JSON.stringify(refundPatch)} AS jsonb)
+            ),
           true
         ),
         updated_at = NOW()

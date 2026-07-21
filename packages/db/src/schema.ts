@@ -38,11 +38,15 @@ export const orderStatusEnum = pgEnum("order_status", [
 ]);
 export const paymentStatusEnum = pgEnum("payment_status", [
   "not_required",
+  "created",
   "pending",
+  "waiting_for_capture",
   "paid",
   "failed",
   "refunded",
-  "cancelled"
+  "partially_refunded",
+  "cancelled",
+  "expired"
 ]);
 export const paymentMethodEnum = pgEnum("payment_method", [
   "cash_on_delivery",
@@ -380,18 +384,73 @@ export const payments = pgTable(
     orderId: uuid("order_id").notNull().references(() => orders.id, { onDelete: "cascade" }),
     provider: varchar("provider", { length: 80 }).notNull().default("manual"),
     providerPaymentId: varchar("provider_payment_id", { length: 255 }),
+    attemptNo: integer("attempt_no").notNull().default(1),
+    idempotencyKey: varchar("idempotency_key", { length: 64 }).notNull(),
     method: paymentMethodEnum("method").notNull(),
     status: paymentStatusEnum("status").notNull().default("pending"),
     amount: integer("amount").notNull(),
     currency: varchar("currency", { length: 8 }).notNull().default("RUB"),
     paymentUrl: text("payment_url"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+    expiredAt: timestamp("expired_at", { withTimezone: true }),
+    failureCode: varchar("failure_code", { length: 120 }),
+    lastProviderStatus: varchar("last_provider_status", { length: 80 }),
     rawPayload: jsonb("raw_payload").notNull().default(sql`'{}'::jsonb`),
     paidAt: timestamp("paid_at", { withTimezone: true }),
     ...timestamps
   },
   (table) => [
     index("payments_order_idx").on(table.orderId),
-    index("payments_shop_status_idx").on(table.shopId, table.status)
+    index("payments_shop_status_idx").on(table.shopId, table.status),
+    index("payments_expiry_idx").on(table.status, table.expiresAt),
+    uniqueIndex("payments_provider_payment_uidx").on(
+      table.provider,
+      table.providerPaymentId
+    ),
+    uniqueIndex("payments_provider_idempotency_uidx").on(
+      table.provider,
+      table.idempotencyKey
+    ),
+    uniqueIndex("payments_order_attempt_uidx").on(
+      table.shopId,
+      table.orderId,
+      table.provider,
+      table.attemptNo
+    ),
+    check("payments_amount_check", sql`${table.amount} >= 0`),
+    check("payments_attempt_no_check", sql`${table.attemptNo} > 0`)
+  ]
+);
+
+export const paymentEvents = pgTable(
+  "payment_events",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    shopId: uuid("shop_id").notNull().references(() => shops.id, { onDelete: "cascade" }),
+    orderId: uuid("order_id").notNull().references(() => orders.id, { onDelete: "cascade" }),
+    paymentId: uuid("payment_id").notNull().references(() => payments.id, { onDelete: "cascade" }),
+    provider: varchar("provider", { length: 80 }).notNull(),
+    eventType: varchar("event_type", { length: 120 }).notNull(),
+    source: varchar("source", { length: 80 }).notNull(),
+    previousStatus: paymentStatusEnum("previous_status"),
+    nextStatus: paymentStatusEnum("next_status"),
+    providerEventId: varchar("provider_event_id", { length: 255 }),
+    idempotencyKey: varchar("idempotency_key", { length: 255 }).notNull(),
+    payload: jsonb("payload").notNull().default(sql`'{}'::jsonb`),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => [
+    uniqueIndex("payment_events_payment_idem_uidx").on(
+      table.paymentId,
+      table.idempotencyKey
+    ),
+    index("payment_events_order_idx").on(table.orderId, table.occurredAt),
+    index("payment_events_provider_event_idx").on(
+      table.provider,
+      table.providerEventId
+    )
   ]
 );
 

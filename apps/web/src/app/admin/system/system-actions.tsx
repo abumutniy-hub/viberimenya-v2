@@ -135,7 +135,7 @@ export function MonitoringSettingsForm({ initial }: { initial: Settings }) {
         </label>
         <label>
           <input type="checkbox" name="operationalAlertsEnabled" defaultChecked={initial.operationalAlertsEnabled} />
-          <span><strong>Напоминания по заказам</strong><small>Сообщать о старых тестовых заказах, проблемных заказах, фото доставки и ошибках уведомлений. До финальной очистки лучше оставить выключенным.</small></span>
+          <span><strong>Напоминания по заказам</strong><small>Сообщать о старых незавершённых заказах, проблемных заказах, фото доставки и ошибках уведомлений. До финальной очистки лучше оставить выключенным.</small></span>
         </label>
         <label>
           <input type="checkbox" name="autoRestartEnabled" defaultChecked={initial.autoRestartEnabled} />

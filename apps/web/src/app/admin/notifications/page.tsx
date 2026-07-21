@@ -139,6 +139,7 @@ const eventLabels: Record<string, string> = {
   order_delivered: "Заказ доставлен",
   order_problem: "Проблема по заказу",
   order_cancelled: "Заказ отменён",
+  order_payment_expired: "Истёк срок оплаты",
   order_refunded: "Возврат зафиксирован",
   florist_order_assigned: "Назначение флористу",
   courier_order_assigned: "Назначение курьеру",

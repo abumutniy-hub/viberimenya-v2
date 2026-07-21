@@ -82,10 +82,10 @@ if (
   journal.version !== "7" ||
   journal.dialect !== "postgresql" ||
   !Array.isArray(journal.entries) ||
-  journal.entries.length !== 2
+  journal.entries.length !== 3
 ) {
   throw new Error(
-    "Drizzle journal должен содержать baseline и Event Core migration"
+    "Drizzle journal должен содержать baseline, Event Core и Payment Core migration"
   );
 }
 
@@ -106,6 +106,7 @@ for (let index = 0; index < journal.entries.length; index += 1) {
 
 const baselineEntry = journal.entries[0];
 const eventCoreEntry = journal.entries[1];
+const paymentCoreEntry = journal.entries[2];
 
 if (!baselineEntry.tag.includes("canonical_production_baseline")) {
   throw new Error("Первая migration не является canonical baseline");
@@ -113,6 +114,10 @@ if (!baselineEntry.tag.includes("canonical_production_baseline")) {
 
 if (!eventCoreEntry.tag.includes("event_core_outbox")) {
   throw new Error("Вторая migration не является Event Core migration");
+}
+
+if (!paymentCoreEntry.tag.includes("payment_core_yookassa")) {
+  throw new Error("Третья migration не является Payment Core migration");
 }
 
 const sqlFiles = readdirSync(drizzleDir)
@@ -202,6 +207,33 @@ if (
   throw new Error("Event Core migration содержит destructive DDL");
 }
 
+const paymentCore = migrationHashes[2].source;
+const requiredPaymentCoreFragments = [
+  'ADD VALUE \'created\'',
+  'ADD VALUE \'waiting_for_capture\'',
+  'ADD VALUE \'partially_refunded\'',
+  'ADD VALUE \'expired\'',
+  'CREATE TABLE "payment_events"',
+  '"idempotency_key" varchar(64)',
+  'payments_order_attempt_uidx',
+];
+
+for (const fragment of requiredPaymentCoreFragments) {
+  if (!paymentCore.includes(fragment)) {
+    throw new Error(
+      `Payment Core migration не содержит: ${fragment}`
+    );
+  }
+}
+
+if (
+  /DROP\s+TABLE/i.test(paymentCore) ||
+  /DROP\s+COLUMN/i.test(paymentCore) ||
+  /ALTER\s+TYPE[^;]+DROP/i.test(paymentCore)
+) {
+  throw new Error("Payment Core migration содержит destructive DDL");
+}
+
 const latestSnapshotPath = resolve(
   metaDir,
   snapshotFiles[snapshotFiles.length - 1],
@@ -220,11 +252,11 @@ const snapshotColumnCount = snapshotTables.reduce(
 );
 
 if (
-  snapshotTableCount !== 35 ||
-  snapshotColumnCount !== 439
+  snapshotTableCount !== 36 ||
+  snapshotColumnCount !== 460
 ) {
   throw new Error(
-    `Event Core snapshot: ${snapshotTableCount} tables / ${snapshotColumnCount} columns`
+    `Payment Core snapshot: ${snapshotTableCount} tables / ${snapshotColumnCount} columns`
   );
 }
 
@@ -294,6 +326,6 @@ if (!existsSync(legacyReadme)) {
 
 console.log(
   "Migration integrity confirmed: " +
-  `${eventCoreEntry.tag}, 35 tables, 439 columns, ` +
+  `${paymentCoreEntry.tag}, 36 tables, 460 columns, ` +
   "production metadata aligned."
 );

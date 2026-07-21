@@ -1,6 +1,15 @@
 import crypto from "node:crypto";
 import { env } from "../../lib/env";
 import { HttpError } from "../../lib/http-error";
+import {
+  parseDecimalAmountMinor,
+  type CreateProviderPaymentParams,
+  type CreateProviderRefundParams,
+  type PaymentProvider,
+  type ProviderPaymentSnapshot,
+  type ProviderReceiptItem,
+  type ProviderRefundSnapshot,
+} from "./payment-provider";
 
 const YOOKASSA_API_BASE = "https://api.yookassa.ru/v3";
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -22,6 +31,7 @@ export type YooKassaPayment = {
   description?: string;
   confirmation?: YooKassaConfirmation;
   created_at?: string;
+  expires_at?: string;
   captured_at?: string;
   paid?: boolean;
   refundable?: boolean;
@@ -53,37 +63,6 @@ export type YooKassaRefund = {
     reason?: string;
   };
   receipt_registration?: string;
-};
-
-type ReceiptItem = {
-  description: string;
-  quantity: string;
-  amount: YooKassaAmount;
-  vat_code: number;
-  payment_mode: string;
-  payment_subject: string;
-};
-
-type CreatePaymentParams = {
-  idempotenceKey: string;
-  amountRubles: number;
-  orderId: string;
-  orderNumber: string;
-  trackingToken: string;
-  method: "online_card" | "sbp";
-  customerEmail: string | null;
-  customerPhone: string | null;
-  returnUrl: string;
-  receiptItems?: ReceiptItem[];
-};
-
-type CreateRefundParams = {
-  idempotenceKey: string;
-  paymentId: string;
-  amountRubles: number;
-  orderId: string;
-  orderNumber: string;
-  reason: string;
 };
 
 type YooKassaCredentials = {
@@ -223,7 +202,6 @@ export function yookassaPublicStatus() {
     shopId: env.YOOKASSA_SHOP_ID,
     secretKeyConfigured: Boolean(env.YOOKASSA_SECRET_KEY),
     receiptsEnabled: env.YOOKASSA_RECEIPTS_ENABLED,
-    testModeHint: env.YOOKASSA_TEST_MODE,
   };
 }
 
@@ -249,7 +227,7 @@ export function createYooKassaIdempotenceKey(prefix: string) {
 }
 
 export async function createYooKassaPayment(
-  params: CreatePaymentParams,
+  params: CreateProviderPaymentParams,
 ): Promise<YooKassaPayment> {
   const customer: Record<string, string> = {};
 
@@ -272,6 +250,7 @@ export async function createYooKassaPayment(
     },
     description: `Заказ ${params.orderNumber}`.slice(0, 128),
     metadata: {
+      shopId: params.shopId,
       orderId: params.orderId,
       orderNumber: params.orderNumber,
       trackingToken: params.trackingToken,
@@ -315,8 +294,17 @@ export async function getYooKassaPayment(paymentId: string) {
   });
 }
 
+export async function cancelYooKassaPayment(paymentId: string, idempotenceKey: string) {
+  return yookassaRequest<YooKassaPayment>({
+    method: "POST",
+    path: `/payments/${encodeURIComponent(paymentId)}/cancel`,
+    idempotenceKey,
+    body: {},
+  });
+}
+
 export async function createYooKassaRefund(
-  params: CreateRefundParams,
+  params: CreateProviderRefundParams,
 ): Promise<YooKassaRefund> {
   return yookassaRequest<YooKassaRefund>({
     method: "POST",
@@ -347,6 +335,7 @@ export async function getYooKassaRefund(refundId: string) {
 
 export function mapYooKassaPaymentStatus(status: string) {
   if (status === "succeeded") return "paid" as const;
+  if (status === "waiting_for_capture") return "waiting_for_capture" as const;
   if (status === "canceled") return "cancelled" as const;
   return "pending" as const;
 }
@@ -365,5 +354,80 @@ export function yookassaReceiptItem(params: {
     vat_code: env.YOOKASSA_VAT_CODE,
     payment_mode: env.YOOKASSA_PAYMENT_MODE,
     payment_subject: env.YOOKASSA_PAYMENT_SUBJECT,
-  } satisfies ReceiptItem;
+  } satisfies ProviderReceiptItem;
 }
+
+function normalizedPayment(payment: YooKassaPayment): ProviderPaymentSnapshot {
+  const amountMinor = parseDecimalAmountMinor(payment.amount?.value);
+
+  if (amountMinor === null) {
+    throw new HttpError(502, "ЮKassa вернула некорректную сумму платежа");
+  }
+
+  const confirmationUrl = payment.confirmation?.confirmation_url;
+  const metadataOrderId = payment.metadata?.orderId;
+  const metadataShopId = payment.metadata?.shopId;
+
+  return {
+    id: payment.id,
+    status: mapYooKassaPaymentStatus(payment.status),
+    providerStatus: payment.status,
+    amountMinor,
+    currency: String(payment.amount?.currency || ""),
+    shopId: typeof metadataShopId === "string" ? metadataShopId.trim() : "",
+    orderId: typeof metadataOrderId === "string" ? metadataOrderId.trim() : "",
+    confirmationUrl:
+      typeof confirmationUrl === "string" && /^https:\/\//i.test(confirmationUrl)
+        ? confirmationUrl
+        : null,
+    paidAt: payment.captured_at ?? null,
+    createdAt: payment.created_at ?? null,
+    expiresAt: payment.expires_at ?? null,
+    raw: payment,
+  };
+}
+
+function normalizedRefund(refund: YooKassaRefund): ProviderRefundSnapshot {
+  const amountMinor = parseDecimalAmountMinor(refund.amount?.value);
+
+  if (amountMinor === null) {
+    throw new HttpError(502, "ЮKassa вернула некорректную сумму возврата");
+  }
+
+  const status = refund.status === "succeeded"
+    ? "succeeded"
+    : refund.status === "canceled"
+      ? "cancelled"
+      : "pending";
+
+  return {
+    id: refund.id,
+    paymentId: refund.payment_id,
+    status,
+    providerStatus: refund.status,
+    amountMinor,
+    currency: String(refund.amount?.currency || ""),
+    cancellationReason: refund.cancellation_details?.reason ?? null,
+    raw: refund,
+  };
+}
+
+export const yooKassaProvider: PaymentProvider = {
+  name: "yookassa",
+  isConfigured: isYooKassaConfigured,
+  async createPayment(params) {
+    return normalizedPayment(await createYooKassaPayment(params));
+  },
+  async getPayment(paymentId) {
+    return normalizedPayment(await getYooKassaPayment(paymentId));
+  },
+  async cancelPayment(paymentId, idempotenceKey) {
+    return normalizedPayment(await cancelYooKassaPayment(paymentId, idempotenceKey));
+  },
+  async createRefund(params) {
+    return normalizedRefund(await createYooKassaRefund(params));
+  },
+  async getRefund(refundId) {
+    return normalizedRefund(await getYooKassaRefund(refundId));
+  },
+};

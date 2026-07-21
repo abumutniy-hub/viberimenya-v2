@@ -51,7 +51,15 @@ export const env = {
   YOOKASSA_PAYMENT_MODE:
     process.env.YOOKASSA_PAYMENT_MODE ?? "full_payment",
   YOOKASSA_PAYMENT_SUBJECT:
-    process.env.YOOKASSA_PAYMENT_SUBJECT ?? "commodity"
+    process.env.YOOKASSA_PAYMENT_SUBJECT ?? "commodity",
+  PAYMENT_PENDING_TTL_MINUTES: Math.min(
+    24 * 60,
+    Math.max(10, Number(process.env.PAYMENT_PENDING_TTL_MINUTES ?? 180) || 180),
+  ),
+  PAYMENT_EXPIRY_SWEEP_INTERVAL_MS: Math.min(
+    15 * 60_000,
+    Math.max(30_000, Number(process.env.PAYMENT_EXPIRY_SWEEP_INTERVAL_MS ?? 60_000) || 60_000),
+  )
 };
 
 if (!env.DATABASE_URL) {

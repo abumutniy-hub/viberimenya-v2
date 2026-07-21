@@ -54,11 +54,15 @@ const orderStatusLabels: Record<string, string> = {
 };
 
 const paymentStatusLabels: Record<string, string> = {
+  created: "Создан",
   pending: "Ожидает",
+  waiting_for_capture: "Ожидает подтверждения",
   paid: "Оплачен",
   failed: "Ошибка",
   refunded: "Возврат",
+  partially_refunded: "Частичный возврат",
   cancelled: "Отменена",
+  expired: "Истёк",
   not_required: "Не требуется"
 };
 

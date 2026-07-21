@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { createDb } from "@viberimenya/db";
@@ -6,16 +5,15 @@ import { env } from "../lib/env";
 import { HttpError } from "../lib/http-error";
 import { markOrderPaid } from "../modules/orders/order-payment.service";
 import { recordFullOrderRefund } from "../modules/orders/order-finance.service";
+import { recordPaymentEvent } from "../modules/payments/payment-audit.service";
+import {
+  expectedAmountMinor,
+  type ProviderPaymentSnapshot,
+  type ProviderRefundSnapshot,
+} from "../modules/payments/payment-provider";
 import {
   createYooKassaIdempotenceKey,
-  createYooKassaPayment,
-  createYooKassaRefund,
-  getYooKassaPayment,
-  getYooKassaRefund,
-  isYooKassaConfigured,
-  mapYooKassaPaymentStatus,
-  type YooKassaPayment,
-  type YooKassaRefund,
+  yooKassaProvider,
   yookassaReceiptItem,
 } from "../modules/payments/yookassa.service";
 
@@ -32,6 +30,8 @@ type PaymentContext = {
   total: number;
   subtotal: number;
   delivery_price: number;
+  customer_id: string | null;
+  customer_name: string | null;
   customer_email: string | null;
   customer_phone: string | null;
   online_enabled: boolean;
@@ -43,6 +43,10 @@ type PaymentRow = {
   status: string;
   amount: number;
   payment_url: string | null;
+  attempt_no: number;
+  idempotency_key: string;
+  expires_at: string | null;
+  last_provider_status: string | null;
   raw_payload: Record<string, unknown> | null;
 };
 
@@ -58,24 +62,13 @@ function textValue(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function integerRubles(value: string | number | undefined) {
-  const amount = Number(value || 0);
-
-  if (!Number.isFinite(amount)) return 0;
-
-  return Math.round(amount);
-}
-
-function providerPaymentUrl(payment: YooKassaPayment) {
-  const value = payment.confirmation?.confirmation_url;
-  return typeof value === "string" && /^https:\/\//.test(value) ? value : null;
-}
-
 function paymentPublicResponse(payment: {
   status: string;
   amount: number;
   paymentUrl: string | null;
   providerPaymentId: string | null;
+  attemptNo?: number | null;
+  expiresAt?: string | null;
 }) {
   return {
     provider: "yookassa",
@@ -84,6 +77,8 @@ function paymentPublicResponse(payment: {
     currency: "RUB",
     paymentUrl: payment.paymentUrl,
     providerPaymentId: payment.providerPaymentId,
+    attemptNo: payment.attemptNo ?? null,
+    expiresAt: payment.expiresAt ?? null,
   };
 }
 
@@ -105,6 +100,8 @@ async function loadPaymentContext(
       o.total,
       o.subtotal,
       o.delivery_price,
+      o.customer_id,
+      c.name AS customer_name,
       c.email AS customer_email,
       c.phone AS customer_phone,
       COALESCE(s.is_online_payment_enabled, false) AS online_enabled
@@ -203,7 +200,7 @@ async function ensureLocalPaymentSlot(
       throw new HttpError(503, "Онлайн-оплата отключена в настройках магазина");
     }
 
-    if (!isYooKassaConfigured()) {
+    if (!yooKassaProvider.isConfigured()) {
       throw new HttpError(503, "ЮKassa ещё не подключена");
     }
 
@@ -230,6 +227,10 @@ async function ensureLocalPaymentSlot(
         status::text AS status,
         amount,
         payment_url,
+        attempt_no,
+        idempotency_key,
+        expires_at::text AS expires_at,
+        last_provider_status,
         raw_payload
       FROM payments
       WHERE shop_id = ${order.shop_id}
@@ -248,44 +249,59 @@ async function ensureLocalPaymentSlot(
         throw new HttpError(409, "Заказ оплачен, но платёжная запись не найдена");
       }
 
-      const raw = objectValue(payment.raw_payload);
       return {
         order,
         payment,
-        idempotenceKey: textValue(raw.idempotenceKey),
+        idempotenceKey: payment.idempotency_key,
         shouldCallProvider: false,
       };
     }
 
+    const existingDeadlines = paymentRows
+      .map((row) => row.expires_at ? new Date(row.expires_at).getTime() : Number.NaN)
+      .filter((value) => Number.isFinite(value));
+    const paymentDeadlineMs = existingDeadlines.length > 0
+      ? Math.min(...existingDeadlines)
+      : Date.now() + env.PAYMENT_PENDING_TTL_MINUTES * 60_000;
+
+    if (paymentDeadlineMs <= Date.now()) {
+      throw new HttpError(410, "Срок оплаты истёк. Заказ будет освобождён автоматически");
+    }
+
     const reusable = paymentRows.find((row) => {
-      if (row.status !== "pending") return false;
-      const raw = objectValue(row.raw_payload);
-      return Boolean(textValue(raw.idempotenceKey));
+      if (!["created", "pending", "waiting_for_capture"].includes(row.status)) return false;
+      return Boolean(row.idempotency_key);
     });
 
     if (reusable) {
-      const raw = objectValue(reusable.raw_payload);
       const hasReadyUrl = Boolean(reusable.provider_payment_id && reusable.payment_url);
 
       return {
         order,
         payment: reusable,
-        idempotenceKey: textValue(raw.idempotenceKey),
+        idempotenceKey: reusable.idempotency_key,
         shouldCallProvider: !hasReadyUrl,
       };
     }
 
     const idempotenceKey = createYooKassaIdempotenceKey("payment");
+    const attemptNo = paymentRows.reduce(
+      (maximum, payment) => Math.max(maximum, Number(payment.attempt_no || 0)),
+      0,
+    ) + 1;
     const rows = await transaction<PaymentRow[]>`
       INSERT INTO payments (
         shop_id,
         order_id,
         provider,
+        attempt_no,
+        idempotency_key,
         method,
         status,
         amount,
         currency,
         payment_url,
+        expires_at,
         raw_payload,
         created_at,
         updated_at
@@ -294,15 +310,17 @@ async function ensureLocalPaymentSlot(
         ${order.shop_id},
         ${order.order_id},
         'yookassa',
+        ${attemptNo},
+        ${idempotenceKey},
         ${order.payment_method}::payment_method,
-        'pending',
+        'created',
         ${Number(order.total || 0)},
         'RUB',
         NULL,
+        ${new Date(paymentDeadlineMs).toISOString()}::timestamptz,
         ${JSON.stringify({
-          version: 1,
+          version: 2,
           state: "creating",
-          idempotenceKey,
           createdBy: "customer",
           createdAt: new Date().toISOString(),
         })}::jsonb,
@@ -315,6 +333,10 @@ async function ensureLocalPaymentSlot(
         status::text AS status,
         amount,
         payment_url,
+        attempt_no,
+        idempotency_key,
+        expires_at::text AS expires_at,
+        last_provider_status,
         raw_payload
     `;
 
@@ -323,6 +345,25 @@ async function ensureLocalPaymentSlot(
     if (!payment) {
       throw new HttpError(500, "Не удалось подготовить платёж");
     }
+
+    await recordPaymentEvent({
+      client: transaction,
+      shopId: order.shop_id,
+      orderId: order.order_id,
+      paymentId: payment.id,
+      provider: "yookassa",
+      eventType: "payment.attempt_created",
+      source: "customer",
+      previousStatus: null,
+      nextStatus: "created",
+      idempotencyKey: `attempt-created:${idempotenceKey}`,
+      payload: {
+        attemptNo,
+        amount: Number(order.total || 0),
+        currency: "RUB",
+        expiresAt: payment.expires_at,
+      },
+    });
 
     return {
       order,
@@ -338,73 +379,95 @@ async function saveProviderPayment(
   params: {
     paymentRowId: string;
     order: PaymentContext;
-    providerPayment: YooKassaPayment;
+    providerPayment: ProviderPaymentSnapshot;
     source: "yookassa_sync" | "yookassa_webhook";
   },
 ) {
-  const providerAmount = integerRubles(params.providerPayment.amount?.value);
   const expectedAmount = Math.max(0, Number(params.order.total || 0));
-  const providerOrderId = textValue(params.providerPayment.metadata?.orderId);
 
-  if (providerAmount !== expectedAmount) {
+  if (params.providerPayment.amountMinor !== expectedAmountMinor(expectedAmount)) {
     throw new HttpError(409, "Сумма платежа ЮKassa не совпадает с заказом");
   }
 
-  if (String(params.providerPayment.amount?.currency || "") !== "RUB") {
+  if (params.providerPayment.currency !== "RUB") {
     throw new HttpError(409, "Валюта платежа ЮKassa не совпадает с заказом");
   }
 
-  if (providerOrderId && providerOrderId !== params.order.order_id) {
+  if (!params.providerPayment.shopId) {
+    throw new HttpError(409, "В платеже ЮKassa отсутствует ID магазина");
+  }
+
+  if (params.providerPayment.shopId !== params.order.shop_id) {
+    throw new HttpError(409, "Платёж ЮKassa относится к другому магазину");
+  }
+
+  if (!params.providerPayment.orderId) {
+    throw new HttpError(409, "В платеже ЮKassa отсутствует ID заказа");
+  }
+
+  if (params.providerPayment.orderId !== params.order.order_id) {
     throw new HttpError(409, "Платёж ЮKassa относится к другому заказу");
   }
 
-  const paymentUrl = providerPaymentUrl(params.providerPayment);
-  const mappedStatus = mapYooKassaPaymentStatus(params.providerPayment.status);
-
-  if (mappedStatus === "paid") {
-    await client`
-      UPDATE payments
-      SET
-        provider_payment_id = ${params.providerPayment.id},
-        payment_url = ${paymentUrl},
-        raw_payload = COALESCE(raw_payload, '{}'::jsonb)
-          || ${JSON.stringify({
-            providerStatus: params.providerPayment.status,
-            providerSnapshot: params.providerPayment,
-            synchronizedAt: new Date().toISOString(),
-          })}::jsonb,
-        updated_at = NOW()
+  return client.begin(async (transaction) => {
+    const lockedRows = await transaction<{
+      status: string;
+      payment_url: string | null;
+      provider_payment_id: string | null;
+      attempt_no: number;
+    }[]>`
+      SELECT
+        status::text AS status,
+        payment_url,
+        provider_payment_id,
+        attempt_no
+      FROM payments
       WHERE shop_id = ${params.order.shop_id}
         AND id = ${params.paymentRowId}
+      LIMIT 1
+      FOR UPDATE
     `;
 
-    await markOrderPaid({
-      client,
-      shopId: params.order.shop_id,
-      orderId: params.order.order_id,
-      source: params.source,
-      providerPaymentId: params.providerPayment.id,
-      providerPayload: params.providerPayment,
-      paidAt: params.providerPayment.captured_at ?? params.providerPayment.created_at ?? null,
-      allowNewOrder: false,
-    });
+    const locked = lockedRows[0];
 
-    return "paid" as const;
-  }
+    if (!locked) {
+      throw new HttpError(404, "Платёжная попытка не найдена");
+    }
 
-  const localStatus = mappedStatus === "cancelled" ? "cancelled" : "pending";
+    if (
+      locked.provider_payment_id
+      && locked.provider_payment_id !== params.providerPayment.id
+    ) {
+      throw new HttpError(409, "Платёжная попытка уже связана с другим платежом ЮKassa");
+    }
 
-  await client.begin(async (transaction) => {
+    if (locked.status === "expired") {
+      throw new HttpError(409, "Истёкшая платёжная попытка не может быть обновлена");
+    }
+
+    const paymentUrl = params.providerPayment.confirmationUrl;
+    const localStatus = params.providerPayment.status;
+    const failureCode = localStatus === "cancelled" ? "provider_cancelled" : null;
+
     await transaction`
       UPDATE payments
       SET
         provider_payment_id = ${params.providerPayment.id},
-        status = ${localStatus}::payment_status,
+        status = CASE
+          WHEN ${localStatus} = 'paid' THEN status
+          ELSE ${localStatus}::payment_status
+        END,
         payment_url = ${paymentUrl},
+        last_provider_status = ${params.providerPayment.providerStatus},
+        failure_code = ${failureCode},
+        cancelled_at = CASE
+          WHEN ${localStatus} = 'cancelled' THEN COALESCE(cancelled_at, NOW())
+          ELSE cancelled_at
+        END,
         raw_payload = COALESCE(raw_payload, '{}'::jsonb)
           || ${JSON.stringify({
-            providerStatus: params.providerPayment.status,
-            providerSnapshot: params.providerPayment,
+            providerStatus: params.providerPayment.providerStatus,
+            providerSnapshot: params.providerPayment.raw,
             synchronizedAt: new Date().toISOString(),
           })}::jsonb,
         updated_at = NOW()
@@ -412,7 +475,74 @@ async function saveProviderPayment(
         AND id = ${params.paymentRowId}
     `;
 
-    if (mappedStatus === "cancelled") {
+    if (!locked.payment_url && paymentUrl) {
+      const notificationPayload = {
+        orderId: params.order.order_id,
+        orderNumber: params.order.order_number,
+        paymentId: params.paymentRowId,
+        providerPaymentId: params.providerPayment.id,
+        paymentUrl,
+        paymentMethod: params.order.payment_method,
+        totalAmount: expectedAmount,
+        trackingToken: params.order.tracking_token,
+        trackingUrl: `/order/track/${params.order.tracking_token}`,
+      };
+
+      await transaction`
+        INSERT INTO notification_events (
+          shop_id, order_id, type, channel, recipient_type,
+          status, payload, created_at, updated_at
+        )
+        SELECT
+          ${params.order.shop_id}, ${params.order.order_id}, 'payment_link_added',
+          'telegram', 'staff', 'pending', ${JSON.stringify(notificationPayload)}::jsonb,
+          NOW(), NOW()
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM notification_events
+          WHERE shop_id = ${params.order.shop_id}
+            AND order_id = ${params.order.order_id}
+            AND type = 'payment_link_added'
+            AND recipient_type = 'staff'
+            AND payload ->> 'providerPaymentId' = ${params.providerPayment.id}
+        )
+      `;
+
+      await transaction`
+        INSERT INTO notification_events (
+          shop_id, order_id, type, channel, recipient_type,
+          status, payload, created_at, updated_at
+        )
+        SELECT
+          ${params.order.shop_id}, ${params.order.order_id}, 'payment_link_added',
+          'telegram', 'customer', 'pending', ${JSON.stringify(notificationPayload)}::jsonb,
+          NOW(), NOW()
+        WHERE ${params.order.customer_id !== null}
+          AND NOT EXISTS (
+            SELECT 1
+            FROM notification_events
+            WHERE shop_id = ${params.order.shop_id}
+              AND order_id = ${params.order.order_id}
+              AND type = 'payment_link_added'
+              AND recipient_type = 'customer'
+              AND payload ->> 'providerPaymentId' = ${params.providerPayment.id}
+          )
+      `;
+    }
+
+    if (localStatus === "paid") {
+      await markOrderPaid({
+        transaction,
+        shopId: params.order.shop_id,
+        orderId: params.order.order_id,
+        paymentId: params.paymentRowId,
+        source: params.source,
+        providerPaymentId: params.providerPayment.id,
+        providerPayload: params.providerPayment.raw,
+        paidAt: params.providerPayment.paidAt ?? params.providerPayment.createdAt,
+        allowNewOrder: false,
+      });
+    } else if (localStatus === "cancelled") {
       await transaction`
         UPDATE orders
         SET
@@ -426,9 +556,30 @@ async function saveProviderPayment(
           AND id = ${params.order.order_id}
       `;
     }
-  });
 
-  return localStatus;
+    await recordPaymentEvent({
+      client: transaction,
+      shopId: params.order.shop_id,
+      orderId: params.order.order_id,
+      paymentId: params.paymentRowId,
+      provider: "yookassa",
+      eventType: `payment.${params.providerPayment.providerStatus}`,
+      source: params.source,
+      previousStatus: locked.status as "created" | "pending" | "waiting_for_capture" | "paid" | "failed" | "cancelled" | "expired",
+      nextStatus: localStatus,
+      providerEventId: params.providerPayment.id,
+      idempotencyKey: [
+        "provider",
+        params.providerPayment.id,
+        params.providerPayment.providerStatus,
+        params.providerPayment.paidAt ?? params.providerPayment.createdAt ?? "current",
+      ].join(":"),
+      payload: params.providerPayment.raw,
+      occurredAt: params.providerPayment.paidAt ?? params.providerPayment.createdAt,
+    });
+
+    return localStatus;
+  });
 }
 
 export async function createOrReuseYooKassaPayment(
@@ -443,6 +594,8 @@ export async function createOrReuseYooKassaPayment(
       amount: Number(slot.payment.amount || 0),
       paymentUrl: slot.payment.payment_url,
       providerPaymentId: slot.payment.provider_payment_id,
+      attemptNo: slot.payment.attempt_no,
+      expiresAt: slot.payment.expires_at,
     });
   }
 
@@ -450,9 +603,10 @@ export async function createOrReuseYooKassaPayment(
   const returnUrl = `${env.APP_URL.replace(/\/$/, "")}/order/track/${slot.order.tracking_token}?payment=return`;
 
   try {
-    const providerPayment = await createYooKassaPayment({
+    const providerPayment = await yooKassaProvider.createPayment({
       idempotenceKey: slot.idempotenceKey,
       amountRubles: Number(slot.order.total || 0),
+      shopId: slot.order.shop_id,
       orderId: slot.order.order_id,
       orderNumber: slot.order.order_number,
       trackingToken: slot.order.tracking_token,
@@ -473,8 +627,10 @@ export async function createOrReuseYooKassaPayment(
     return paymentPublicResponse({
       status,
       amount: Number(slot.order.total || 0),
-      paymentUrl: providerPaymentUrl(providerPayment),
+      paymentUrl: providerPayment.confirmationUrl,
       providerPaymentId: providerPayment.id,
+      attemptNo: slot.payment.attempt_no,
+      expiresAt: slot.payment.expires_at,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Ошибка ЮKassa";
@@ -487,6 +643,10 @@ export async function createOrReuseYooKassaPayment(
           WHEN ${statusCode} BETWEEN 400 AND 499 THEN 'failed'::payment_status
           ELSE status
         END,
+        failure_code = CASE
+          WHEN ${statusCode} BETWEEN 400 AND 499 THEN 'provider_request_rejected'
+          ELSE 'provider_unavailable'
+        END,
         raw_payload = COALESCE(raw_payload, '{}'::jsonb)
           || ${JSON.stringify({
             lastError: message,
@@ -498,15 +658,29 @@ export async function createOrReuseYooKassaPayment(
         AND id = ${slot.payment.id}
     `;
 
+    await recordPaymentEvent({
+      client,
+      shopId: slot.order.shop_id,
+      orderId: slot.order.order_id,
+      paymentId: slot.payment.id,
+      provider: "yookassa",
+      eventType: "payment.provider_request_failed",
+      source: "yookassa_sync",
+      previousStatus: "created",
+      nextStatus: statusCode >= 400 && statusCode <= 499 ? "failed" : "created",
+      idempotencyKey: `provider-error:${slot.idempotenceKey}:${statusCode}:${message}`.slice(0, 255),
+      payload: { statusCode, message, retryUsesSameIdempotenceKey: true },
+    });
+
     throw error;
   }
 }
 
 async function locateLocalPayment(
   client: SqlClient,
-  providerPayment: YooKassaPayment,
+  providerPayment: ProviderPaymentSnapshot,
 ) {
-  const metadataOrderId = textValue(providerPayment.metadata?.orderId);
+  const metadataOrderId = providerPayment.orderId;
   const rows = await client<{
     payment_id: string | null;
     shop_id: string;
@@ -530,6 +704,7 @@ async function locateLocalPayment(
       p.provider_payment_id = ${providerPayment.id}
       OR (${metadataOrderId} <> '' AND o.id::text = ${metadataOrderId})
     )
+      AND o.shop_id = ${providerPayment.shopId}
     ORDER BY (p.provider_payment_id = ${providerPayment.id}) DESC, p.created_at DESC NULLS LAST
     LIMIT 1
   `;
@@ -549,11 +724,15 @@ async function locateLocalPayment(
         order_id,
         provider,
         provider_payment_id,
+        attempt_no,
+        idempotency_key,
         method,
         status,
         amount,
         currency,
         payment_url,
+        expires_at,
+        last_provider_status,
         raw_payload,
         created_at,
         updated_at
@@ -563,12 +742,22 @@ async function locateLocalPayment(
         o.id,
         'yookassa',
         ${providerPayment.id},
+        (
+          SELECT COALESCE(MAX(existing.attempt_no), 0) + 1
+          FROM payments existing
+          WHERE existing.shop_id = o.shop_id
+            AND existing.order_id = o.id
+            AND existing.provider = 'yookassa'
+        ),
+        ${`recovered-${providerPayment.id}`.slice(0, 64)},
         o.payment_method,
         'pending',
         o.total,
         'RUB',
-        ${providerPaymentUrl(providerPayment)},
-        ${JSON.stringify({ recoveredFromWebhook: true })}::jsonb,
+        ${providerPayment.confirmationUrl},
+        ${providerPayment.expiresAt}::timestamptz,
+        ${providerPayment.providerStatus},
+        ${JSON.stringify({ recoveredFromWebhook: true, providerSnapshot: providerPayment.raw })}::jsonb,
         NOW(),
         NOW()
       FROM orders o
@@ -588,9 +777,9 @@ async function locateLocalPayment(
   return { paymentRowId, order };
 }
 
-async function reconcileProviderPayment(
+export async function reconcileProviderPayment(
   client: SqlClient,
-  providerPayment: YooKassaPayment,
+  providerPayment: ProviderPaymentSnapshot,
   source: "yookassa_sync" | "yookassa_webhook",
 ) {
   const local = await locateLocalPayment(client, providerPayment);
@@ -604,14 +793,14 @@ async function reconcileProviderPayment(
   return paymentPublicResponse({
     status,
     amount: Number(local.order.total || 0),
-    paymentUrl: providerPaymentUrl(providerPayment),
+    paymentUrl: providerPayment.confirmationUrl,
     providerPaymentId: providerPayment.id,
   });
 }
 
-async function reconcileProviderRefund(client: SqlClient, refund: YooKassaRefund) {
+async function reconcileProviderRefund(client: SqlClient, refund: ProviderRefundSnapshot) {
   if (refund.status !== "succeeded") {
-    return { changed: false, status: refund.status };
+    return { changed: false, status: refund.providerStatus };
   }
 
   const paymentRows = await client<{
@@ -632,7 +821,7 @@ async function reconcileProviderRefund(client: SqlClient, refund: YooKassaRefund
       ON o.shop_id = p.shop_id
       AND o.id = p.order_id
     WHERE p.provider = 'yookassa'
-      AND p.provider_payment_id = ${refund.payment_id}
+      AND p.provider_payment_id = ${refund.paymentId}
     ORDER BY p.created_at DESC
     LIMIT 1
   `;
@@ -643,8 +832,12 @@ async function reconcileProviderRefund(client: SqlClient, refund: YooKassaRefund
     throw new HttpError(404, "Платёж возврата не найден в CRM");
   }
 
-  if (integerRubles(refund.amount?.value) !== Number(payment.amount || 0)) {
+  if (refund.amountMinor !== expectedAmountMinor(Number(payment.amount || 0))) {
     throw new HttpError(409, "Сумма возврата ЮKassa не совпадает с платежом");
+  }
+
+  if (refund.currency !== "RUB") {
+    throw new HttpError(409, "Валюта возврата ЮKassa не совпадает с платежом");
   }
 
   const raw = objectValue(payment.raw_payload);
@@ -662,7 +855,7 @@ async function reconcileProviderRefund(client: SqlClient, refund: YooKassaRefund
     cancelOrder,
     source: "yookassa_webhook",
     providerRefundId: refund.id,
-    providerPayload: refund,
+    providerPayload: refund.raw,
   });
 
   return { changed: result.changed, status: "succeeded", refund: result };
@@ -711,7 +904,7 @@ export async function paymentRoutes(app: FastifyInstance) {
         return { ok: true, payment };
       }
 
-      const providerPayment = await getYooKassaPayment(providerPaymentId);
+      const providerPayment = await yooKassaProvider.getPayment(providerPaymentId);
       const payment = await reconcileProviderPayment(client, providerPayment, "yookassa_sync");
       return { ok: true, payment };
     } finally {
@@ -720,13 +913,18 @@ export async function paymentRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/public/payments/yookassa/webhook", async (request, reply) => {
-    if (!isYooKassaConfigured()) {
+    if (!yooKassaProvider.isConfigured()) {
       return reply.status(503).send({ ok: false });
     }
 
     const body = z.object({
-      type: z.string().optional(),
-      event: z.string().min(3).max(80),
+      type: z.literal("notification"),
+      event: z.enum([
+        "payment.waiting_for_capture",
+        "payment.succeeded",
+        "payment.canceled",
+        "refund.succeeded",
+      ]),
       object: z.object({
         id: z.string().min(1).max(255),
       }).passthrough(),
@@ -736,10 +934,17 @@ export async function paymentRoutes(app: FastifyInstance) {
 
     try {
       if (body.event.startsWith("payment.")) {
-        const providerPayment = await getYooKassaPayment(body.object.id);
+        const providerPayment = await yooKassaProvider.getPayment(body.object.id);
+        // Webhook может быть доставлен повторно или с опозданием. Источником
+        // истины всегда является свежий объект, повторно полученный из API ЮKassa.
         await reconcileProviderPayment(client, providerPayment, "yookassa_webhook");
       } else if (body.event === "refund.succeeded") {
-        const refund = await getYooKassaRefund(body.object.id);
+        const refund = await yooKassaProvider.getRefund(body.object.id);
+
+        if (refund.providerStatus !== "succeeded") {
+          throw new HttpError(409, "Статус возврата ЮKassa не совпадает с webhook");
+        }
+
         await reconcileProviderRefund(client, refund);
       }
 
@@ -795,7 +1000,7 @@ export async function prepareYooKassaRefund(params: {
     throw new HttpError(409, "У платежа ЮKassa отсутствует ID провайдера");
   }
 
-  if (!isYooKassaConfigured()) {
+  if (!yooKassaProvider.isConfigured()) {
     throw new HttpError(503, "ЮKassa не настроена: автоматический возврат недоступен");
   }
 
@@ -806,7 +1011,7 @@ export async function prepareYooKassaRefund(params: {
     || `refund-${params.orderId}`.slice(0, 64);
 
   if (existingId) {
-    const refund = await getYooKassaRefund(existingId);
+    const refund = await yooKassaProvider.getRefund(existingId);
     return { refund, payment };
   }
 
@@ -831,7 +1036,7 @@ export async function prepareYooKassaRefund(params: {
       AND id = ${payment.payment_id}
   `;
 
-  const refund = await createYooKassaRefund({
+  const refund = await yooKassaProvider.createRefund({
     idempotenceKey,
     paymentId: payment.provider_payment_id,
     amountRubles: Number(payment.total || 0),
@@ -840,11 +1045,11 @@ export async function prepareYooKassaRefund(params: {
     reason: params.reason,
   });
 
-  if (refund.status === "canceled") {
+  if (refund.status === "cancelled") {
     throw new HttpError(
       409,
-      refund.cancellation_details?.reason
-        ? `ЮKassa отклонила возврат: ${refund.cancellation_details.reason}`
+      refund.cancellationReason
+        ? `ЮKassa отклонила возврат: ${refund.cancellationReason}`
         : "ЮKassa отклонила возврат",
     );
   }
@@ -858,8 +1063,8 @@ export async function prepareYooKassaRefund(params: {
           ${JSON.stringify({
             ...pending,
             id: refund.id,
-            status: refund.status,
-            providerSnapshot: refund,
+            status: refund.providerStatus,
+            providerSnapshot: refund.raw,
           })}::jsonb
         ),
       updated_at = NOW()
@@ -877,7 +1082,7 @@ export async function finalizeYooKassaRefund(params: {
   actorUserId: string;
   reason: string;
   cancelOrder: boolean;
-  refund: YooKassaRefund;
+  refund: ProviderRefundSnapshot;
 }) {
   if (params.refund.status !== "succeeded") {
     return null;
@@ -892,6 +1097,6 @@ export async function finalizeYooKassaRefund(params: {
     cancelOrder: params.cancelOrder,
     source: "yookassa_refund",
     providerRefundId: params.refund.id,
-    providerPayload: params.refund,
+    providerPayload: params.refund.raw,
   });
 }
