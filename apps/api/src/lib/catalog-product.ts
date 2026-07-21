@@ -167,22 +167,48 @@ export function inferProductType(
   }
 
   const flowerCategoryType = inferFlowerCategoryType(values[0]);
-
-  if (flowerCategoryType) {
-    return flowerCategoryType;
-  }
-
   const explicit = readCatalogMetadata(
     metadata
   ).productType;
 
   if (explicit) {
-    return explicit;
+    const explicitIsAddon = [
+      "card",
+      "gift",
+      "sweets",
+      "toy",
+      "vase",
+      "balloon",
+      "perfume"
+    ].includes(explicit);
+
+    // Импорт иногда ошибочно помечал цветы как открытки. Явный тип цветочного
+    // товара сохраняем, а конфликт «дополнение в цветочной категории»
+    // пересчитываем по названию и составу ниже.
+    if (!explicitIsAddon || !flowerCategoryType) {
+      return explicit;
+    }
   }
 
   const haystack = values
     .map((value) => normalized(value))
     .join(" ");
+
+  if (flowerCategoryType) {
+    if (/корзин|короб|композиц|оформлен|arrangement/.test(haystack)) {
+      return "arrangement";
+    }
+
+    if (/монобукет|поштуч/.test(haystack)) {
+      return "flowers";
+    }
+
+    return flowerCategoryType;
+  }
+
+  if (explicit) {
+    return explicit;
+  }
 
   if (/открытк|конверт|card/.test(haystack)) {
     return "card";
