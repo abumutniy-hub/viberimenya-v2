@@ -49,6 +49,14 @@ export type CustomerCheckoutDraftIssue = {
   severity: "error" | "warning";
 };
 
+export type CustomerCheckoutDraftContactValidation = {
+  valid: boolean;
+  customerPhone: string;
+  recipientName: string;
+  recipientPhone: string;
+  issues: CustomerCheckoutDraftIssue[];
+};
+
 export type CustomerCheckoutDraftQuote = {
   quotedAt: string;
   cartFingerprint: string;
@@ -245,6 +253,83 @@ function normalizePhone(value: unknown) {
 function phoneIsValid(value: unknown) {
   const digits = String(value ?? "").replace(/\D/g, "");
   return digits.length >= 10 && digits.length <= 15;
+}
+
+function emailIsValid(value: unknown) {
+  const email = String(value ?? "").trim();
+
+  if (!email) return true;
+
+  return email.length <= 255
+    && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+export function validateCustomerCheckoutDraftContacts(
+  data: CustomerCheckoutDraftData,
+): CustomerCheckoutDraftContactValidation {
+  const issues: CustomerCheckoutDraftIssue[] = [];
+  const customerName = String(data.customerName ?? "").trim();
+  const customerPhone = normalizePhone(data.customerPhone);
+  const customerEmail = String(data.customerEmail ?? "").trim();
+  const recipientName = data.recipientSameAsCustomer === true
+    ? customerName
+    : String(data.recipientName ?? "").trim();
+  const recipientPhone = data.recipientSameAsCustomer === true
+    ? customerPhone
+    : normalizePhone(data.recipientPhone);
+
+  if (customerName.length < 2) {
+    issues.push({
+      code: "customer_name_required",
+      field: "customerName",
+      message: "Укажите имя покупателя",
+      severity: "error",
+    });
+  }
+
+  if (!phoneIsValid(customerPhone)) {
+    issues.push({
+      code: "customer_phone_required",
+      field: "customerPhone",
+      message: "Укажите корректный телефон покупателя",
+      severity: "error",
+    });
+  }
+
+  if (!emailIsValid(customerEmail)) {
+    issues.push({
+      code: "customer_email_invalid",
+      field: "customerEmail",
+      message: "Проверьте адрес электронной почты",
+      severity: "error",
+    });
+  }
+
+  if (recipientName.length < 2) {
+    issues.push({
+      code: "recipient_name_required",
+      field: "recipientName",
+      message: "Укажите имя получателя",
+      severity: "error",
+    });
+  }
+
+  if (!phoneIsValid(recipientPhone)) {
+    issues.push({
+      code: "recipient_phone_required",
+      field: "recipientPhone",
+      message: "Укажите корректный телефон получателя",
+      severity: "error",
+    });
+  }
+
+  return {
+    valid: issues.length === 0,
+    customerPhone,
+    recipientName,
+    recipientPhone,
+    issues,
+  };
 }
 
 function safeQuote(value: unknown): CustomerCheckoutDraftQuote | null {
@@ -969,48 +1054,13 @@ export async function quoteCustomerCheckoutDraft(
     });
   }
 
-  if (!data.customerName || data.customerName.length < 2) {
-    addIssue(issues, {
-      code: "customer_name_required",
-      field: "customerName",
-      message: "Укажите имя покупателя",
-      severity: "error",
-    });
+  const contactValidation = validateCustomerCheckoutDraftContacts(data);
+
+  for (const issue of contactValidation.issues) {
+    addIssue(issues, issue);
   }
 
-  if (!phoneIsValid(data.customerPhone)) {
-    addIssue(issues, {
-      code: "customer_phone_required",
-      field: "customerPhone",
-      message: "Укажите корректный телефон покупателя",
-      severity: "error",
-    });
-  }
-
-  const recipientName = data.recipientSameAsCustomer
-    ? data.customerName
-    : data.recipientName;
-  const recipientPhone = data.recipientSameAsCustomer
-    ? data.customerPhone
-    : data.recipientPhone;
-
-  if (!recipientName || recipientName.length < 2) {
-    addIssue(issues, {
-      code: "recipient_name_required",
-      field: "recipientName",
-      message: "Укажите имя получателя",
-      severity: "error",
-    });
-  }
-
-  if (!phoneIsValid(recipientPhone)) {
-    addIssue(issues, {
-      code: "recipient_phone_required",
-      field: "recipientPhone",
-      message: "Укажите корректный телефон получателя",
-      severity: "error",
-    });
-  }
+  const recipientPhone = contactValidation.recipientPhone;
 
   let deliveryPrice = 0;
   let deliveryTariffName = data.deliveryType === "pickup"

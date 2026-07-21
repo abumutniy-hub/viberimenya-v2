@@ -161,6 +161,7 @@ export function PublicShell({
     pathname.startsWith("/order/track/")
     || pathname.startsWith("/orders")
     || pathname.startsWith("/account")
+    || pathname.startsWith("/checkout")
     || pathname === "/privacy"
     || pathname === "/consent"
     || pathname === "/offer"
@@ -213,6 +214,9 @@ export function PublicShell({
   const cartActive =
     pathname.startsWith(
       "/cart"
+    )
+    || pathname.startsWith(
+      "/checkout"
     );
 
   const year = new Date().getFullYear();

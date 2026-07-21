@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   clearLinkedCustomerCart,
@@ -76,6 +77,24 @@ type SavedAddress = {
   floor: string | null;
   comment: string | null;
   is_default: boolean;
+};
+
+type SharedCheckoutDraft = {
+  data?: {
+    customerName?: string;
+    customerPhone?: string;
+    customerEmail?: string;
+    recipientName?: string;
+    recipientPhone?: string;
+    recipientSameAsCustomer?: boolean;
+    isSurprise?: boolean;
+    doNotCallRecipient?: boolean;
+    contactPreference?:
+      | "call_or_message"
+      | "phone_call"
+      | "messenger_only";
+    cardText?: string;
+  };
 };
 
 function formatSavedAddress(address: SavedAddress) {
@@ -401,6 +420,12 @@ export function CartClient() {
   const [deliveryAddress, setDeliveryAddress] = useState("");
   const [deliveryComment, setDeliveryComment] = useState("");
   const [recipientSameAsCustomer, setRecipientSameAsCustomer] = useState(false);
+  const [recipientName, setRecipientName] = useState("");
+  const [recipientPhone, setRecipientPhone] = useState("");
+  const [contactPreference, setContactPreference] = useState<
+    "call_or_message" | "phone_call" | "messenger_only"
+  >("call_or_message");
+  const [cardText, setCardText] = useState("");
   const [isSurprise, setIsSurprise] = useState(false);
   const [doNotCallRecipient, setDoNotCallRecipient] = useState(false);
   const [clientRequestId, setClientRequestId] = useState("");
@@ -546,6 +571,59 @@ export function CartClient() {
           setSelectedAddressId(preferredAddress.id);
           setDeliveryAddress(formatSavedAddress(preferredAddress));
           setDeliveryComment(savedAddressComment(preferredAddress));
+        }
+
+        if (data?.telegram?.connected === true) {
+          void fetch("/api/public/account/checkout-draft", {
+            credentials: "include",
+            cache: "no-store",
+          })
+            .then((response) => (response.ok ? response.json() : null))
+            .then((draftResponse) => {
+              const sharedDraft = draftResponse?.draft as
+                | SharedCheckoutDraft
+                | null
+                | undefined;
+              const draftData = sharedDraft?.data;
+
+              if (!draftData) return;
+
+              if (draftData.customerName) {
+                setCustomerName(draftData.customerName);
+              }
+
+              if (draftData.customerEmail !== undefined) {
+                setCustomerEmail(draftData.customerEmail || "");
+              }
+
+              const same = draftData.recipientSameAsCustomer === true;
+              setRecipientSameAsCustomer(same);
+              setRecipientName(
+                same
+                  ? draftData.customerName || customer.name || ""
+                  : draftData.recipientName || "",
+              );
+              setRecipientPhone(
+                same
+                  ? customer.phone || ""
+                  : draftData.recipientPhone || "",
+              );
+              setIsSurprise(same ? false : draftData.isSurprise === true);
+              setDoNotCallRecipient(
+                same ? false : draftData.doNotCallRecipient === true,
+              );
+              setContactPreference(
+                draftData.contactPreference === "phone_call"
+                  || draftData.contactPreference === "messenger_only"
+                  ? draftData.contactPreference
+                  : "call_or_message",
+              );
+              setCardText(draftData.cardText || "");
+              setCartNotice(
+                "Контакты покупателя и получателя восстановлены из общего черновика сайта и Telegram.",
+              );
+            })
+            .catch(() => undefined);
         }
       })
       .catch(() => undefined);
@@ -1212,6 +1290,14 @@ export function CartClient() {
         onSubmit={submitOrder}
         noValidate
       >
+        <div className="checkout-guided-entry">
+          <div>
+            <strong>Пошаговое оформление</strong>
+            <span>Контакты сохраняются в общем черновике сайта и Telegram.</span>
+          </div>
+          <Link href="/checkout">Открыть</Link>
+        </div>
+
         <div className="checkout-total">
           <span>Итого</span>
           <strong>{money(total)}</strong>
@@ -1347,7 +1433,9 @@ export function CartClient() {
                 name="customerName"
                 value={customerName}
                 onChange={(event) => {
-                  setCustomerName(event.target.value);
+                  const value = event.target.value;
+                  setCustomerName(value);
+                  if (recipientSameAsCustomer) setRecipientName(value);
                   setFormError("");
                 }}
                 autoComplete="name"
@@ -1363,7 +1451,9 @@ export function CartClient() {
                 name="customerPhone"
                 value={customerPhone}
                 onChange={(event) => {
-                  setCustomerPhone(event.target.value);
+                  const value = event.target.value;
+                  setCustomerPhone(value);
+                  if (recipientSameAsCustomer) setRecipientPhone(value);
                   setBonusToSpend(0);
                   setBonusMessage("");
                   setFormError("");
@@ -1393,7 +1483,18 @@ export function CartClient() {
 
             <label>
               <span>Как связаться</span>
-              <select name="contactPreference" defaultValue="call_or_message">
+              <select
+                name="contactPreference"
+                value={contactPreference}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setContactPreference(
+                    value === "phone_call" || value === "messenger_only"
+                      ? value
+                      : "call_or_message",
+                  );
+                }}
+              >
                 <option value="call_or_message">Позвонить или написать</option>
                 <option value="phone_call">Лучше позвонить</option>
                 <option value="messenger_only">Только сообщение</option>
@@ -1423,6 +1524,8 @@ export function CartClient() {
                   setRecipientSameAsCustomer(checked);
 
                   if (checked) {
+                    setRecipientName(customerName);
+                    setRecipientPhone(customerPhone);
                     setIsSurprise(false);
                     setDoNotCallRecipient(false);
                   }
@@ -1443,6 +1546,11 @@ export function CartClient() {
                   <span>Имя получателя *</span>
                   <input
                     name="recipientName"
+                    value={recipientName}
+                    onChange={(event) => {
+                      setRecipientName(event.target.value);
+                      setFormError("");
+                    }}
                     autoComplete="off"
                     minLength={2}
                     maxLength={160}
@@ -1454,6 +1562,11 @@ export function CartClient() {
                   <span>Телефон получателя *</span>
                   <input
                     name="recipientPhone"
+                    value={recipientPhone}
+                    onChange={(event) => {
+                      setRecipientPhone(event.target.value);
+                      setFormError("");
+                    }}
                     inputMode="tel"
                     autoComplete="off"
                     placeholder="+7 999 000-00-00"
@@ -1503,6 +1616,8 @@ export function CartClient() {
               <span>Текст для открытки</span>
               <textarea
                 name="cardText"
+                value={cardText}
+                onChange={(event) => setCardText(event.target.value)}
                 maxLength={500}
                 placeholder="Например: С любовью и самыми тёплыми пожеланиями"
               />
@@ -1510,7 +1625,7 @@ export function CartClient() {
           </div>
         </section>
 
-        <section className="checkout-section">
+        <section className="checkout-section" id="checkout-delivery">
           <div className="checkout-section-heading">
             <span>3</span>
 

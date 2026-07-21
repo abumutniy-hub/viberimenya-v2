@@ -50,6 +50,7 @@ import {
   resolveCustomerCheckoutDraftScope,
   resolveTelegramCheckoutDraftCustomer,
   saveCustomerCheckoutDraft,
+  validateCustomerCheckoutDraftContacts,
   type CustomerCheckoutDraftData,
   type CustomerCheckoutDraftStep,
 } from "../modules/customers/customer-checkout-draft.service";
@@ -2241,7 +2242,13 @@ export async function publicRoutes(app: FastifyInstance) {
         source: "site",
       });
 
-      return { ok: true, draft };
+      return {
+        ok: true,
+        draft,
+        contactValidation: draft
+          ? validateCustomerCheckoutDraftContacts(draft.data)
+          : null,
+      };
     } finally {
       await client.end();
     }
@@ -2295,7 +2302,13 @@ export async function publicRoutes(app: FastifyInstance) {
           });
         }
 
-        return { ok: true, ...result };
+        return {
+          ok: true,
+          ...result,
+          contactValidation: validateCustomerCheckoutDraftContacts(
+            result.draft.data,
+          ),
+        };
       } catch (error) {
         if (error instanceof CheckoutDraftConflictError) {
           return reply.status(409).send({
@@ -2455,7 +2468,13 @@ export async function publicRoutes(app: FastifyInstance) {
         source: "telegram",
       });
 
-      return { ok: true, draft };
+      return {
+        ok: true,
+        draft,
+        contactValidation: draft
+          ? validateCustomerCheckoutDraftContacts(draft.data)
+          : null,
+      };
     } finally {
       await client.end();
     }
@@ -2493,7 +2512,13 @@ export async function publicRoutes(app: FastifyInstance) {
           });
         });
 
-        return { ok: true, ...result };
+        return {
+          ok: true,
+          ...result,
+          contactValidation: validateCustomerCheckoutDraftContacts(
+            result.draft.data,
+          ),
+        };
       } catch (error) {
         if (error instanceof CheckoutDraftConflictError) {
           return reply.status(409).send({
