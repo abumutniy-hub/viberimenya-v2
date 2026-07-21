@@ -16,6 +16,10 @@ export type PublicSiteSettings = {
     legalName: string;
     inn: string;
     ogrn: string;
+    settlementAccount: string;
+    bankName: string;
+    bik: string;
+    correspondentAccount: string;
     policyUrl: string;
     offerUrl: string;
     deliveryTermsUrl: string;
@@ -68,6 +72,10 @@ export const defaultPublicSettings: PublicSiteSettings = {
     legalName: "",
     inn: "",
     ogrn: "",
+    settlementAccount: "",
+    bankName: "",
+    bik: "",
+    correspondentAccount: "",
     policyUrl: "/privacy",
     offerUrl: "/offer",
     deliveryTermsUrl: "/delivery",
@@ -171,6 +179,10 @@ export async function loadPublicSettings(): Promise<PublicSiteSettings> {
         legalName: text(site.legalName),
         inn: text(site.inn),
         ogrn: text(site.ogrn),
+        settlementAccount: text(site.settlementAccount),
+        bankName: text(site.bankName),
+        bik: text(site.bik),
+        correspondentAccount: text(site.correspondentAccount),
         policyUrl: text(site.policyUrl, "/privacy"),
         offerUrl: text(site.offerUrl, "/offer"),
         deliveryTermsUrl: text(site.deliveryTermsUrl, "/delivery"),
@@ -257,6 +269,10 @@ export async function loadLegalSettings(): Promise<PublicSiteSettings> {
         legalName: text(site.legalName, base.site.legalName),
         inn: text(site.inn, base.site.inn),
         ogrn: text(site.ogrn, base.site.ogrn),
+        settlementAccount: text(site.settlementAccount, base.site.settlementAccount),
+        bankName: text(site.bankName, base.site.bankName),
+        bik: text(site.bik, base.site.bik),
+        correspondentAccount: text(site.correspondentAccount, base.site.correspondentAccount),
       },
       legal: {
         privacyText: text(legal.privacyText),

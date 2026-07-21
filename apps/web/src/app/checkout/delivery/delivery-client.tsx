@@ -769,14 +769,14 @@ export function CheckoutDeliveryClient() {
           </section>
         )}
 
-        <footer className={styles.footer}>
+        <div className={styles.footer}>
           <div className={styles.footerActions}>
             <Link className={styles.secondaryLink} href="/checkout">Назад</Link>
             <button className={styles.primaryButton} type="button" disabled={saveState === "saving" || !options.acceptingOrders} onClick={() => void continueCheckout()}>
               К итогам
             </button>
           </div>
-        </footer>
+        </div>
       </div>
     </main>
   );

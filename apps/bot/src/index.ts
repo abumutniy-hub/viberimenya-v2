@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, unlink, writeFile } from "node:fs/promises";
-import { extname, join, resolve } from "node:path";
+import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { basename, extname, join, resolve } from "node:path";
 import { config } from "dotenv";
 import postgres from "postgres";
 import {
@@ -11,11 +11,11 @@ import {
   unlinkedMainKeyboard,
 } from "./customer-telegram-ux";
 import {
+  browserPairingCanConfirm,
+  browserPairingIsConfirmed,
   hashBrowserPairingCode,
   hashBrowserPairingToken,
   isPairingManualCode,
-  pairingApproveCallback,
-  pairingCancelCallback,
   pairingPhoneMatches,
   parsePairingStartPayload,
   selectBrowserPairingForContact,
@@ -34,6 +34,10 @@ import {
   readTelegramOrderError,
   type TelegramFinalizedOrder,
 } from "./customer-order-finalization";
+import {
+  resolveTelegramLocalUploadPath,
+  telegramPhotoContentType,
+} from "./telegram-photo-upload";
 import {
   TELEGRAM_CHECKOUT_FLOW_CREATES_ORDER,
   TELEGRAM_CHECKOUT_FLOW_VERSION,
@@ -609,6 +613,102 @@ async function telegramApi<T>(method: string, body?: Record<string, unknown>): P
   throw new Error(`Telegram ${method} failed after retries`);
 }
 
+
+async function telegramApiMultipart<T>(
+  method: string,
+  createBody: () => FormData,
+): Promise<T> {
+  for (let attempt = 0; attempt < TELEGRAM_RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await fetch(
+        `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/${method}`,
+        {
+          method: "POST",
+          body: createBody(),
+        },
+      );
+      const data = await response.json().catch(() => ({
+        ok: false,
+        description: response.statusText,
+      })) as TelegramApiResponse<T>;
+
+      if (response.ok && data.ok) {
+        return data.result as T;
+      }
+
+      const description = data.description || response.statusText || "unknown error";
+      const retryAfter = data.parameters?.retry_after;
+
+      if (
+        attempt < TELEGRAM_RETRY_ATTEMPTS - 1
+        && isRetryableTelegramFailure(response.status, description)
+      ) {
+        await sleep(telegramRetryDelayMs(attempt, retryAfter));
+        continue;
+      }
+
+      throw new Error(`Telegram ${method} failed: ${description}`);
+    } catch (error) {
+      const description = error instanceof Error ? error.message : String(error);
+
+      if (
+        attempt < TELEGRAM_RETRY_ATTEMPTS - 1
+        && isRetryableTelegramFailure(undefined, description)
+      ) {
+        await sleep(telegramRetryDelayMs(attempt));
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  throw new Error(`Telegram ${method} failed after retries`);
+}
+
+type TelegramLocalUpload = {
+  bytes: Buffer;
+  filename: string;
+  contentType: string;
+};
+
+async function readTelegramLocalUpload(
+  photoUrl: string,
+): Promise<TelegramLocalUpload | null> {
+  const filePath = resolveTelegramLocalUploadPath(
+    photoUrl,
+    SITE_URL,
+    UPLOADS_DIR,
+  );
+
+  if (!filePath) return null;
+
+  try {
+    return {
+      bytes: await readFile(filePath),
+      filename: basename(filePath),
+      contentType: telegramPhotoContentType(filePath),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function appendTelegramMultipartExtra(
+  form: FormData,
+  extra?: Record<string, unknown>,
+) {
+  if (!extra) return;
+
+  for (const [key, value] of Object.entries(extra)) {
+    if (value === undefined || value === null) continue;
+    form.append(
+      key,
+      typeof value === "string" ? value : JSON.stringify(value),
+    );
+  }
+}
+
 async function sendTelegramMessage(chatId: string | number, message: string, extra?: Record<string, unknown>) {
   if (DRY_RUN) {
     console.log(`[bot-worker] dry-run send chat=${chatId}`);
@@ -624,17 +724,42 @@ async function sendTelegramMessage(chatId: string | number, message: string, ext
   });
 }
 
-async function sendTelegramPhoto(chatId: string | number, photoUrl: string, caption: string, extra?: Record<string, unknown>) {
+async function sendTelegramPhoto(
+  chatId: string | number,
+  photoUrl: string,
+  caption: string,
+  extra?: Record<string, unknown>,
+) {
   if (DRY_RUN) {
     console.log(`[bot-worker] dry-run send photo chat=${chatId} photo=${photoUrl}`);
     console.log(caption);
     return;
   }
 
+  const localUpload = await readTelegramLocalUpload(photoUrl);
+
+  if (localUpload) {
+    await telegramApiMultipart("sendPhoto", () => {
+      const form = new FormData();
+      form.append("chat_id", String(chatId));
+      form.append("caption", caption);
+      form.append(
+        "photo",
+        new Blob([new Uint8Array(localUpload.bytes)], {
+          type: localUpload.contentType,
+        }),
+        localUpload.filename,
+      );
+      appendTelegramMultipartExtra(form, extra);
+      return form;
+    });
+    return;
+  }
+
   const payload: Record<string, unknown> = {
     chat_id: chatId,
     photo: photoUrl,
-    caption
+    caption,
   };
 
   if (extra) {
@@ -642,6 +767,23 @@ async function sendTelegramPhoto(chatId: string | number, photoUrl: string, capt
   }
 
   await telegramApi("sendPhoto", payload);
+}
+
+async function sendTelegramPhotoWithFallback(
+  chatId: string | number,
+  photoUrl: string,
+  caption: string,
+  extra?: Record<string, unknown>,
+) {
+  try {
+    await sendTelegramPhoto(chatId, photoUrl, caption, extra);
+  } catch (error) {
+    console.error(
+      `[bot-worker] photo delivery fallback chat=${chatId} photo=${photoUrl}`,
+      error,
+    );
+    await sendTelegramMessage(chatId, caption, extra);
+  }
 }
 
 async function editTelegramMessageText(chatId: string | number, messageId: number, message: string, extra?: Record<string, unknown>) {
@@ -1407,31 +1549,34 @@ async function openBrowserPairing(
   `;
 
   if (existing?.customer_id === pairing.customer_id) {
+    const result = await confirmBrowserPairing(
+      pairing.id,
+      telegramId,
+      message.from,
+      "linked_telegram",
+    );
+
+    if (!result.ok) {
+      await sendTelegramMessage(
+        message.chat.id,
+        "Не удалось подтвердить вход. Вернитесь на сайт и создайте новый запрос.",
+        {
+          reply_markup: await mainKeyboardForChat(message.chat.id),
+        },
+      );
+      return true;
+    }
+
     await sendTelegramMessage(
       message.chat.id,
       [
-        "🔐 Подтверждение входа на сайт",
+        "✅ Вход подтверждён",
         "",
-        "Этот Telegram уже подключён к вашему профилю.",
-        "Подтвердите вход в браузере, где вы ввели номер телефона.",
-        "",
-        "Запрос действует 10 минут.",
+        "Telegram уже был подключён к вашему профилю.",
+        "Вернитесь в браузер — личный кабинет откроется автоматически.",
       ].join("\n"),
       {
-        reply_markup: inlineKeyboard([
-          [
-            {
-              text: "✅ Подтвердить вход",
-              callback_data: pairingApproveCallback(pairing.id),
-            },
-          ],
-          [
-            {
-              text: "Отменить",
-              callback_data: pairingCancelCallback(pairing.id),
-            },
-          ],
-        ]),
+        reply_markup: await mainKeyboardForChat(message.chat.id),
       },
     );
 
@@ -1476,11 +1621,10 @@ async function openBrowserPairing(
 
 async function confirmBrowserPairing(
   pairingId: string,
-  message: TelegramMessage,
+  telegramId: string,
+  actor: TelegramUser | undefined,
   source: "linked_telegram" | "telegram_contact",
 ) {
-  const telegramId = String(message.chat.id);
-
   return sql.begin(async (transaction) => {
     const rows = await transaction<BrowserPairingRecord[]>`
       SELECT
@@ -1498,9 +1642,14 @@ async function confirmBrowserPairing(
       WHERE tokens.id = ${pairingId}
         AND tokens.provider = 'telegram'
         AND tokens.purpose = 'browser_pairing_login'
-        AND tokens.status IN ('pending', 'opened')
-        AND tokens.consumed_at IS NULL
-        AND tokens.expires_at > NOW()
+        AND (
+          (
+            tokens.status IN ('pending', 'opened')
+            AND tokens.consumed_at IS NULL
+            AND tokens.expires_at > NOW()
+          )
+          OR tokens.status IN ('confirmed', 'consumed')
+        )
       LIMIT 1
       FOR UPDATE
     `;
@@ -1513,10 +1662,28 @@ async function confirmBrowserPairing(
       };
     }
 
-    if (
-      (typeof pairing.metadata.candidateTelegramId === "string"
+    const candidateTelegramId =
+      typeof pairing.metadata.candidateTelegramId === "string"
         ? pairing.metadata.candidateTelegramId
-        : "") !== telegramId
+        : "";
+    const confirmedTelegramId =
+      typeof pairing.metadata.confirmedTelegramId === "string"
+        ? pairing.metadata.confirmedTelegramId
+        : "";
+
+    if (
+      candidateTelegramId
+      && candidateTelegramId !== telegramId
+    ) {
+      return {
+        ok: false as const,
+        reason: "different_telegram" as const,
+      };
+    }
+
+    if (
+      confirmedTelegramId
+      && confirmedTelegramId !== telegramId
     ) {
       return {
         ok: false as const,
@@ -1555,6 +1722,7 @@ async function confirmBrowserPairing(
           })}::jsonb,
           updated_at = NOW()
         WHERE id = ${pairing.id}
+          AND status IN ('pending', 'opened')
       `;
 
       return {
@@ -1563,9 +1731,52 @@ async function confirmBrowserPairing(
       };
     }
 
+    if (browserPairingIsConfirmed(pairing.status)) {
+      if (existing?.customer_id !== pairing.customer_id) {
+        return {
+          ok: false as const,
+          reason: "different_telegram" as const,
+        };
+      }
+
+      return {
+        ok: true as const,
+        alreadyConfirmed: true,
+        customerId: pairing.customer_id,
+        shopId: pairing.shop_id,
+      };
+    }
+
+    if (!browserPairingCanConfirm(pairing.status)) {
+      return {
+        ok: false as const,
+        reason: "expired" as const,
+      };
+    }
+
+    if (!candidateTelegramId) {
+      await transaction`
+        UPDATE customer_link_tokens
+        SET
+          status = 'opened',
+          metadata = metadata || ${JSON.stringify({
+            candidateTelegramId: telegramId,
+            candidateUsername: actor?.username || null,
+            candidateFirstName: actor?.first_name || null,
+            candidateLastName: actor?.last_name || null,
+            openedAt: new Date().toISOString(),
+          })}::jsonb,
+          updated_at = NOW()
+        WHERE id = ${pairing.id}
+          AND status IN ('pending', 'opened')
+          AND consumed_at IS NULL
+          AND expires_at > NOW()
+      `;
+    }
+
     const displayName = [
-      message.from?.first_name,
-      message.from?.last_name,
+      actor?.first_name,
+      actor?.last_name,
     ]
       .filter(Boolean)
       .join(" ") || null;
@@ -1588,9 +1799,9 @@ async function confirmBrowserPairing(
         ${pairing.shop_id},
         ${pairing.customer_id},
         ${telegramId},
-        ${message.from?.username || null},
-        ${message.from?.first_name || null},
-        ${message.from?.last_name || null},
+        ${actor?.username || null},
+        ${actor?.first_name || null},
+        ${actor?.last_name || null},
         true,
         true,
         NOW(),
@@ -1600,12 +1811,12 @@ async function confirmBrowserPairing(
       ON CONFLICT (shop_id, telegram_id)
       DO UPDATE SET
         customer_id = ${pairing.customer_id},
-        username = EXCLUDED.username,
-        first_name = EXCLUDED.first_name,
-        last_name = EXCLUDED.last_name,
+        username = COALESCE(EXCLUDED.username, telegram_accounts.username),
+        first_name = COALESCE(EXCLUDED.first_name, telegram_accounts.first_name),
+        last_name = COALESCE(EXCLUDED.last_name, telegram_accounts.last_name),
         is_active = true,
         notifications_enabled = true,
-        linked_at = NOW(),
+        linked_at = COALESCE(telegram_accounts.linked_at, NOW()),
         updated_at = NOW()
     `;
 
@@ -1627,7 +1838,7 @@ async function confirmBrowserPairing(
         ${pairing.customer_id},
         'telegram',
         ${telegramId},
-        ${message.from?.username || null},
+        ${actor?.username || null},
         ${displayName},
         true,
         NOW(),
@@ -1637,10 +1848,10 @@ async function confirmBrowserPairing(
       ON CONFLICT (shop_id, provider, provider_user_id)
       DO UPDATE SET
         customer_id = EXCLUDED.customer_id,
-        provider_username = EXCLUDED.provider_username,
-        provider_display_name = EXCLUDED.provider_display_name,
+        provider_username = COALESCE(EXCLUDED.provider_username, customer_channel_links.provider_username),
+        provider_display_name = COALESCE(EXCLUDED.provider_display_name, customer_channel_links.provider_display_name),
         is_active = true,
-        linked_at = NOW(),
+        linked_at = COALESCE(customer_channel_links.linked_at, NOW()),
         updated_at = NOW()
     `;
 
@@ -1648,7 +1859,7 @@ async function confirmBrowserPairing(
       UPDATE customers
       SET
         telegram_username = COALESCE(
-          ${message.from?.username || null},
+          ${actor?.username || null},
           telegram_username
         ),
         updated_at = NOW()
@@ -1656,20 +1867,61 @@ async function confirmBrowserPairing(
         AND shop_id = ${pairing.shop_id}
     `;
 
-    await transaction`
+    const confirmedRows = await transaction<{ id: string }[]>`
       UPDATE customer_link_tokens
       SET
         status = 'confirmed',
         metadata = metadata || ${JSON.stringify({
+          candidateTelegramId: telegramId,
           confirmedTelegramId: telegramId,
-          confirmedUsername: message.from?.username || null,
+          confirmedUsername: actor?.username || null,
           confirmedAt: new Date().toISOString(),
           confirmationSource: source,
         })}::jsonb,
         updated_at = NOW()
       WHERE id = ${pairing.id}
         AND status IN ('pending', 'opened')
+        AND consumed_at IS NULL
+        AND expires_at > NOW()
+      RETURNING id
     `;
+
+    if (!confirmedRows[0]) {
+      const latestRows = await transaction<{
+        status: string;
+        customer_id: string;
+        metadata: Record<string, unknown>;
+      }[]>`
+        SELECT status, customer_id, metadata
+        FROM customer_link_tokens
+        WHERE id = ${pairing.id}
+        LIMIT 1
+      `;
+      const latest = latestRows[0];
+      const latestTelegramId =
+        latest && typeof latest.metadata.confirmedTelegramId === "string"
+          ? latest.metadata.confirmedTelegramId
+          : "";
+
+      if (
+        !latest
+        || !browserPairingIsConfirmed(latest.status)
+        || latest.customer_id !== pairing.customer_id
+        || (latestTelegramId && latestTelegramId !== telegramId)
+      ) {
+        return {
+          ok: false as const,
+          reason: "expired" as const,
+        };
+      }
+
+      return {
+        ok: true as const,
+        alreadyConfirmed: true,
+        customerId: pairing.customer_id,
+        shopId: pairing.shop_id,
+      };
+    }
 
     await transaction`
       INSERT INTO admin_audit_log (
@@ -1702,6 +1954,7 @@ async function confirmBrowserPairing(
 
     return {
       ok: true as const,
+      alreadyConfirmed: false,
       customerId: pairing.customer_id,
       shopId: pairing.shop_id,
     };
@@ -1912,7 +2165,8 @@ async function handleBrowserPairingContact(
 
   const result = await confirmBrowserPairing(
     pairing.id,
-    message,
+    String(message.chat.id),
+    message.from,
     "telegram_contact",
   );
 
@@ -1966,7 +2220,8 @@ async function handleBrowserPairingApprove(
 
   const result = await confirmBrowserPairing(
     pairingId,
-    message,
+    String(callbackQuery.from.id),
+    callbackQuery.from,
     "linked_telegram",
   );
 
@@ -11725,7 +11980,7 @@ async function processLegacyNotificationEvents() {
           === "florist_order_assigned"
           && productImageUrl
         ) {
-          await sendTelegramPhoto(chatId, productImageUrl, message);
+          await sendTelegramPhotoWithFallback(chatId, productImageUrl, message);
 
           if (actionReplyMarkup) {
             await sendTelegramMessage(chatId, "Действие по заказу:", {
@@ -11736,7 +11991,7 @@ async function processLegacyNotificationEvents() {
           event.type === "bouquet_approval_requested"
           && bouquetPhotoUrl
         ) {
-          await sendTelegramPhoto(
+          await sendTelegramPhotoWithFallback(
             chatId,
             bouquetPhotoUrl,
             message,
@@ -11745,11 +12000,11 @@ async function processLegacyNotificationEvents() {
               : undefined
           );
         } else if (event.type === "order_ready" && bouquetPhotoUrl) {
-          await sendTelegramPhoto(chatId, bouquetPhotoUrl, message, actionReplyMarkup ? {
+          await sendTelegramPhotoWithFallback(chatId, bouquetPhotoUrl, message, actionReplyMarkup ? {
             reply_markup: actionReplyMarkup
           } : undefined);
         } else if (event.type === "order_delivered" && deliveryProofPhotoUrl) {
-          await sendTelegramPhoto(
+          await sendTelegramPhotoWithFallback(
             chatId,
             deliveryProofPhotoUrl,
             message,
@@ -12169,31 +12424,31 @@ async function sendOutboxEventToRecipient(
 
     await sendCourierOrderCard(courierChatId, courierOrder);
   } else if (event.type === "florist_order_assigned" && productImageUrl) {
-    await sendTelegramPhoto(chatId, productImageUrl, message);
+    await sendTelegramPhotoWithFallback(chatId, productImageUrl, message);
 
     if (actionReplyMarkup) {
       await sendTelegramMessage(chatId, "Действие по заказу:", { reply_markup: actionReplyMarkup });
     }
   } else if (event.type === "bouquet_approval_requested" && bouquetPhotoUrl) {
-    await sendTelegramPhoto(
+    await sendTelegramPhotoWithFallback(
       chatId,
       bouquetPhotoUrl,
       message,
-      actionReplyMarkup ? { reply_markup: actionReplyMarkup } : undefined
+      actionReplyMarkup ? { reply_markup: actionReplyMarkup } : undefined,
     );
   } else if (event.type === "order_ready" && bouquetPhotoUrl) {
-    await sendTelegramPhoto(
+    await sendTelegramPhotoWithFallback(
       chatId,
       bouquetPhotoUrl,
       message,
-      actionReplyMarkup ? { reply_markup: actionReplyMarkup } : undefined
+      actionReplyMarkup ? { reply_markup: actionReplyMarkup } : undefined,
     );
   } else if (event.type === "order_delivered" && deliveryProofPhotoUrl) {
-    await sendTelegramPhoto(
+    await sendTelegramPhotoWithFallback(
       chatId,
       deliveryProofPhotoUrl,
       message,
-      actionReplyMarkup ? { reply_markup: actionReplyMarkup } : undefined
+      actionReplyMarkup ? { reply_markup: actionReplyMarkup } : undefined,
     );
   } else if (actionReplyMarkup) {
     await sendTelegramMessage(chatId, message, { reply_markup: actionReplyMarkup });

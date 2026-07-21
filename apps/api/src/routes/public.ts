@@ -4062,6 +4062,15 @@ export async function publicRoutes(app: FastifyInstance) {
           bonus_spent: number;
           bonus_earned: number;
           tracking_token: string | null;
+          delivery_type: string;
+          delivery_date: string | null;
+          delivery_interval: string | null;
+          delivery_address_text: string | null;
+          bouquet_photo_url: string | null;
+          bouquet_approval_status: string | null;
+          bouquet_approval_requested_at: string | null;
+          bouquet_approval_decided_at: string | null;
+          bouquet_approval_note: string | null;
           created_at: string;
           items_count: number;
           item_names: string[] | null;
@@ -4075,6 +4084,15 @@ export async function publicRoutes(app: FastifyInstance) {
           o.bonus_spent,
           o.bonus_earned,
           o.tracking_token,
+          o.delivery_type,
+          o.delivery_date,
+          COALESCE(di.name, NULLIF(o.delivery_comment, '')) AS delivery_interval,
+          o.delivery_address_text,
+          o.bouquet_photo_url,
+          o.metadata #>> '{bouquetApproval,status}' AS bouquet_approval_status,
+          o.metadata #>> '{bouquetApproval,requestedAt}' AS bouquet_approval_requested_at,
+          o.metadata #>> '{bouquetApproval,decidedAt}' AS bouquet_approval_decided_at,
+          o.metadata #>> '{bouquetApproval,note}' AS bouquet_approval_note,
           o.created_at,
           COUNT(oi.id)::int AS items_count,
           COALESCE(
@@ -4083,11 +4101,14 @@ export async function publicRoutes(app: FastifyInstance) {
             ARRAY[]::text[]
           ) AS item_names
         FROM orders o
+        LEFT JOIN delivery_intervals di
+          ON di.id = o.delivery_interval_id
+         AND di.shop_id = o.shop_id
         LEFT JOIN order_items oi
           ON oi.order_id = o.id
         WHERE o.customer_id = ${session.customer_id}
           AND o.shop_id = ${session.shop_id}
-        GROUP BY o.id
+        GROUP BY o.id, di.name
         ORDER BY o.created_at DESC
         LIMIT 50
       `;
@@ -4148,6 +4169,23 @@ export async function publicRoutes(app: FastifyInstance) {
           bonus_earned: Number(order.bonus_earned || 0),
           items_count: Number(order.items_count || 0),
           item_names: order.item_names ?? [],
+          bouquetApproval: {
+            status: [
+              "pending",
+              "approved",
+              "revision_requested",
+              "waived",
+            ].includes(String(order.bouquet_approval_status || ""))
+              ? String(order.bouquet_approval_status)
+              : "not_required",
+            requestedAt: order.bouquet_approval_requested_at,
+            decidedAt: order.bouquet_approval_decided_at,
+            note: order.bouquet_approval_note,
+            canRespond:
+              order.status === "assembling"
+              && Boolean(order.bouquet_photo_url)
+              && order.bouquet_approval_status === "pending",
+          },
         })),
         bonuses,
         addresses,
@@ -5494,6 +5532,7 @@ export async function publicRoutes(app: FastifyInstance) {
           payment_method: string;
           delivery_type: string;
           delivery_date: string | null;
+          delivery_interval_name: string | null;
           delivery_address_text: string | null;
           delivery_comment: string | null;
           subtotal: number;
@@ -5526,6 +5565,7 @@ export async function publicRoutes(app: FastifyInstance) {
           o.payment_method,
           o.delivery_type,
           o.delivery_date,
+          di.name AS delivery_interval_name,
           o.delivery_address_text,
           o.delivery_comment,
           o.subtotal,
@@ -5562,6 +5602,9 @@ export async function publicRoutes(app: FastifyInstance) {
           o.created_at,
           o.updated_at
         FROM orders o
+        LEFT JOIN delivery_intervals di
+          ON di.id = o.delivery_interval_id
+         AND di.shop_id = o.shop_id
         WHERE o.tracking_token = ${params.token}
         LIMIT 1
       `;
@@ -5627,7 +5670,10 @@ export async function publicRoutes(app: FastifyInstance) {
           paymentMethod: order.payment_method,
           deliveryType: order.delivery_type,
           deliveryDate: order.delivery_date,
-          deliveryInterval: order.delivery_comment,
+          deliveryInterval:
+            order.delivery_interval_name
+            || order.delivery_comment
+            || null,
           deliveryAddress: order.delivery_address_text,
           subtotal: Number(order.subtotal || 0),
           discountTotal: Number(order.discount_total || 0),

@@ -15,3 +15,31 @@
   .totalMain strong { font-size: 24px; }
   .submitButton { min-height: 54px; }
 }
+
+/* Release 17B-2C.3.6.4 — compact final checkout on mobile */
+@media (max-width: 760px) {
+  .page {
+    padding-bottom: calc(22px + env(safe-area-inset-bottom));
+  }
+
+  .totalCard {
+    padding: 15px;
+  }
+
+  .totalRows {
+    margin: 14px 0;
+    padding-bottom: 13px;
+  }
+
+  .totalMain {
+    margin-bottom: 12px;
+  }
+
+  .submitButton {
+    min-height: 48px;
+  }
+
+  .recalculateButton {
+    min-height: 42px;
+  }
+}

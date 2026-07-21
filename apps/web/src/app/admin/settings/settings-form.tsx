@@ -36,6 +36,10 @@ export type StoreSettingsFormData = {
     legalName: string;
     inn: string;
     ogrn: string;
+    settlementAccount: string;
+    bankName: string;
+    bik: string;
+    correspondentAccount: string;
     policyUrl: string;
     offerUrl: string;
     deliveryTermsUrl: string;
@@ -212,6 +216,10 @@ export function SettingsForm({
         ),
         inn: String(form.get("inn") ?? ""),
         ogrn: String(form.get("ogrn") ?? ""),
+        settlementAccount: String(form.get("settlementAccount") ?? ""),
+        bankName: String(form.get("bankName") ?? ""),
+        bik: String(form.get("bik") ?? ""),
+        correspondentAccount: String(form.get("correspondentAccount") ?? ""),
         policyUrl: String(
           form.get("policyUrl") ?? ""
         ),
@@ -868,6 +876,42 @@ export function SettingsForm({
               defaultValue={
                 initialSettings.site.ogrn
               }
+            />
+          </label>
+
+
+          <label className={styles.wide}>
+            <span>Расчётный счёт</span>
+            <input
+              name="settlementAccount"
+              inputMode="numeric"
+              defaultValue={initialSettings.site.settlementAccount}
+            />
+          </label>
+
+          <label className={styles.wide}>
+            <span>Банк</span>
+            <input
+              name="bankName"
+              defaultValue={initialSettings.site.bankName}
+            />
+          </label>
+
+          <label>
+            <span>БИК</span>
+            <input
+              name="bik"
+              inputMode="numeric"
+              defaultValue={initialSettings.site.bik}
+            />
+          </label>
+
+          <label>
+            <span>Корреспондентский счёт</span>
+            <input
+              name="correspondentAccount"
+              inputMode="numeric"
+              defaultValue={initialSettings.site.correspondentAccount}
             />
           </label>
 

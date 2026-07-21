@@ -59,6 +59,13 @@ export function pairingPhoneMatches(
   );
 }
 
+export function browserPairingCanConfirm(status: string) {
+  return status === "pending" || status === "opened";
+}
+
+export function browserPairingIsConfirmed(status: string) {
+  return status === "confirmed" || status === "consumed";
+}
 
 export function browserPairingMetadataText(
   metadata: unknown,

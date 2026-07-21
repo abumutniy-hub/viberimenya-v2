@@ -17,6 +17,18 @@ type Order = {
   payment_status: string;
   total: number;
   tracking_token: string | null;
+  delivery_type: string;
+  delivery_date: string | null;
+  delivery_interval: string | null;
+  delivery_address_text: string | null;
+  bouquet_photo_url: string | null;
+  bouquetApproval: {
+    status: string;
+    requestedAt: string | null;
+    decidedAt: string | null;
+    note: string | null;
+    canRespond: boolean;
+  };
   created_at: string;
   items_count: number;
   item_names: string[];
@@ -41,6 +53,26 @@ function dateText(value: string) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function deliveryDateText(value: string | null) {
+  if (!value) return "—";
+  return new Date(value).toLocaleDateString("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
+}
+
+function bouquetApprovalText(status: string) {
+  const map: Record<string, string> = {
+    pending: "Ожидает согласования",
+    approved: "Фото одобрено",
+    revision_requested: "Запрошена правка",
+    waived: "Согласование не требуется",
+    not_required: "Фото пока не добавлено",
+  };
+  return map[status] || status;
 }
 
 function statusText(status: string) {
@@ -275,10 +307,38 @@ export function OrdersClient() {
                 </p>
               </div>
 
+              <div className="orders-card-delivery">
+                <strong>
+                  {order.delivery_type === "pickup" ? "Самовывоз" : "Доставка"}
+                </strong>
+                <span>Дата: {deliveryDateText(order.delivery_date)}</span>
+                {order.delivery_type !== "pickup" ? (
+                  <span>Интервал: {order.delivery_interval || "уточняется"}</span>
+                ) : null}
+                {order.delivery_address_text ? (
+                  <span>Адрес: {order.delivery_address_text}</span>
+                ) : null}
+              </div>
+
+              {order.bouquet_photo_url ? (
+                <div className="orders-card-bouquet">
+                  <img
+                    src={order.bouquet_photo_url}
+                    alt={`Фото готового букета ${order.order_number}`}
+                  />
+                  <div>
+                    <strong>Фото готового букета</strong>
+                    <span>{bouquetApprovalText(order.bouquetApproval.status)}</span>
+                  </div>
+                </div>
+              ) : null}
+
               <div className="orders-card-actions">
                 {order.tracking_token ? (
                   <a href={`/order/track/${order.tracking_token}`}>
-                    Открыть заказ
+                    {order.bouquetApproval.canRespond
+                      ? "Согласовать букет"
+                      : "Открыть заказ"}
                   </a>
                 ) : null}
                 <button

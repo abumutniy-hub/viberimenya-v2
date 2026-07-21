@@ -222,6 +222,10 @@ function buildInitialSettings(
       legalName: text(site.legalName),
       inn: text(site.inn),
       ogrn: text(site.ogrn),
+      settlementAccount: text(site.settlementAccount),
+      bankName: text(site.bankName),
+      bik: text(site.bik),
+      correspondentAccount: text(site.correspondentAccount),
       policyUrl: text(site.policyUrl),
       offerUrl: text(site.offerUrl),
       deliveryTermsUrl: text(

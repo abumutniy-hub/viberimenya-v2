@@ -1,4 +1,6 @@
 import {
+  browserPairingCanConfirm,
+  browserPairingIsConfirmed,
   hashBrowserPairingCode,
   hashBrowserPairingToken,
   isPairingManualCode,
@@ -120,6 +122,23 @@ assertCondition(
   "Cancel callback превышает лимит Telegram",
 );
 pass("callback data укладывается в лимит Telegram");
+
+assertCondition(
+  browserPairingCanConfirm("pending")
+    && browserPairingCanConfirm("opened"),
+  "Активный pairing нельзя подтвердить",
+);
+assertCondition(
+  !browserPairingCanConfirm("cancelled")
+    && !browserPairingCanConfirm("expired"),
+  "Закрытый pairing ошибочно принят",
+);
+assertCondition(
+  browserPairingIsConfirmed("confirmed")
+    && browserPairingIsConfirmed("consumed"),
+  "Повторное подтверждение не является идемпотентным",
+);
+pass("pending/opened подтверждаются, confirmed/consumed повторяются без ошибки");
 
 console.log("");
 console.log("BROWSER TELEGRAM PAIRING BOT E2E: OK");

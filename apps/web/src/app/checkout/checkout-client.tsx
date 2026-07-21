@@ -805,7 +805,7 @@ export function CheckoutClient() {
           </section>
         </div>
 
-        <footer className={styles.actions}>
+        <div className={styles.actions}>
           <div className={styles.actionButtons}>
             <Link className={styles.secondaryLink} href="/cart">
               Назад
@@ -819,7 +819,7 @@ export function CheckoutClient() {
               Продолжить
             </button>
           </div>
-        </footer>
+        </div>
       </div>
     </main>
   );

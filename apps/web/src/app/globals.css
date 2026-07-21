@@ -16339,3 +16339,137 @@ body {
   opacity: 0.48;
   box-shadow: none;
 }
+
+/* Release 17B-2C.3.6.4 — customer order delivery and bouquet approval */
+.account-order-delivery {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.account-order-delivery span {
+  padding: 5px 8px;
+  border-radius: 999px;
+  color: #6a515a;
+  background: #f7efeb;
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.account-order-bouquet,
+.orders-card-bouquet {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid rgba(125, 23, 54, 0.1);
+  border-radius: 16px;
+  background: #fff8f5;
+}
+
+.account-order-bouquet img,
+.orders-card-bouquet img {
+  width: 76px;
+  height: 76px;
+  border-radius: 13px;
+  object-fit: cover;
+}
+
+.account-order-bouquet strong,
+.account-order-bouquet span,
+.account-order-bouquet a,
+.orders-card-bouquet strong,
+.orders-card-bouquet span {
+  display: block;
+}
+
+.account-order-bouquet span,
+.orders-card-bouquet span {
+  margin-top: 4px;
+  color: #746b63;
+  font-size: 11px;
+}
+
+.account-order-bouquet a {
+  width: fit-content;
+  margin-top: 7px;
+  color: #7d1736;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.orders-card-delivery {
+  display: grid;
+  gap: 5px;
+  padding: 13px 14px;
+  border-radius: 16px;
+  background: #f8f2ed;
+}
+
+.orders-card-delivery strong {
+  color: #3f302a;
+  font-size: 13px;
+}
+
+.orders-card-delivery span {
+  color: #746b63;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+@media (max-width: 560px) {
+  .account-order-bouquet,
+  .orders-card-bouquet {
+    grid-template-columns: 64px minmax(0, 1fr);
+  }
+
+  .account-order-bouquet img,
+  .orders-card-bouquet img {
+    width: 64px;
+    height: 64px;
+  }
+}
+
+/* Release 17B-2C.3.6.4 — compact mobile order details */
+@media (max-width: 560px) {
+  .track-page {
+    padding-top: 10px;
+    padding-bottom: 82px;
+  }
+
+  .track-hero,
+  .track-card,
+  .track-actions-polished {
+    border-radius: 18px;
+  }
+
+  .track-hero,
+  .track-card,
+  .track-actions-polished {
+    padding: 15px;
+  }
+
+  .track-grid {
+    gap: 10px;
+    margin-top: 10px;
+  }
+
+  .track-card {
+    margin-top: 10px;
+  }
+
+  .track-lines,
+  .track-items {
+    gap: 8px;
+    margin-top: 10px;
+  }
+
+  .track-item {
+    gap: 8px;
+    padding: 12px;
+    border-radius: 16px;
+  }
+}

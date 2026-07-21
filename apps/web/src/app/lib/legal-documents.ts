@@ -40,6 +40,10 @@ export function legalDocument(kind: LegalKind, settings: PublicSiteSettings) {
   const requisites = [
     settings.site.inn ? `ИНН ${settings.site.inn}` : "",
     settings.site.ogrn ? `ОГРН/ОГРНИП ${settings.site.ogrn}` : "",
+    settings.site.settlementAccount ? `р/с ${settings.site.settlementAccount}` : "",
+    settings.site.bankName ? settings.site.bankName : "",
+    settings.site.bik ? `БИК ${settings.site.bik}` : "",
+    settings.site.correspondentAccount ? `к/с ${settings.site.correspondentAccount}` : "",
   ].filter(Boolean).join(", ");
 
   const custom = customSections(settings.legal[`${kind}Text` as keyof PublicSiteSettings["legal"]]);
