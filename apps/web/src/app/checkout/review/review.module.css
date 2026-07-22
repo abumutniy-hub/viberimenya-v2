@@ -43,3 +43,11 @@
     min-height: 42px;
   }
 }
+
+
+/* Release 17B-2C.3.6.12 — space for persistent mobile nav */
+@media (max-width: 760px) {
+  .page {
+    padding-bottom: calc(104px + env(safe-area-inset-bottom));
+  }
+}

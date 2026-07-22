@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { basename, extname, join, resolve } from "node:path";
 import { config } from "dotenv";
 import postgres from "postgres";
@@ -7359,7 +7359,8 @@ async function downloadTelegramFile(
   const fullPath = join(uploadDir, fileName);
   const publicUrl = `/uploads/${safeFolder}/${fileName}`;
 
-  await mkdir(uploadDir, { recursive: true });
+  await mkdir(uploadDir, { recursive: true, mode: 0o755 });
+  await chmod(uploadDir, 0o755);
 
   const response = await fetch(`https://api.telegram.org/file/bot${TELEGRAM_BOT_TOKEN}/${file.file_path}`);
 
@@ -7368,7 +7369,8 @@ async function downloadTelegramFile(
   }
 
   const arrayBuffer = await response.arrayBuffer();
-  await writeFile(fullPath, Buffer.from(arrayBuffer));
+  await writeFile(fullPath, Buffer.from(arrayBuffer), { mode: 0o644 });
+  await chmod(fullPath, 0o644);
 
   return publicUrl;
 }

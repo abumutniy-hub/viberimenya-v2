@@ -621,3 +621,16 @@
     padding: 0 12px;
   }
 }
+
+
+/* Release 17B-2C.3.6.12 — checkout actions above persistent mobile nav */
+@media (max-width: 600px) {
+  .page {
+    padding-bottom: calc(154px + env(safe-area-inset-bottom));
+  }
+
+  .actions,
+  .footer {
+    bottom: calc(84px + env(safe-area-inset-bottom));
+  }
+}

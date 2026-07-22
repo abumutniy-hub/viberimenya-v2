@@ -5,6 +5,10 @@ import {
   addRepeatOrderProducts,
   type RepeatOrderCartProduct,
 } from "../lib/repeat-order-cart";
+import {
+  CustomerBouquetApproval,
+  type CustomerBouquetApprovalState,
+} from "../components/customer-bouquet-approval";
 
 type Customer = {
   id: string;
@@ -1761,11 +1765,25 @@ export function AccountClient() {
                         <strong>Фото готового букета</strong>
                         <span>{bouquetApprovalText(order.bouquetApproval.status)}</span>
                         {order.tracking_token ? (
-                          <a href={`/order/track/${order.tracking_token}`}>
-                            {order.bouquetApproval.canRespond
-                              ? "Согласовать букет"
-                              : "Открыть заказ"}
-                          </a>
+                          <>
+                            <CustomerBouquetApproval
+                              orderNumber={order.order_number}
+                              trackingToken={order.tracking_token}
+                              approval={order.bouquetApproval}
+                              onChanged={(approval: CustomerBouquetApprovalState) =>
+                                setOrders((current) =>
+                                  current.map((item) =>
+                                    item.order_number === order.order_number
+                                      ? { ...item, bouquetApproval: approval }
+                                      : item,
+                                  ),
+                                )
+                              }
+                            />
+                            <a href={`/order/track/${order.tracking_token}`}>
+                              Открыть заказ полностью
+                            </a>
+                          </>
                         ) : null}
                       </div>
                     </div>

@@ -16473,3 +16473,103 @@ body {
     border-radius: 16px;
   }
 }
+
+
+/* Release 17B-2C.3.6.12 — client bouquet approval controls */
+.customer-bouquet-approval-controls {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.customer-bouquet-approval-controls label {
+  display: grid;
+  gap: 5px;
+}
+
+.customer-bouquet-approval-controls label > span {
+  color: #6f5961;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.customer-bouquet-approval-controls textarea {
+  width: 100%;
+  min-height: 64px;
+  box-sizing: border-box;
+  padding: 9px 10px;
+  border: 1px solid rgba(125, 23, 54, 0.15);
+  border-radius: 12px;
+  outline: none;
+  color: #3f2b33;
+  background: #fff;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.4;
+  resize: vertical;
+}
+
+.customer-bouquet-approval-controls textarea:focus {
+  border-color: rgba(125, 23, 54, 0.5);
+  box-shadow: 0 0 0 3px rgba(125, 23, 54, 0.07);
+}
+
+.customer-bouquet-approval-buttons {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.customer-bouquet-approval-buttons button {
+  min-height: 38px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  color: #fff;
+  background: #315b3e;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.customer-bouquet-approval-buttons button.is-secondary {
+  color: #7d1736;
+  background: #f7e8ed;
+}
+
+.customer-bouquet-approval-buttons button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.customer-bouquet-approval-message,
+.customer-bouquet-approval-result {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  color: #315b3e;
+  background: rgba(49, 91, 62, 0.08);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.customer-bouquet-approval-message.is-error,
+.customer-bouquet-approval-result.is-revision {
+  color: #8b3547;
+  background: rgba(139, 53, 71, 0.08);
+}
+
+.customer-bouquet-approval-result.is-approved {
+  color: #315b3e;
+}
+
+.orders-card-bouquet {
+  align-items: start;
+}
+
+@media (max-width: 560px) {
+  .customer-bouquet-approval-buttons {
+    grid-template-columns: 1fr;
+  }
+}

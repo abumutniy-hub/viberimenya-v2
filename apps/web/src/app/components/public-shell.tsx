@@ -555,7 +555,7 @@ export function PublicShell({
         </div>
       </footer> : null}
 
-      {!checkoutActive ? <MobileTabbar settings={settings} /> : null}
+      <MobileTabbar settings={settings} />
       <CookieConsent
         enabled={settings.analytics.enabled}
         yandexMetrikaId={settings.analytics.yandexMetrikaId}

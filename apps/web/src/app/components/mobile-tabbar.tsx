@@ -35,7 +35,10 @@ const items: MobileItem[] = [
     href: "/cart",
     label: "Корзина",
     icon: "cart",
-    active: pathname => pathname.startsWith("/cart")
+    active: pathname => (
+      pathname.startsWith("/cart")
+      || pathname.startsWith("/checkout")
+    )
   },
   {
     href: "/orders",
