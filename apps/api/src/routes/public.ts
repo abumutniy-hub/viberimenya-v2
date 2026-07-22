@@ -76,6 +76,8 @@ import {
   CUSTOMER_PAIRING_TTL_SECONDS,
   buildCustomerPairingCookie,
   clearCustomerPairingCookie,
+  clearLegacyCustomerPairingCookie,
+  customerPairingCookieName,
   createCustomerPairingBrowserNonce,
   createCustomerPairingCode,
   createCustomerPairingToken,
@@ -3291,19 +3293,6 @@ export async function publicRoutes(app: FastifyInstance) {
           expires_at: string;
         }[]
       >`
-        WITH cancelled AS (
-          UPDATE customer_link_tokens
-          SET
-            status = 'cancelled',
-            updated_at = NOW()
-          WHERE shop_id = ${shop.id}
-            AND customer_id = ${customer.id}
-            AND provider = 'telegram'
-            AND purpose = 'browser_pairing_login'
-            AND status IN ('pending', 'opened', 'confirmed')
-            AND consumed_at IS NULL
-          RETURNING id
-        )
         INSERT INTO customer_link_tokens (
           shop_id,
           customer_id,
@@ -3381,7 +3370,7 @@ export async function publicRoutes(app: FastifyInstance) {
 
       reply.header(
         "Set-Cookie",
-        buildCustomerPairingCookie(rawNonce, env.NODE_ENV),
+        buildCustomerPairingCookie(pairing.id, rawNonce, env.NODE_ENV),
       );
       reply.header("Cache-Control", "no-store, max-age=0");
       reply.header("Pragma", "no-cache");
@@ -3434,10 +3423,15 @@ export async function publicRoutes(app: FastifyInstance) {
         };
       }
 
-      const rawNonce = getCookieValue(
-        request.headers.cookie,
-        CUSTOMER_PAIRING_COOKIE,
-      );
+      const rawNonce =
+        getCookieValue(
+          request.headers.cookie,
+          customerPairingCookieName(params.id),
+        )
+        || getCookieValue(
+          request.headers.cookie,
+          CUSTOMER_PAIRING_COOKIE,
+        );
 
       if (!rawNonce) {
         return reply.status(403).send({
@@ -3617,7 +3611,8 @@ export async function publicRoutes(app: FastifyInstance) {
         if (result.kind === "authenticated") {
           reply.header("Set-Cookie", [
             buildCustomerSessionCookie(result.rawSessionToken),
-            clearCustomerPairingCookie(env.NODE_ENV),
+            clearCustomerPairingCookie(params.id, env.NODE_ENV),
+            clearLegacyCustomerPairingCookie(env.NODE_ENV),
           ]);
           reply.header("Cache-Control", "no-store, max-age=0");
           reply.header("Pragma", "no-cache");
@@ -3651,10 +3646,15 @@ export async function publicRoutes(app: FastifyInstance) {
           id: z.string().uuid(),
         })
         .parse(request.params);
-      const rawNonce = getCookieValue(
-        request.headers.cookie,
-        CUSTOMER_PAIRING_COOKIE,
-      );
+      const rawNonce =
+        getCookieValue(
+          request.headers.cookie,
+          customerPairingCookieName(params.id),
+        )
+        || getCookieValue(
+          request.headers.cookie,
+          CUSTOMER_PAIRING_COOKIE,
+        );
 
       if (!rawNonce) {
         return reply.status(403).send({
@@ -3702,10 +3702,10 @@ export async function publicRoutes(app: FastifyInstance) {
           });
         }
 
-        reply.header(
-          "Set-Cookie",
-          clearCustomerPairingCookie(env.NODE_ENV),
-        );
+        reply.header("Set-Cookie", [
+          clearCustomerPairingCookie(params.id, env.NODE_ENV),
+          clearLegacyCustomerPairingCookie(env.NODE_ENV),
+        ]);
 
         return {
           ok: true,

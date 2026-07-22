@@ -99,6 +99,50 @@ type PairingIntent = {
   manualCode: string;
 };
 
+const PAIRING_STORAGE_KEY = "viberimenya:customer-pairing:v1";
+
+function readStoredPairing(): PairingIntent | null {
+  if (typeof window === "undefined") return null;
+
+  try {
+    const raw = window.sessionStorage.getItem(PAIRING_STORAGE_KEY);
+    if (!raw) return null;
+    const value = JSON.parse(raw) as Partial<PairingIntent>;
+    if (
+      typeof value.requestId !== "string"
+      || typeof value.expiresAt !== "string"
+      || typeof value.manualCode !== "string"
+      || new Date(value.expiresAt).getTime() <= Date.now()
+    ) {
+      window.sessionStorage.removeItem(PAIRING_STORAGE_KEY);
+      return null;
+    }
+
+    return {
+      requestId: value.requestId,
+      status: typeof value.status === "string" ? value.status : "pending",
+      expiresAt: value.expiresAt,
+      telegramUrl: typeof value.telegramUrl === "string" ? value.telegramUrl : null,
+      qrDataUrl: typeof value.qrDataUrl === "string" ? value.qrDataUrl : null,
+      manualCode: value.manualCode,
+    };
+  } catch {
+    window.sessionStorage.removeItem(PAIRING_STORAGE_KEY);
+    return null;
+  }
+}
+
+function storePairing(value: PairingIntent | null) {
+  if (typeof window === "undefined") return;
+
+  if (!value) {
+    window.sessionStorage.removeItem(PAIRING_STORAGE_KEY);
+    return;
+  }
+
+  window.sessionStorage.setItem(PAIRING_STORAGE_KEY, JSON.stringify(value));
+}
+
 type AccountResponse = {
   ok: boolean;
   customer?: Customer;
@@ -281,6 +325,17 @@ export function AccountClient() {
     return () => window.clearInterval(timer);
   }, [requestCooldown]);
 
+  useEffect(() => {
+    const stored = readStoredPairing();
+    if (!stored) return;
+    setPairing(stored);
+    setStep("pairing");
+  }, []);
+
+  useEffect(() => {
+    storePairing(pairing);
+  }, [pairing]);
+
   function showMessage(
     text: string,
     kind: "info" | "success" | "error" = "info",
@@ -418,6 +473,8 @@ export function AccountClient() {
           && status === "authenticated"
         ) {
           stopped = true;
+          storePairing(null);
+          setPairing(null);
           showMessage(
             "Telegram подтверждён. Выполняется вход…",
             "success",
@@ -440,6 +497,7 @@ export function AccountClient() {
           ].includes(status)
         ) {
           stopped = true;
+          storePairing(null);
           setPairing(null);
           setStep("phone");
           showMessage(
@@ -448,7 +506,7 @@ export function AccountClient() {
               : status === "rejected"
                 ? "Telegram не удалось привязать к этому номеру."
                 : status === "invalid_browser"
-                  ? "Подтверждение открыто в другом браузере. Создайте новый запрос здесь."
+                  ? "Этот запрос был создан в другой вкладке или уже заменён новым. Вернитесь к последней вкладке входа либо создайте новый запрос здесь."
                   : "Запрос входа отменён.",
             "error",
           );
@@ -563,6 +621,7 @@ export function AccountClient() {
         return;
       }
 
+      storePairing(intent);
       setPairing(intent);
       setStep("pairing");
       setRequestCooldown(60);
@@ -599,6 +658,7 @@ export function AccountClient() {
       }
     }
 
+    storePairing(null);
     setPairing(null);
     setStep("phone");
     setRequestCooldown(0);

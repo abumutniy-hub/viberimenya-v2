@@ -16,6 +16,7 @@ const IP_CONTEXT =
   "viberimenya:browser-telegram-pairing:ip:v1";
 
 export const CUSTOMER_PAIRING_COOKIE = "vm_customer_pairing";
+export const CUSTOMER_PAIRING_COOKIE_PREFIX = "vm_customer_pairing_";
 export const CUSTOMER_PAIRING_TTL_SECONDS = 600;
 export const CUSTOMER_PAIRING_MAX_ATTEMPTS = 5;
 
@@ -158,20 +159,43 @@ export function customerPairingCookieSecuritySuffix(
   return nodeEnv === "production" ? "; Secure" : "";
 }
 
+export function customerPairingCookieName(requestId: string) {
+  const compactId = requestId.replace(/[^a-zA-Z0-9]/g, "");
+  return `${CUSTOMER_PAIRING_COOKIE_PREFIX}${compactId}`;
+}
+
+export function customerPairingCookiePath(requestId: string) {
+  return `/api/public/account/auth/pairing/${encodeURIComponent(requestId)}`;
+}
+
 export function buildCustomerPairingCookie(
+  requestId: string,
   rawNonce: string,
   nodeEnv: string,
 ) {
   return [
-    `${CUSTOMER_PAIRING_COOKIE}=${encodeURIComponent(rawNonce)}`,
+    `${customerPairingCookieName(requestId)}=${encodeURIComponent(rawNonce)}`,
     "HttpOnly",
-    "Path=/",
+    `Path=${customerPairingCookiePath(requestId)}`,
     "SameSite=Lax",
     `Max-Age=${CUSTOMER_PAIRING_TTL_SECONDS}`,
   ].join("; ") + customerPairingCookieSecuritySuffix(nodeEnv);
 }
 
-export function clearCustomerPairingCookie(nodeEnv: string) {
+export function clearCustomerPairingCookie(
+  requestId: string,
+  nodeEnv: string,
+) {
+  return [
+    `${customerPairingCookieName(requestId)}=`,
+    "HttpOnly",
+    `Path=${customerPairingCookiePath(requestId)}`,
+    "SameSite=Lax",
+    "Max-Age=0",
+  ].join("; ") + customerPairingCookieSecuritySuffix(nodeEnv);
+}
+
+export function clearLegacyCustomerPairingCookie(nodeEnv: string) {
   return [
     `${CUSTOMER_PAIRING_COOKIE}=`,
     "HttpOnly",
