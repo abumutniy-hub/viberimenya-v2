@@ -9,3 +9,5 @@ export const ORDER_PUBLIC_STATUSES = [
   "Курьер в пути",
   "Заказ доставлен"
 ] as const;
+
+export * from "./multi-channel";

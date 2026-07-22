@@ -648,8 +648,13 @@ export const customerChannelLinks = pgTable(
     providerUserId: varchar("provider_user_id", { length: 160 }).notNull(),
     providerUsername: varchar("provider_username", { length: 160 }),
     providerDisplayName: varchar("provider_display_name", { length: 220 }),
+    providerChatId: varchar("provider_chat_id", { length: 180 }),
+    notificationsEnabled: boolean("notifications_enabled").notNull().default(true),
     isActive: boolean("is_active").notNull().default(true),
+    verifiedAt: timestamp("verified_at", { withTimezone: true }),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
     linkedAt: timestamp("linked_at", { withTimezone: true }).notNull().defaultNow(),
+    metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
     ...timestamps
   },
   (table) => [
@@ -661,6 +666,53 @@ export const customerChannelLinks = pgTable(
     index("customer_channel_links_customer_idx").on(
       table.shopId,
       table.customerId
+    )
+  ]
+);
+
+export const channelUpdates = pgTable(
+  "channel_updates",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    shopId: uuid("shop_id").notNull().references(() => shops.id, { onDelete: "cascade" }),
+    provider: varchar("provider", { length: 40 }).notNull(),
+    externalUpdateId: varchar("external_update_id", { length: 220 }).notNull(),
+    updateType: varchar("update_type", { length: 120 }).notNull(),
+    payload: jsonb("payload").notNull().default(sql`'{}'::jsonb`),
+    status: varchar("status", { length: 40 }).notNull().default("pending"),
+    attempts: integer("attempts").notNull().default(0),
+    maxAttempts: integer("max_attempts").notNull().default(8),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
+    lockedAt: timestamp("locked_at", { withTimezone: true }),
+    lockedBy: varchar("locked_by", { length: 160 }),
+    lastError: text("last_error"),
+    receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
+    processedAt: timestamp("processed_at", { withTimezone: true }),
+    ...timestamps
+  },
+  (table) => [
+    uniqueIndex("channel_updates_provider_uidx").on(
+      table.shopId,
+      table.provider,
+      table.externalUpdateId
+    ),
+    index("channel_updates_ready_idx").on(
+      table.provider,
+      table.status,
+      table.nextAttemptAt,
+      table.receivedAt
+    ),
+    index("channel_updates_shop_received_idx").on(
+      table.shopId,
+      table.receivedAt
+    ),
+    check(
+      "channel_updates_status_check",
+      sql`${table.status} in ('pending', 'processing', 'processed', 'failed', 'dead')`
+    ),
+    check(
+      "channel_updates_attempts_check",
+      sql`${table.attempts} >= 0 and ${table.maxAttempts} > 0 and ${table.attempts} <= ${table.maxAttempts}`
     )
   ]
 );

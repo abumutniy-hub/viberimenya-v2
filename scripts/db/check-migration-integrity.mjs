@@ -82,10 +82,10 @@ if (
   journal.version !== "7" ||
   journal.dialect !== "postgresql" ||
   !Array.isArray(journal.entries) ||
-  journal.entries.length !== 3
+  journal.entries.length !== 4
 ) {
   throw new Error(
-    "Drizzle journal должен содержать baseline, Event Core и Payment Core migration"
+    "Drizzle journal должен содержать baseline, Event Core, Payment Core и Multi-channel Foundation migration"
   );
 }
 
@@ -107,6 +107,7 @@ for (let index = 0; index < journal.entries.length; index += 1) {
 const baselineEntry = journal.entries[0];
 const eventCoreEntry = journal.entries[1];
 const paymentCoreEntry = journal.entries[2];
+const multiChannelEntry = journal.entries[3];
 
 if (!baselineEntry.tag.includes("canonical_production_baseline")) {
   throw new Error("Первая migration не является canonical baseline");
@@ -118,6 +119,10 @@ if (!eventCoreEntry.tag.includes("event_core_outbox")) {
 
 if (!paymentCoreEntry.tag.includes("payment_core_yookassa")) {
   throw new Error("Третья migration не является Payment Core migration");
+}
+
+if (!multiChannelEntry.tag.includes("multi_channel_foundation")) {
+  throw new Error("Четвёртая migration не является Multi-channel Foundation migration");
 }
 
 const sqlFiles = readdirSync(drizzleDir)
@@ -234,6 +239,35 @@ if (
   throw new Error("Payment Core migration содержит destructive DDL");
 }
 
+const multiChannel = migrationHashes[3].source;
+const requiredMultiChannelFragments = [
+  'ALTER TABLE "customer_channel_links" ADD COLUMN "provider_chat_id"',
+  'ADD COLUMN "notifications_enabled" boolean DEFAULT true NOT NULL',
+  `ADD COLUMN "metadata" jsonb DEFAULT '{}'::jsonb NOT NULL`,
+  'legacyTelegramAccountId',
+  'CREATE TABLE "channel_updates"',
+  'channel_updates_provider_uidx',
+  'channel_updates_ready_idx',
+  'channel_updates_status_check',
+  'channel_updates_attempts_check',
+];
+
+for (const fragment of requiredMultiChannelFragments) {
+  if (!multiChannel.includes(fragment)) {
+    throw new Error(
+      `Multi-channel Foundation migration не содержит: ${fragment}`
+    );
+  }
+}
+
+if (
+  /DROP\s+TABLE/i.test(multiChannel) ||
+  /DROP\s+COLUMN/i.test(multiChannel) ||
+  /ALTER\s+TYPE[^;]+DROP/i.test(multiChannel)
+) {
+  throw new Error("Multi-channel Foundation migration содержит destructive DDL");
+}
+
 const latestSnapshotPath = resolve(
   metaDir,
   snapshotFiles[snapshotFiles.length - 1],
@@ -252,11 +286,11 @@ const snapshotColumnCount = snapshotTables.reduce(
 );
 
 if (
-  snapshotTableCount !== 36 ||
-  snapshotColumnCount !== 460
+  snapshotTableCount !== 37 ||
+  snapshotColumnCount !== 482
 ) {
   throw new Error(
-    `Payment Core snapshot: ${snapshotTableCount} tables / ${snapshotColumnCount} columns`
+    `Multi-channel Foundation snapshot: ${snapshotTableCount} tables / ${snapshotColumnCount} columns`
   );
 }
 
@@ -326,6 +360,6 @@ if (!existsSync(legacyReadme)) {
 
 console.log(
   "Migration integrity confirmed: " +
-  `${paymentCoreEntry.tag}, 36 tables, 460 columns, ` +
+  `${multiChannelEntry.tag}, 37 tables, 482 columns, ` +
   "production metadata aligned."
 );
