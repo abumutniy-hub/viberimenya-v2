@@ -5,6 +5,7 @@ import {
   addRepeatOrderProducts,
   type RepeatOrderCartProduct,
 } from "../lib/repeat-order-cart";
+import { CustomerPhotoViewer } from "../components/customer-photo-viewer";
 import {
   CustomerBouquetApproval,
   type CustomerBouquetApprovalState,
@@ -326,7 +327,7 @@ export function OrdersClient() {
 
               {order.bouquet_photo_url ? (
                 <div className="orders-card-bouquet">
-                  <img
+                  <CustomerPhotoViewer
                     src={order.bouquet_photo_url}
                     alt={`Фото готового букета ${order.order_number}`}
                   />

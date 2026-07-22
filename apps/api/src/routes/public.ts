@@ -5833,9 +5833,9 @@ export async function publicRoutes(app: FastifyInstance) {
                   '{bouquetApproval}',
                   COALESCE(metadata -> 'bouquetApproval', '{}'::jsonb)
                     || jsonb_build_object(
-                      'status', ${nextStatus},
+                      'status', ${nextStatus}::text,
                       'decidedAt', NOW(),
-                      'note', ${body.action === "revision" ? note : null},
+                      'note', ${body.action === "revision" ? note : null}::text,
                       'source', 'tracking_page',
                       'revisionCount', CASE
                         WHEN ${body.action}::text = 'revision'
@@ -5901,7 +5901,7 @@ export async function publicRoutes(app: FastifyInstance) {
                 body.action === "approve"
                   ? "bouquet_approved"
                   : "bouquet_revision_requested"
-              },
+              }::text,
               'telegram',
               'staff',
               ta.telegram_id,
@@ -5909,7 +5909,7 @@ export async function publicRoutes(app: FastifyInstance) {
               jsonb_build_object(
                 'orderId', o.id,
                 'orderNumber', o.order_number,
-                'note', ${body.action === "revision" ? note : null},
+                'note', ${body.action === "revision" ? note : null}::text,
                 'bouquetPhotoUrl', o.bouquet_photo_url,
                 'crmUrl', '/admin/orders/' || o.id::text
               ),

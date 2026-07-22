@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CustomerPhotoViewer } from "../../../components/customer-photo-viewer";
 import {
   addRepeatOrderProducts,
   type RepeatOrderCartProduct,
@@ -852,9 +853,10 @@ export function TrackClient({ token }: { token: string }) {
               </div>
             ) : null}
           </div>
-          <img
+          <CustomerPhotoViewer
             src={order.bouquetPhotoUrl}
             alt={`Фото заказа ${order.orderNumber}`}
+            previewClassName="track-bouquet-photo-preview"
             onError={() => setPhotoFailed(true)}
           />
         </section>
