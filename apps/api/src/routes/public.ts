@@ -72,6 +72,7 @@ import {
 } from "../modules/customers/customer-checkout-draft.service";
 import {
   CUSTOMER_AUTH_PROVIDER_ADAPTERS,
+  CUSTOMER_PAIRING_BROWSER_PROOF_HEADER,
   CUSTOMER_PAIRING_COOKIE,
   CUSTOMER_PAIRING_TTL_SECONDS,
   buildCustomerPairingCookie,
@@ -88,6 +89,7 @@ import {
   hashCustomerPairingCode,
   hashCustomerPairingIp,
   hashCustomerPairingToken,
+  normalizeCustomerPairingBrowserProof,
   normalizeCustomerPhone,
   resolveTelegramBotUsername,
   safeHashEqual,
@@ -3385,6 +3387,7 @@ export async function publicRoutes(app: FastifyInstance) {
         telegramUrl: telegramUrl || null,
         qrDataUrl: qrDataUrl || null,
         manualCode,
+        browserProof: rawNonce,
         message:
           "Откройте Telegram и подтвердите вход. Страница авторизуется автоматически.",
       };
@@ -3423,21 +3426,29 @@ export async function publicRoutes(app: FastifyInstance) {
         };
       }
 
+      const headerProof = normalizeCustomerPairingBrowserProof(
+        request.headers[CUSTOMER_PAIRING_BROWSER_PROOF_HEADER],
+      );
       const rawNonce =
-        getCookieValue(
-          request.headers.cookie,
-          customerPairingCookieName(params.id),
+        headerProof
+        || normalizeCustomerPairingBrowserProof(
+          getCookieValue(
+            request.headers.cookie,
+            customerPairingCookieName(params.id),
+          ),
         )
-        || getCookieValue(
-          request.headers.cookie,
-          CUSTOMER_PAIRING_COOKIE,
+        || normalizeCustomerPairingBrowserProof(
+          getCookieValue(
+            request.headers.cookie,
+            CUSTOMER_PAIRING_COOKIE,
+          ),
         );
 
       if (!rawNonce) {
         return reply.status(403).send({
           ok: false,
           status: "invalid_browser",
-          message: "Запрос входа открыт в другом браузере",
+          message: "Эта попытка входа больше не активна. Создайте новый запрос.",
         });
       }
 
@@ -3604,7 +3615,7 @@ export async function publicRoutes(app: FastifyInstance) {
             ok: false,
             status: result.status,
             expiresAt: result.expiresAt,
-            message: "Запрос входа открыт в другом браузере",
+            message: "Эта попытка входа больше не активна. Создайте новый запрос.",
           });
         }
 
@@ -3646,20 +3657,28 @@ export async function publicRoutes(app: FastifyInstance) {
           id: z.string().uuid(),
         })
         .parse(request.params);
+      const headerProof = normalizeCustomerPairingBrowserProof(
+        request.headers[CUSTOMER_PAIRING_BROWSER_PROOF_HEADER],
+      );
       const rawNonce =
-        getCookieValue(
-          request.headers.cookie,
-          customerPairingCookieName(params.id),
+        headerProof
+        || normalizeCustomerPairingBrowserProof(
+          getCookieValue(
+            request.headers.cookie,
+            customerPairingCookieName(params.id),
+          ),
         )
-        || getCookieValue(
-          request.headers.cookie,
-          CUSTOMER_PAIRING_COOKIE,
+        || normalizeCustomerPairingBrowserProof(
+          getCookieValue(
+            request.headers.cookie,
+            CUSTOMER_PAIRING_COOKIE,
+          ),
         );
 
       if (!rawNonce) {
         return reply.status(403).send({
           ok: false,
-          message: "Запрос входа открыт в другом браузере",
+          message: "Эта попытка входа больше не активна. Создайте новый запрос.",
         });
       }
 

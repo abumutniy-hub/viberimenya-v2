@@ -97,6 +97,7 @@ type PairingIntent = {
   telegramUrl: string | null;
   qrDataUrl: string | null;
   manualCode: string;
+  browserProof: string;
 };
 
 const PAIRING_STORAGE_KEY = "viberimenya:customer-pairing:v1";
@@ -112,6 +113,8 @@ function readStoredPairing(): PairingIntent | null {
       typeof value.requestId !== "string"
       || typeof value.expiresAt !== "string"
       || typeof value.manualCode !== "string"
+      || typeof value.browserProof !== "string"
+      || !/^[a-f0-9]{48}$/i.test(value.browserProof)
       || new Date(value.expiresAt).getTime() <= Date.now()
     ) {
       window.sessionStorage.removeItem(PAIRING_STORAGE_KEY);
@@ -125,6 +128,7 @@ function readStoredPairing(): PairingIntent | null {
       telegramUrl: typeof value.telegramUrl === "string" ? value.telegramUrl : null,
       qrDataUrl: typeof value.qrDataUrl === "string" ? value.qrDataUrl : null,
       manualCode: value.manualCode,
+      browserProof: value.browserProof,
     };
   } catch {
     window.sessionStorage.removeItem(PAIRING_STORAGE_KEY);
@@ -462,6 +466,9 @@ export function AccountClient() {
           {
             credentials: "include",
             cache: "no-store",
+            headers: {
+              "x-vm-customer-pairing-proof": pairing.browserProof,
+            },
           },
         );
         const data = await readJson(response);
@@ -506,7 +513,7 @@ export function AccountClient() {
               : status === "rejected"
                 ? "Telegram не удалось привязать к этому номеру."
                 : status === "invalid_browser"
-                  ? "Этот запрос был создан в другой вкладке или уже заменён новым. Вернитесь к последней вкладке входа либо создайте новый запрос здесь."
+                  ? "Эта попытка входа больше не активна. Создайте новый запрос."
                   : "Запрос входа отменён.",
             "error",
           );
@@ -611,9 +618,14 @@ export function AccountClient() {
             ? data.qrDataUrl
             : null,
         manualCode: String(data.manualCode || ""),
+        browserProof: String(data.browserProof || ""),
       };
 
-      if (!intent.requestId || !intent.manualCode) {
+      if (
+        !intent.requestId
+        || !intent.manualCode
+        || !/^[a-f0-9]{48}$/i.test(intent.browserProof)
+      ) {
         showMessage(
           "Сервер не вернул данные подтверждения",
           "error",
@@ -651,6 +663,9 @@ export function AccountClient() {
           {
             method: "POST",
             credentials: "include",
+            headers: {
+              "x-vm-customer-pairing-proof": current.browserProof,
+            },
           },
         );
       } catch {

@@ -17,6 +17,8 @@ const IP_CONTEXT =
 
 export const CUSTOMER_PAIRING_COOKIE = "vm_customer_pairing";
 export const CUSTOMER_PAIRING_COOKIE_PREFIX = "vm_customer_pairing_";
+export const CUSTOMER_PAIRING_BROWSER_PROOF_HEADER =
+  "x-vm-customer-pairing-proof";
 export const CUSTOMER_PAIRING_TTL_SECONDS = 600;
 export const CUSTOMER_PAIRING_MAX_ATTEMPTS = 5;
 
@@ -94,6 +96,13 @@ export function createCustomerPairingToken() {
 
 export function createCustomerPairingBrowserNonce() {
   return randomBytes(24).toString("hex");
+}
+
+export function normalizeCustomerPairingBrowserProof(
+  value: unknown,
+) {
+  const proof = String(value ?? "").trim();
+  return /^[a-f0-9]{48}$/i.test(proof) ? proof : "";
 }
 
 export function createCustomerPairingCode() {
