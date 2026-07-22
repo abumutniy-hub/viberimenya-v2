@@ -34,6 +34,23 @@ export const env = {
   API_PORT: Number(process.env.API_PORT ?? 4001),
   DEFAULT_SHOP_SLUG: process.env.DEFAULT_SHOP_SLUG ?? "viberimenya",
   DATABASE_URL: process.env.DATABASE_URL,
+  MAX_BOT_TOKEN: process.env.MAX_BOT_TOKEN ?? "",
+  MAX_BOT_USERNAME: (() => {
+    const normalized = (process.env.MAX_BOT_USERNAME ?? "")
+      .trim()
+      .replace(/^@/, "");
+
+    return /^[A-Za-z0-9_.-]{3,100}$/.test(normalized)
+      ? normalized
+      : "";
+  })(),
+  MAX_WEBAPP_AUTH_MAX_AGE_SECONDS: Math.min(
+    86_400,
+    Math.max(
+      60,
+      Number(process.env.MAX_WEBAPP_AUTH_MAX_AGE_SECONDS ?? 3600) || 3600,
+    ),
+  ),
   YOOKASSA_SHOP_ID: process.env.YOOKASSA_SHOP_ID ?? "",
   YOOKASSA_SECRET_KEY: process.env.YOOKASSA_SECRET_KEY ?? "",
   YOOKASSA_RECEIPTS_ENABLED:

@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { createHash, timingSafeEqual } from "node:crypto";
+import { readPlatformFeatureFlags } from "@viberimenya/config";
 import { z } from "zod";
 import { and, eq, asc, desc } from "drizzle-orm";
 import {
@@ -71,7 +72,7 @@ import {
   type CustomerCheckoutDraftStep,
 } from "../modules/customers/customer-checkout-draft.service";
 import {
-  CUSTOMER_AUTH_PROVIDER_ADAPTERS,
+  resolveCustomerAuthProviderAdapters,
   CUSTOMER_PAIRING_BROWSER_PROOF_HEADER,
   CUSTOMER_PAIRING_COOKIE,
   CUSTOMER_PAIRING_TTL_SECONDS,
@@ -3108,10 +3109,33 @@ export async function publicRoutes(app: FastifyInstance) {
 
 
   app.get("/api/public/account/auth/providers", async () => {
-    return {
-      ok: true,
-      providers: CUSTOMER_AUTH_PROVIDER_ADAPTERS,
-    };
+    const { db, client, shop } = await getShopContext();
+
+    try {
+      const settingsRows = await db
+        .select({ settings: shopSettings.settings })
+        .from(shopSettings)
+        .where(eq(shopSettings.shopId, shop.id))
+        .limit(1);
+      const flags = readPlatformFeatureFlags(
+        settingsRows[0]?.settings ?? {},
+      );
+      const maxEnabled = Boolean(
+        flags.maxEnabled
+        && flags.maxAuthEnabled
+        && env.MAX_BOT_TOKEN.trim()
+        && env.MAX_BOT_USERNAME.trim(),
+      );
+
+      return {
+        ok: true,
+        providers: resolveCustomerAuthProviderAdapters({
+          maxEnabled,
+        }),
+      };
+    } finally {
+      await client.end();
+    }
   });
 
   app.post("/api/public/account/auth/pairing", async (request, reply) => {

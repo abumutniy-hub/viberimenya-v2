@@ -7,6 +7,7 @@ import { healthRoutes } from "./routes/health";
 import { publicRoutes } from "./routes/public";
 import { adminRoutes } from "./routes/admin";
 import { paymentRoutes } from "./routes/payments";
+import { maxAuthRoutes } from "./routes/max-auth";
 import { env } from "./lib/env";
 import { HttpError } from "./lib/http-error";
 
@@ -111,6 +112,7 @@ export async function buildApi() {
 
   await app.register(healthRoutes);
   await app.register(publicRoutes);
+  await app.register(maxAuthRoutes);
   await app.register(paymentRoutes);
   await app.register(adminRoutes);
 

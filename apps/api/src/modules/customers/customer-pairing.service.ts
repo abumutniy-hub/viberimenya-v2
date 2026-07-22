@@ -72,8 +72,8 @@ export const CUSTOMER_AUTH_PROVIDER_ADAPTERS:
       provider: "max",
       enabled: false,
       label: "MAX",
-      supportsPairing: false,
-      supportsLogin: false,
+      supportsPairing: true,
+      supportsLogin: true,
     },
     {
       provider: "passkey",
@@ -83,6 +83,21 @@ export const CUSTOMER_AUTH_PROVIDER_ADAPTERS:
       supportsLogin: false,
     },
   ];
+
+export function resolveCustomerAuthProviderAdapters(params: {
+  maxEnabled: boolean;
+}) {
+  return CUSTOMER_AUTH_PROVIDER_ADAPTERS.map((adapter) => {
+    if (adapter.provider !== "max") {
+      return { ...adapter };
+    }
+
+    return {
+      ...adapter,
+      enabled: params.maxEnabled,
+    };
+  });
+}
 
 function hashSecret(context: string, value: string) {
   return `sha256:${createHash("sha256")
