@@ -3,6 +3,7 @@ import {
   createCustomerPairingBrowserNonce,
   hashCustomerPairingBrowserNonce,
   normalizeCustomerPairingBrowserProof,
+  normalizeCustomerPairingMetadata,
   safeHashEqual,
 } from "./modules/customers/customer-pairing.service";
 
@@ -66,6 +67,23 @@ assertCondition(
   "Чужой proof прошёл проверку",
 );
 pass("браузер подтверждает только свой pairing request");
+
+const repairedMetadata = normalizeCustomerPairingMetadata([
+  {
+    browserNonceHash: storedHash,
+    codeHash: "sha256:code",
+  },
+  JSON.stringify({ statusMarker: "opened" }),
+  [JSON.stringify({ statusMarker: "confirmed", sessionReady: true })],
+]);
+assertCondition(
+  repairedMetadata.browserNonceHash === storedHash
+    && repairedMetadata.codeHash === "sha256:code"
+    && repairedMetadata.statusMarker === "confirmed"
+    && repairedMetadata.sessionReady === true,
+  "Legacy pairing metadata не восстановлена",
+);
+pass("двойное JSON-кодирование восстанавливается до безопасного объекта");
 
 console.log("\nCUSTOMER PAIRING BROWSER PROOF E2E: OK");
 console.log(

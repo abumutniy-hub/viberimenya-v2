@@ -16,6 +16,7 @@ import {
   hashBrowserPairingCode,
   hashBrowserPairingToken,
   isPairingManualCode,
+  normalizeBrowserPairingMetadata,
   pairingPhoneMatches,
   parsePairingStartPayload,
   selectBrowserPairingForContact,
@@ -1438,7 +1439,9 @@ async function loadBrowserPairingByToken(
     LIMIT 1
   `;
 
-  return rows[0] ?? null;
+  const pairing = rows[0] ?? null;
+  if (pairing) pairing.metadata = normalizeBrowserPairingMetadata(pairing.metadata);
+  return pairing;
 }
 
 async function loadBrowserPairingByCode(
@@ -1474,13 +1477,16 @@ async function loadBrowserPairingByCode(
     LIMIT 1
   `;
 
-  return rows[0] ?? null;
+  const pairing = rows[0] ?? null;
+  if (pairing) pairing.metadata = normalizeBrowserPairingMetadata(pairing.metadata);
+  return pairing;
 }
 
 async function openBrowserPairing(
   message: TelegramMessage,
   pairing: BrowserPairingRecord,
 ) {
+  pairing.metadata = normalizeBrowserPairingMetadata(pairing.metadata);
   const telegramId = String(message.chat.id);
   const existingRows = await sql<
     {
@@ -1509,7 +1515,7 @@ async function openBrowserPairing(
           rejectionReason: "telegram_linked_to_other_customer",
           rejectedTelegramId: telegramId,
           rejectedAt: new Date().toISOString(),
-        })}::jsonb,
+        })}::text::jsonb,
         updated_at = NOW()
       WHERE id = ${pairing.id}
         AND status IN ('pending', 'opened')
@@ -1530,6 +1536,8 @@ async function openBrowserPairing(
     return true;
   }
 
+  pairing.metadata = normalizeBrowserPairingMetadata(pairing.metadata);
+
   await sql`
     UPDATE customer_link_tokens
     SET
@@ -1540,7 +1548,7 @@ async function openBrowserPairing(
         candidateFirstName: message.from?.first_name || null,
         candidateLastName: message.from?.last_name || null,
         openedAt: new Date().toISOString(),
-      })}::jsonb,
+      })}::text::jsonb,
       updated_at = NOW()
     WHERE id = ${pairing.id}
       AND status IN ('pending', 'opened')
@@ -1662,6 +1670,8 @@ async function confirmBrowserPairing(
       };
     }
 
+    pairing.metadata = normalizeBrowserPairingMetadata(pairing.metadata);
+
     const candidateTelegramId =
       typeof pairing.metadata.candidateTelegramId === "string"
         ? pairing.metadata.candidateTelegramId
@@ -1719,7 +1729,7 @@ async function confirmBrowserPairing(
             rejectionReason: "telegram_linked_to_other_customer",
             rejectedTelegramId: telegramId,
             rejectedAt: new Date().toISOString(),
-          })}::jsonb,
+          })}::text::jsonb,
           updated_at = NOW()
         WHERE id = ${pairing.id}
           AND status IN ('pending', 'opened')
@@ -1765,7 +1775,7 @@ async function confirmBrowserPairing(
             candidateFirstName: actor?.first_name || null,
             candidateLastName: actor?.last_name || null,
             openedAt: new Date().toISOString(),
-          })}::jsonb,
+          })}::text::jsonb,
           updated_at = NOW()
         WHERE id = ${pairing.id}
           AND status IN ('pending', 'opened')
@@ -1877,7 +1887,7 @@ async function confirmBrowserPairing(
           confirmedUsername: actor?.username || null,
           confirmedAt: new Date().toISOString(),
           confirmationSource: source,
-        })}::jsonb,
+        })}::text::jsonb,
         updated_at = NOW()
       WHERE id = ${pairing.id}
         AND status IN ('pending', 'opened')
@@ -1890,7 +1900,7 @@ async function confirmBrowserPairing(
       const latestRows = await transaction<{
         status: string;
         customer_id: string;
-        metadata: Record<string, unknown>;
+        metadata: unknown;
       }[]>`
         SELECT status, customer_id, metadata
         FROM customer_link_tokens
@@ -1898,9 +1908,12 @@ async function confirmBrowserPairing(
         LIMIT 1
       `;
       const latest = latestRows[0];
+      const latestMetadata = normalizeBrowserPairingMetadata(
+        latest?.metadata,
+      );
       const latestTelegramId =
-        latest && typeof latest.metadata.confirmedTelegramId === "string"
-          ? latest.metadata.confirmedTelegramId
+        typeof latestMetadata.confirmedTelegramId === "string"
+          ? latestMetadata.confirmedTelegramId
           : "";
 
       if (
@@ -1947,7 +1960,7 @@ async function confirmBrowserPairing(
           pairingId: pairing.id,
           telegramId,
           source,
-        })}::jsonb,
+        })}::text::jsonb,
         NOW()
       )
     `;
@@ -2099,7 +2112,7 @@ async function handleBrowserPairingContact(
         candidateLastName: message.from?.last_name || null,
         openedAt: new Date().toISOString(),
         recoveredFromContact: true,
-      })}::jsonb,
+      })}::text::jsonb,
       updated_at = NOW()
     WHERE id = ${pairing.id}
       AND status IN ('pending', 'opened')
@@ -2142,7 +2155,7 @@ async function handleBrowserPairingContact(
           attempts,
           lastMismatchAt: new Date().toISOString(),
           mismatchReason: "phone_mismatch",
-        })}::jsonb,
+        })}::text::jsonb,
         updated_at = NOW()
       WHERE id = ${pairing.id}
         AND status = 'opened'
@@ -2277,7 +2290,7 @@ async function handleBrowserPairingCancel(
         cancelledAt: new Date().toISOString(),
         cancelledTelegramId: telegramId,
         cancelledBy: "telegram",
-      })}::jsonb,
+      })}::text::jsonb,
       updated_at = NOW()
     WHERE id = ${pairingId}
       AND provider = 'telegram'
@@ -11105,7 +11118,7 @@ async function handleUpdate(update: TelegramUpdate) {
           cancelledAt: new Date().toISOString(),
           cancelledTelegramId: String(message.chat.id),
           cancelledBy: "telegram_keyboard",
-        })}::jsonb,
+        })}::text::jsonb,
         updated_at = NOW()
       WHERE id = (
         SELECT id

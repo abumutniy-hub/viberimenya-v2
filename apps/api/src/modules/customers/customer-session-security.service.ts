@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 
 export type CustomerSqlExecutor = {
+  json(value: unknown): unknown;
   <
     T extends readonly (object | undefined)[] =
       Record<string, unknown>[],
@@ -238,7 +239,7 @@ export async function createSecureCustomerSession(
         source: params.source,
         revokedByLimit: revoked.length,
         tokenStorage: "sha256-v1",
-      })}::jsonb,
+      })}::text::jsonb,
       NOW()
     )
   `;
@@ -291,7 +292,7 @@ export async function writeCustomerSecurityAudit(
       ${JSON.stringify({
         customerId: params.customerId,
         ...(params.metadata ?? {}),
-      })}::jsonb,
+      })}::text::jsonb,
       NOW()
     )
   `;

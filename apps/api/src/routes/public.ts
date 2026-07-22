@@ -90,6 +90,7 @@ import {
   hashCustomerPairingIp,
   hashCustomerPairingToken,
   normalizeCustomerPairingBrowserProof,
+  normalizeCustomerPairingMetadata,
   normalizeCustomerPhone,
   resolveTelegramBotUsername,
   safeHashEqual,
@@ -3329,7 +3330,7 @@ export async function publicRoutes(app: FastifyInstance) {
             createdProfile,
             attempts: 0,
             userAgent,
-          })}::jsonb,
+          })}::text::jsonb,
           NOW(),
           NOW()
         )
@@ -3502,7 +3503,9 @@ export async function publicRoutes(app: FastifyInstance) {
             };
           }
 
-          const metadata = pairing.metadata || {};
+          const metadata = normalizeCustomerPairingMetadata(
+            pairing.metadata,
+          );
           const storedNonceHash = String(
             metadata.browserNonceHash || "",
           );
@@ -3570,7 +3573,7 @@ export async function publicRoutes(app: FastifyInstance) {
                 metadata = metadata || ${JSON.stringify({
                   authenticatedAt: new Date().toISOString(),
                   sessionId: session.sessionId,
-                })}::jsonb,
+                })}::text::jsonb,
                 updated_at = NOW()
               WHERE id = ${pairing.id}
                 AND status IN ('confirmed', 'consumed')

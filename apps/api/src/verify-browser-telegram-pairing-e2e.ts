@@ -149,7 +149,7 @@ try {
               browserNonceHash: nonceHash,
               redirectPath: "/account",
               attempts: 0,
-            })}::jsonb,
+            })}::text::jsonb,
             NOW(),
             NOW()
           )
@@ -226,11 +226,34 @@ try {
             metadata = metadata || ${JSON.stringify({
               candidateTelegramId: telegramId,
               openedAt: new Date().toISOString(),
-            })}::jsonb,
+            })}::text::jsonb,
             updated_at = NOW()
           WHERE id = ${pairing.id}
             AND status = 'pending'
         `;
+
+        const openedMetadataRows = await transaction<{
+          metadata_type: string;
+          browser_nonce_hash: string | null;
+          code_hash: string | null;
+          candidate_telegram_id: string | null;
+        }[]>`
+          SELECT
+            jsonb_typeof(metadata) AS metadata_type,
+            metadata ->> 'browserNonceHash' AS browser_nonce_hash,
+            metadata ->> 'codeHash' AS code_hash,
+            metadata ->> 'candidateTelegramId' AS candidate_telegram_id
+          FROM customer_link_tokens
+          WHERE id = ${pairing.id}
+        `;
+        assertCondition(
+          openedMetadataRows[0]?.metadata_type === "object"
+            && openedMetadataRows[0]?.browser_nonce_hash === nonceHash
+            && openedMetadataRows[0]?.code_hash === codeHash
+            && openedMetadataRows[0]?.candidate_telegram_id === telegramId,
+          "Открытие Telegram повредило JSONB metadata или browser proof",
+        );
+        pass("открытие Telegram сохраняет JSONB object, code и browser proof");
 
         await transaction`
           INSERT INTO telegram_accounts (
@@ -291,7 +314,7 @@ try {
             metadata = metadata || ${JSON.stringify({
               confirmedTelegramId: telegramId,
               confirmedAt: new Date().toISOString(),
-            })}::jsonb,
+            })}::text::jsonb,
             updated_at = NOW()
           WHERE id = ${pairing.id}
             AND status = 'opened'
@@ -303,6 +326,28 @@ try {
           "Telegram не подтвердил pairing",
         );
         pass("Telegram identity подтверждает тот же профиль");
+        const confirmedMetadataRows = await transaction<{
+          metadata_type: string;
+          browser_nonce_hash: string | null;
+          code_hash: string | null;
+          confirmed_telegram_id: string | null;
+        }[]>`
+          SELECT
+            jsonb_typeof(metadata) AS metadata_type,
+            metadata ->> 'browserNonceHash' AS browser_nonce_hash,
+            metadata ->> 'codeHash' AS code_hash,
+            metadata ->> 'confirmedTelegramId' AS confirmed_telegram_id
+          FROM customer_link_tokens
+          WHERE id = ${pairing.id}
+        `;
+        assertCondition(
+          confirmedMetadataRows[0]?.metadata_type === "object"
+            && confirmedMetadataRows[0]?.browser_nonce_hash === nonceHash
+            && confirmedMetadataRows[0]?.code_hash === codeHash
+            && confirmedMetadataRows[0]?.confirmed_telegram_id === telegramId,
+          "Подтверждение Telegram повредило JSONB metadata или browser proof",
+        );
+        pass("подтверждение Telegram сохраняет JSONB object и browser proof");
 
         const session =
           await createSecureCustomerSession(transaction, {

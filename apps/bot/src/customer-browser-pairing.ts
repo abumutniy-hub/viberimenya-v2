@@ -67,12 +67,48 @@ export function browserPairingIsConfirmed(status: string) {
   return status === "confirmed" || status === "consumed";
 }
 
+export function normalizeBrowserPairingMetadata(
+  value: unknown,
+) {
+  const result: Record<string, unknown> = {};
+  const blockedKeys = new Set(["__proto__", "prototype", "constructor"]);
+
+  const visit = (candidate: unknown, depth: number) => {
+    if (depth > 8 || candidate === null || candidate === undefined) return;
+
+    if (typeof candidate === "string") {
+      try {
+        const parsed = JSON.parse(candidate) as unknown;
+        if (parsed !== candidate) visit(parsed, depth + 1);
+      } catch {
+        // Ignore malformed legacy fragments.
+      }
+      return;
+    }
+
+    if (Array.isArray(candidate)) {
+      for (const item of candidate) visit(item, depth + 1);
+      return;
+    }
+
+    if (typeof candidate !== "object") return;
+
+    for (const [key, item] of Object.entries(candidate)) {
+      if (!blockedKeys.has(key)) result[key] = item;
+    }
+  };
+
+  visit(value, 0);
+  return result;
+}
+
+
 export function browserPairingMetadataText(
   metadata: unknown,
   key: string,
 ) {
-  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return "";
-  const value = (metadata as Record<string, unknown>)[key];
+  const normalized = normalizeBrowserPairingMetadata(metadata);
+  const value = normalized[key];
   return typeof value === "string" ? value : "";
 }
 

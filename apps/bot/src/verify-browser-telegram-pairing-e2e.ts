@@ -4,6 +4,7 @@ import {
   hashBrowserPairingCode,
   hashBrowserPairingToken,
   isPairingManualCode,
+  normalizeBrowserPairingMetadata,
   pairingApproveCallback,
   pairingCancelCallback,
   pairingPhoneMatches,
@@ -101,6 +102,30 @@ assertCondition(
   "Запрос не восстановлен по совпавшему номеру после потери deep-link состояния",
 );
 pass("передача контакта восстанавливает активный запрос даже после сбоя deep-link");
+
+const legacyMetadata = normalizeBrowserPairingMetadata([
+  {
+    browserNonceHash: "sha256:browser-proof",
+    codeHash: "sha256:manual-code",
+    attempts: 0,
+  },
+  JSON.stringify({
+    candidateTelegramId: "123456",
+    openedAt: "2026-07-22T00:00:00.000Z",
+  }),
+  JSON.stringify({
+    confirmedTelegramId: "123456",
+    confirmedAt: "2026-07-22T00:00:01.000Z",
+  }),
+]);
+assertCondition(
+  legacyMetadata.browserNonceHash === "sha256:browser-proof"
+    && legacyMetadata.codeHash === "sha256:manual-code"
+    && legacyMetadata.candidateTelegramId === "123456"
+    && legacyMetadata.confirmedTelegramId === "123456",
+  "Повреждённая legacy metadata не восстановлена",
+);
+pass("legacy JSONB array/string восстанавливается без потери browser proof");
 
 const pairingId = "00000000-0000-4000-8000-000000000123";
 assertCondition(
