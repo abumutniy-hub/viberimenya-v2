@@ -824,7 +824,7 @@ export async function markOrderPaid(
             NOW(),
             NOW()
           FROM orders o
-          JOIN shops s ON s.id = o.shop_id
+          LEFT JOIN shop_settings ss ON ss.shop_id = o.shop_id
           LEFT JOIN customers c
             ON c.id =
               o.customer_id
@@ -835,8 +835,8 @@ export async function markOrderPaid(
             AND o.customer_id
               IS NOT NULL
             AND ${env.MAX_BOT_TOKEN !== ''}
-            AND LOWER(COALESCE(s.settings #>> '{features,maxEnabled}', 'false')) = 'true'
-            AND LOWER(COALESCE(s.settings #>> '{features,maxNotificationsEnabled}', 'false')) = 'true'
+            AND LOWER(COALESCE(ss.settings #>> '{features,maxEnabled}', 'false')) = 'true'
+            AND LOWER(COALESCE(ss.settings #>> '{features,maxNotificationsEnabled}', 'false')) = 'true'
             AND NOT EXISTS (
               SELECT 1
               FROM notification_events

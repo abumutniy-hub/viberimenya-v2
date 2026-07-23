@@ -380,7 +380,10 @@ export function OrderActions({
       const data = await response.json().catch(() => null);
 
       if (!response.ok || data?.ok === false) {
-        throw new Error(data?.message || "Не удалось подтвердить заказ");
+        const apiError = typeof data?.error === "string"
+          ? data.error
+          : data?.error?.message;
+        throw new Error(data?.message || apiError || data?.code || "Не удалось подтвердить заказ");
       }
 
       if (data?.paymentWarning) {
@@ -420,7 +423,10 @@ export function OrderActions({
       const data = await response.json().catch(() => null);
 
       if (!response.ok || data?.ok !== true) {
-        throw new Error(data?.message || "Не удалось подготовить оплату ЮKassa");
+        const apiError = typeof data?.error === "string"
+          ? data.error
+          : data?.error?.message;
+        throw new Error(data?.message || apiError || data?.code || "Не удалось подготовить оплату ЮKassa");
       }
 
       const preparedUrl = String(data?.payment?.paymentUrl || "");

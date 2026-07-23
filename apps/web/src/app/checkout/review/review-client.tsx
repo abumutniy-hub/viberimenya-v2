@@ -178,7 +178,7 @@ function paymentTitle(method: WebCheckoutPaymentMethod) {
   const map: Record<WebCheckoutPaymentMethod, string> = {
     transfer_after_confirm: "Перевод по реквизитам вручную",
     cash_on_delivery: "Оплата при получении",
-    online_card: "Картой после подтверждения",
+    online_card: "Онлайн-оплата после подтверждения",
     sbp: "СБП после подтверждения",
   };
   return map[method];

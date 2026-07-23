@@ -1337,7 +1337,7 @@ async function queueCustomerOrderNotification(
         NOW(),
         NOW()
       FROM orders o
-      JOIN shops s ON s.id = o.shop_id
+      LEFT JOIN shop_settings ss ON ss.shop_id = o.shop_id
       LEFT JOIN customers c ON c.id = o.customer_id
       WHERE o.id = ${params.orderId}
         AND o.shop_id = ${params.shopId}
@@ -1345,8 +1345,8 @@ async function queueCustomerOrderNotification(
         AND (
           ${channel} = 'telegram'
           OR (
-            LOWER(COALESCE(s.settings #>> '{features,maxEnabled}', 'false')) = 'true'
-            AND LOWER(COALESCE(s.settings #>> '{features,maxNotificationsEnabled}', 'false')) = 'true'
+            LOWER(COALESCE(ss.settings #>> '{features,maxEnabled}', 'false')) = 'true'
+            AND LOWER(COALESCE(ss.settings #>> '{features,maxNotificationsEnabled}', 'false')) = 'true'
           )
         )
         AND NOT EXISTS (

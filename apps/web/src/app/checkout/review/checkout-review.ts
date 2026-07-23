@@ -34,9 +34,10 @@ export type WebCheckoutDraftStep =
   | "confirm";
 
 export type CheckoutPaymentOptions = {
-  online: boolean;
-  cash: boolean;
-  transfer: boolean;
+  cashOnDelivery: boolean;
+  transferAfterConfirm: boolean;
+  onlineCard: boolean;
+  sbp: boolean;
 };
 
 export type WebCheckoutReviewData = {
@@ -145,12 +146,16 @@ export function availableWebCheckoutPaymentMethods(
   const methods: WebCheckoutPaymentMethod[] = [];
 
   // Онлайн-оплата должна быть основным сценарием, когда ЮKassa включена.
-  // Ручной перевод и оплата при получении остаются доступными как явный выбор.
-  if (options.online) methods.push("online_card", "sbp");
-  if (options.transfer || (!options.online && !options.cash)) {
+  // Поля совпадают с фактическим контрактом checkout-options API.
+  if (options.onlineCard) methods.push("online_card");
+  if (options.sbp) methods.push("sbp");
+  if (
+    options.transferAfterConfirm
+    || (!options.onlineCard && !options.sbp && !options.cashOnDelivery)
+  ) {
     methods.push("transfer_after_confirm");
   }
-  if (options.cash) methods.push("cash_on_delivery");
+  if (options.cashOnDelivery) methods.push("cash_on_delivery");
 
   return methods;
 }

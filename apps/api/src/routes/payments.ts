@@ -541,10 +541,10 @@ async function saveProviderPayment(
             ${params.order.shop_id}, ${params.order.order_id}, 'payment_link_added',
             'max', 'customer', 'pending', ${JSON.stringify(notificationPayload)}::jsonb,
             NOW(), NOW()
-          FROM shops s
-          WHERE s.id = ${params.order.shop_id}
-            AND LOWER(COALESCE(s.settings #>> '{features,maxEnabled}', 'false')) = 'true'
-            AND LOWER(COALESCE(s.settings #>> '{features,maxNotificationsEnabled}', 'false')) = 'true'
+          FROM shop_settings ss
+          WHERE ss.shop_id = ${params.order.shop_id}
+            AND LOWER(COALESCE(ss.settings #>> '{features,maxEnabled}', 'false')) = 'true'
+            AND LOWER(COALESCE(ss.settings #>> '{features,maxNotificationsEnabled}', 'false')) = 'true'
             AND NOT EXISTS (
               SELECT 1
               FROM notification_events
