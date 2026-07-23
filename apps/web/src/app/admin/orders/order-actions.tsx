@@ -106,6 +106,7 @@ export function OrderActions({
   orderId,
   status,
   paymentStatus,
+  paymentMethod,
   paymentUrl,
   trackingToken,
   internalChatCount = 0,
@@ -118,6 +119,7 @@ export function OrderActions({
   orderId: string;
   status: string;
   paymentStatus: string;
+  paymentMethod: string;
   paymentUrl?: string;
   trackingToken?: string;
   internalChatCount?: number;
@@ -129,6 +131,7 @@ export function OrderActions({
 }) {
   const [isConfirming, setIsConfirming] = useState(false);
   const [isPaying, setIsPaying] = useState(false);
+  const [isPreparingYooKassa, setIsPreparingYooKassa] = useState(false);
   const [isSavingLink, setIsSavingLink] = useState(false);
   const [isChangingStatus, setIsChangingStatus] = useState(false);
   const [link, setLink] = useState(paymentUrl || "");
@@ -155,11 +158,23 @@ export function OrderActions({
     && status !== "cancelled"
     && !["paid", "refunded"].includes(paymentStatus);
 
-  const canAddPaymentLink =
+  const isOnlinePaymentMethod =
+    paymentMethod === "online_card"
+    || paymentMethod === "sbp";
+
+  const canPrepareYooKassa =
     canManage
     && status !== "new"
     && status !== "cancelled"
-    && !["paid", "refunded"].includes(paymentStatus);
+    && paymentMethod !== "cash_on_delivery"
+    && !["paid", "refunded", "partially_refunded"].includes(paymentStatus);
+
+  const canAddPaymentLink =
+    canManage
+    && paymentMethod === "transfer_after_confirm"
+    && status !== "new"
+    && status !== "cancelled"
+    && !["paid", "refunded", "partially_refunded"].includes(paymentStatus);
 
   const trackingUrl =
     canManage && trackingToken
@@ -362,9 +377,16 @@ export function OrderActions({
         body: "{}"
       });
 
-      if (!response.ok) {
-        const data = await response.json().catch(() => null);
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok || data?.ok === false) {
         throw new Error(data?.message || "Не удалось подтвердить заказ");
+      }
+
+      if (data?.paymentWarning) {
+        alert(
+          `Заказ подтверждён, но оплату ЮKassa не удалось подготовить автоматически: ${data.paymentWarning}`
+        );
       }
 
       window.location.reload();
@@ -374,8 +396,60 @@ export function OrderActions({
     }
   }
 
-  async function savePaymentLink() {
-    const paymentUrlToSave = link.trim();
+
+  async function prepareYooKassaPayment() {
+    const conversionRequired = paymentMethod === "transfer_after_confirm";
+    const confirmed = window.confirm(
+      conversionRequired
+        ? "Изменить способ оплаты на онлайн-карту и создать защищённую ссылку ЮKassa?"
+        : "Создать или проверить защищённую ссылку оплаты ЮKassa?"
+    );
+
+    if (!confirmed) return;
+
+    setIsPreparingYooKassa(true);
+
+    try {
+      const response = await fetch(`/api/admin/orders/${orderId}/payment/yookassa`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          method: paymentMethod === "sbp" ? "sbp" : "online_card"
+        })
+      });
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok || data?.ok !== true) {
+        throw new Error(data?.message || "Не удалось подготовить оплату ЮKassa");
+      }
+
+      const preparedUrl = String(data?.payment?.paymentUrl || "");
+
+      if (preparedUrl) {
+        try {
+          await navigator.clipboard.writeText(preparedUrl);
+        } catch {
+          // Кнопка оплаты всё равно появится у клиента автоматически.
+        }
+      }
+
+      alert(
+        preparedUrl
+          ? "Оплата ЮKassa подготовлена. Кнопка появилась на странице заказа и отправлена в подключённые каналы."
+          : "Платёжная попытка подготовлена. Обновите заказ для проверки статуса."
+      );
+      window.location.reload();
+    } catch (error) {
+      alert(
+        error instanceof Error
+          ? error.message
+          : "Не удалось подготовить оплату ЮKassa"
+      );
+      setIsPreparingYooKassa(false);
+    }
+  }
+
+  async function savePaymentLink() {    const paymentUrlToSave = link.trim();
 
     if (!paymentUrlToSave) {
       alert("Вставьте ссылку на оплату");
@@ -563,6 +637,24 @@ async function changeStatus(
       ) : (
         <span className="admin-status-badge">{orderStatusText(status)}</span>
       )}
+
+
+      {canPrepareYooKassa ? (
+        <button
+          type="button"
+          className="admin-action-button secondary"
+          disabled={isPreparingYooKassa}
+          onClick={prepareYooKassaPayment}
+        >
+          {isPreparingYooKassa
+            ? "Подготавливаем…"
+            : isOnlinePaymentMethod
+              ? paymentUrl
+                ? "Проверить оплату ЮKassa"
+                : "Создать оплату ЮKassa"
+              : "Создать оплату ЮKassa"}
+        </button>
+      ) : null}
 
       {canAddPaymentLink ? (
         <div className="admin-payment-link-box">

@@ -524,10 +524,39 @@ async function saveProviderPayment(
             WHERE shop_id = ${params.order.shop_id}
               AND order_id = ${params.order.order_id}
               AND type = 'payment_link_added'
+              AND channel = 'telegram'
               AND recipient_type = 'customer'
               AND payload ->> 'providerPaymentId' = ${params.providerPayment.id}
           )
       `;
+
+
+      if (env.MAX_BOT_TOKEN && params.order.customer_id) {
+        await transaction`
+          INSERT INTO notification_events (
+            shop_id, order_id, type, channel, recipient_type,
+            status, payload, created_at, updated_at
+          )
+          SELECT
+            ${params.order.shop_id}, ${params.order.order_id}, 'payment_link_added',
+            'max', 'customer', 'pending', ${JSON.stringify(notificationPayload)}::jsonb,
+            NOW(), NOW()
+          FROM shops s
+          WHERE s.id = ${params.order.shop_id}
+            AND LOWER(COALESCE(s.settings #>> '{features,maxEnabled}', 'false')) = 'true'
+            AND LOWER(COALESCE(s.settings #>> '{features,maxNotificationsEnabled}', 'false')) = 'true'
+            AND NOT EXISTS (
+              SELECT 1
+              FROM notification_events
+              WHERE shop_id = ${params.order.shop_id}
+                AND order_id = ${params.order.order_id}
+                AND type = 'payment_link_added'
+                AND channel = 'max'
+                AND recipient_type = 'customer'
+                AND payload ->> 'providerPaymentId' = ${params.providerPayment.id}
+            )
+        `;
+      }
     }
 
     if (localStatus === "paid") {

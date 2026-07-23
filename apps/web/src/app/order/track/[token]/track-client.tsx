@@ -353,14 +353,24 @@ export function TrackClient({ token }: { token: string }) {
   useEffect(() => {
     void loadOrder(false);
 
+    const waitingForOnlinePayment = Boolean(
+      order
+      && (order.paymentMethod === "online_card" || order.paymentMethod === "sbp")
+      && !["paid", "refunded", "partially_refunded", "cancelled", "expired"].includes(
+        order.paymentStatus
+      )
+      && order.status !== "cancelled"
+    );
+    const intervalMs = waitingForOnlinePayment ? 5000 : 30000;
+
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible") {
         void loadOrder(true);
       }
-    }, 30000);
+    }, intervalMs);
 
     return () => window.clearInterval(timer);
-  }, [loadOrder]);
+  }, [loadOrder, order?.paymentMethod, order?.paymentStatus, order?.status]);
 
   useEffect(() => {
     if (!order || paymentActionHandled.current) return;

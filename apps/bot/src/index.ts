@@ -159,6 +159,8 @@ type TelegramInlineKeyboardButton = {
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
+const MAX_BOT_TOKEN = process.env.MAX_BOT_TOKEN || "";
+const MAX_API_BASE_URL = "https://platform-api2.max.ru";
 const DRY_RUN = process.env.BOT_DRY_RUN !== "false";
 const RUN_ONCE = process.env.BOT_RUN_ONCE === "true";
 const POLL_INTERVAL_MS = envNumber("BOT_POLL_INTERVAL_MS", 1000, 300, 2000);
@@ -177,6 +179,7 @@ const UPLOADS_DIR = process.env.UPLOADS_DIR || resolve(process.cwd(), "../../sto
 const NOTIFICATION_SOURCE = (process.env.BOT_NOTIFICATION_SOURCE || "outbox").trim().toLowerCase();
 const NOTIFICATION_SELF_TEST = process.env.BOT_NOTIFICATION_SELF_TEST === "true";
 const NOTIFICATION_WORKER_ID = `telegram-outbox:${process.pid}:${randomUUID().slice(0, 8)}`;
+const MAX_NOTIFICATION_WORKER_ID = `max-notification:${process.pid}:${randomUUID().slice(0, 8)}`;
 
 const pendingBouquetPhotoRequests = new Map<number, {
   orderId: string;
@@ -3809,9 +3812,9 @@ function compactCheckoutLines(
 
 function telegramPaymentLabel(value: TelegramPaymentMethod | undefined) {
   if (value === "cash_on_delivery") return "При получении";
-  if (value === "online_card") return "Онлайн картой";
-  if (value === "sbp") return "СБП";
-  return "Перевод после подтверждения";
+  if (value === "online_card") return "Картой после подтверждения";
+  if (value === "sbp") return "СБП после подтверждения";
+  return "Перевод по реквизитам вручную";
 }
 
 function telegramContactPreferenceLabel(value: TelegramCheckoutData["contactPreference"]) {
@@ -4519,15 +4522,15 @@ async function showCheckoutPaymentMethods(chatId: number, data: TelegramCheckout
   const configuration = await getTelegramCheckoutConfiguration();
   const rows: TelegramInlineKeyboardButton[][] = [];
 
+  if (configuration.paymentMethods.online) {
+    rows.push([{ text: "💳 Картой после подтверждения", callback_data: "checkout:payment:online_card" }]);
+    rows.push([{ text: "⚡ СБП после подтверждения", callback_data: "checkout:payment:sbp" }]);
+  }
   if (configuration.paymentMethods.transfer) {
-    rows.push([{ text: "💳 Перевод после подтверждения", callback_data: "checkout:payment:transfer_after_confirm" }]);
+    rows.push([{ text: "🏦 Перевод по реквизитам вручную", callback_data: "checkout:payment:transfer_after_confirm" }]);
   }
   if (configuration.paymentMethods.cash) {
     rows.push([{ text: "💵 При получении", callback_data: "checkout:payment:cash_on_delivery" }]);
-  }
-  if (configuration.paymentMethods.online) {
-    rows.push([{ text: "🌐 Онлайн картой", callback_data: "checkout:payment:online_card" }]);
-    rows.push([{ text: "⚡ СБП", callback_data: "checkout:payment:sbp" }]);
   }
 
   await setCheckoutSession(chatId, "payment_method", data);
@@ -4537,7 +4540,17 @@ async function showCheckoutPaymentMethods(chatId: number, data: TelegramCheckout
     return;
   }
 
-  await sendCheckoutStepMessage(chatId, "payment_method", ["Выберите способ оплаты."], rows);
+  await sendCheckoutStepMessage(
+    chatId,
+    "payment_method",
+    [
+      "Выберите способ оплаты.",
+      configuration.paymentMethods.online
+        ? "Для карты или СБП кнопка оплаты появится автоматически после подтверждения заказа менеджером."
+        : "После подтверждения менеджер сообщит дальнейшие действия по оплате.",
+    ],
+    rows,
+  );
 }
 
 async function showCheckoutPromoCode(chatId: number, data: TelegramCheckoutData) {
@@ -12130,6 +12143,291 @@ async function processLegacyNotificationEvents() {
 }
 
 
+class MaxApiError extends Error {
+  statusCode: number;
+
+  constructor(statusCode: number, message: string) {
+    super(message);
+    this.name = "MaxApiError";
+    this.statusCode = statusCode;
+  }
+}
+
+async function maxNotificationsEnabledForShop(shopId: string) {
+  const rows = await sql<{ enabled: boolean }[]>`
+    SELECT (
+      LOWER(COALESCE(settings #>> '{features,maxEnabled}', 'false')) = 'true'
+      AND LOWER(COALESCE(settings #>> '{features,maxNotificationsEnabled}', 'false')) = 'true'
+    ) AS enabled
+    FROM shops
+    WHERE id = ${shopId}
+    LIMIT 1
+  `;
+
+  return rows[0]?.enabled === true;
+}
+
+async function resolveMaxRecipients(event: NotificationEvent): Promise<string[]> {
+  if (event.recipient_type !== "customer" || !event.order_id) {
+    return [];
+  }
+
+  const rows = await sql<{ provider_user_id: string }[]>`
+    SELECT link.provider_user_id
+    FROM orders o
+    JOIN customer_channel_links link
+      ON link.shop_id = o.shop_id
+     AND link.customer_id = o.customer_id
+     AND link.provider = 'max'
+     AND link.is_active = true
+     AND link.notifications_enabled = true
+    WHERE o.shop_id = ${event.shop_id}
+      AND o.id = ${event.order_id}
+    ORDER BY link.linked_at DESC, link.updated_at DESC
+    LIMIT 1
+  `;
+
+  return rows
+    .map((row) => String(row.provider_user_id || "").trim())
+    .filter(Boolean);
+}
+
+function maxMessageButtons(event: NotificationEvent) {
+  const payload = eventPayload(event);
+  const paymentUrl = absoluteUrl(payloadValue(payload, "paymentUrl", "payment_url"));
+  const trackingUrl = absoluteUrl(payloadValue(payload, "trackingUrl", "tracking_url"));
+  const rows: Array<Array<{ type: "link"; text: string; url: string }>> = [];
+
+  if (event.type === "payment_link_added" && paymentUrl) {
+    rows.push([{ type: "link", text: "💳 Оплатить заказ", url: paymentUrl }]);
+  }
+
+  if (trackingUrl) {
+    rows.push([{ type: "link", text: "Открыть заказ", url: trackingUrl }]);
+  }
+
+  return rows;
+}
+
+async function sendMaxNotification(event: NotificationEvent, userId: string) {
+  if (!MAX_BOT_TOKEN) {
+    throw new MaxApiError(503, "MAX_BOT_TOKEN не настроен");
+  }
+
+  const buttons = maxMessageButtons(event);
+  const response = await fetch(
+    `${MAX_API_BASE_URL}/messages?user_id=${encodeURIComponent(userId)}`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: MAX_BOT_TOKEN,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        text: formatEvent(event),
+        ...(buttons.length > 0
+          ? {
+              attachments: [
+                {
+                  type: "inline_keyboard",
+                  payload: { buttons },
+                },
+              ],
+            }
+          : {}),
+      }),
+    },
+  );
+  const responseText = await response.text();
+
+  if (!response.ok) {
+    let message = responseText || `MAX API HTTP ${response.status}`;
+
+    try {
+      const parsed = JSON.parse(responseText) as Record<string, unknown>;
+      message = String(parsed.message || parsed.error || message);
+    } catch {
+      // Используем безопасный текст HTTP-ответа.
+    }
+
+    throw new MaxApiError(response.status, message.slice(0, 1000));
+  }
+}
+
+async function finishMaxNotificationEvent(
+  event: NotificationEvent,
+  status: "sent" | "skipped" | "failed" | "pending",
+  error: string | null,
+) {
+  const sentAt = status === "sent" ? new Date().toISOString() : null;
+  const outboxStatus = status === "failed"
+    ? "dead"
+    : status;
+
+  await sql.begin(async (transaction) => {
+    await transaction`
+      UPDATE notification_events
+      SET status = ${status},
+          attempts = CASE
+            WHEN ${status} IN ('sent', 'failed', 'pending') THEN attempts + 1
+            ELSE attempts
+          END,
+          error = ${error},
+          sent_at = COALESCE(${sentAt}, sent_at),
+          updated_at = NOW()
+      WHERE id = ${event.id}
+    `;
+
+    await transaction`
+      UPDATE notification_outbox
+      SET status = ${outboxStatus},
+          attempts = GREATEST(attempts, ${Number(event.attempts || 0) + 1}),
+          locked_at = NULL,
+          locked_by = NULL,
+          last_error = ${error},
+          sent_at = COALESCE(${sentAt}, sent_at),
+          dead_at = CASE WHEN ${status} = 'failed' THEN NOW() ELSE dead_at END,
+          next_attempt_at = CASE
+            WHEN ${status} = 'pending'
+            THEN ${nextOutboxAttemptAt(Number(event.attempts || 0) + 1)}::timestamptz
+            ELSE next_attempt_at
+          END,
+          updated_at = NOW()
+      WHERE source_notification_event_id = ${event.id}
+        AND channel = 'max'
+    `;
+  });
+}
+
+async function processMaxNotificationEvents() {
+  if (!MAX_BOT_TOKEN) return;
+
+  await sql`
+    UPDATE notification_events
+    SET status = 'pending',
+        error = COALESCE(error, 'Восстановлено после зависшего MAX worker'),
+        updated_at = NOW()
+    WHERE channel = 'max'
+      AND status = 'processing'
+      AND updated_at < NOW() - INTERVAL '10 minutes'
+  `;
+
+  const events = await sql<NotificationEvent[]>`
+    SELECT
+      id, shop_id, order_id, type, channel, recipient_type,
+      recipient_telegram_id, payload, attempts, created_at, updated_at
+    FROM notification_events
+    WHERE channel = 'max'
+      AND status = 'pending'
+      AND attempts < 5
+      AND updated_at <= NOW() - (
+        CASE attempts
+          WHEN 0 THEN INTERVAL '0 seconds'
+          WHEN 1 THEN INTERVAL '30 seconds'
+          WHEN 2 THEN INTERVAL '2 minutes'
+          WHEN 3 THEN INTERVAL '10 minutes'
+          ELSE INTERVAL '30 minutes'
+        END
+      )
+    ORDER BY created_at ASC
+    LIMIT 5
+  `;
+
+  for (const event of events) {
+    if (DRY_RUN) {
+      console.log(`[bot-worker] dry-run MAX event=${event.id} type=${event.type}`);
+      continue;
+    }
+
+    const claimed = await sql<{ id: string }[]>`
+      UPDATE notification_events
+      SET status = 'processing',
+          error = NULL,
+          updated_at = NOW()
+      WHERE id = ${event.id}
+        AND channel = 'max'
+        AND status = 'pending'
+      RETURNING id
+    `;
+
+    if (claimed.length === 0) continue;
+
+    await sql`
+      UPDATE notification_outbox
+      SET status = 'processing',
+          locked_at = NOW(),
+          locked_by = ${MAX_NOTIFICATION_WORKER_ID},
+          last_error = NULL,
+          updated_at = NOW()
+      WHERE source_notification_event_id = ${event.id}
+        AND channel = 'max'
+    `;
+
+    try {
+      if (!(await maxNotificationsEnabledForShop(event.shop_id))) {
+        await finishMaxNotificationEvent(
+          event,
+          "skipped",
+          "Уведомления MAX выключены feature flags",
+        );
+        continue;
+      }
+
+      const recipients = await resolveMaxRecipients(event);
+
+      if (recipients.length === 0) {
+        await finishMaxNotificationEvent(
+          event,
+          "skipped",
+          "MAX покупателя не подключён или уведомления выключены",
+        );
+        continue;
+      }
+
+      for (const userId of recipients) {
+        await sendMaxNotification(event, userId);
+      }
+
+      await finishMaxNotificationEvent(event, "sent", null);
+      console.log(`[bot-worker] MAX sent event=${event.id} type=${event.type}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const statusCode = error instanceof MaxApiError ? error.statusCode : 0;
+      const permanentRecipientError = statusCode === 403 || statusCode === 404;
+
+      if (permanentRecipientError) {
+        await sql`
+          UPDATE customer_channel_links link
+          SET is_active = false,
+              notifications_enabled = false,
+              metadata = COALESCE(metadata, '{}'::jsonb)
+                || ${JSON.stringify({ deactivatedBy: "max_notification_worker" })}::jsonb,
+              updated_at = NOW()
+          FROM orders o
+          WHERE o.id = ${event.order_id}
+            AND o.shop_id = ${event.shop_id}
+            AND link.shop_id = o.shop_id
+            AND link.customer_id = o.customer_id
+            AND link.provider = 'max'
+            AND link.is_active = true
+        `;
+
+        await finishMaxNotificationEvent(event, "skipped", message);
+        continue;
+      }
+
+      const nextAttempts = Number(event.attempts || 0) + 1;
+      await finishMaxNotificationEvent(
+        event,
+        nextAttempts >= 5 ? "failed" : "pending",
+        message,
+      );
+      console.error(`[bot-worker] MAX failed event=${event.id}`, error);
+    }
+  }
+}
+
+
 function outboxRetryDelayMs(attempt: number) {
   const delays = [30_000, 120_000, 600_000, 1_800_000, 3_600_000];
   return delays[Math.max(0, Math.min(delays.length - 1, attempt - 1))] || 30_000;
@@ -12942,7 +13240,7 @@ async function loop() {
   }
 
   console.log(
-    `[bot-worker] started dryRun=${DRY_RUN} runOnce=${RUN_ONCE} tokenSet=${Boolean(TELEGRAM_BOT_TOKEN)} poll=${POLL_INTERVAL_MS}ms updatesTimeout=${TELEGRAM_UPDATES_TIMEOUT_SECONDS}s notifications=${NOTIFICATION_SOURCE}`
+    `[bot-worker] started dryRun=${DRY_RUN} runOnce=${RUN_ONCE} telegramTokenSet=${Boolean(TELEGRAM_BOT_TOKEN)} maxTokenSet=${Boolean(MAX_BOT_TOKEN)} poll=${POLL_INTERVAL_MS}ms updatesTimeout=${TELEGRAM_UPDATES_TIMEOUT_SECONDS}s notifications=${NOTIFICATION_SOURCE}`
   );
 
   if (NOTIFICATION_SELF_TEST) {
@@ -12959,6 +13257,8 @@ async function loop() {
     } else {
       await processNotificationOutbox();
     }
+
+    await processMaxNotificationEvents();
 
     if (RUN_ONCE) {
       break;

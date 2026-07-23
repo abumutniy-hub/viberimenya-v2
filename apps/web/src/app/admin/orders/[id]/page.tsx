@@ -503,6 +503,7 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
           orderId={rawText(order.id)}
           status={status}
           paymentStatus={paymentStatus}
+          paymentMethod={rawText(order.payment_method)}
           paymentUrl={paymentUrl}
           trackingToken={trackingToken}
           internalChatCount={numberValue(order.internal_chat_unread_count)}

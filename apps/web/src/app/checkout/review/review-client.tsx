@@ -176,22 +176,22 @@ function expiryText(value: string | undefined) {
 
 function paymentTitle(method: WebCheckoutPaymentMethod) {
   const map: Record<WebCheckoutPaymentMethod, string> = {
-    transfer_after_confirm: "Перевод после подтверждения",
+    transfer_after_confirm: "Перевод по реквизитам вручную",
     cash_on_delivery: "Оплата при получении",
-    online_card: "Банковской картой онлайн",
-    sbp: "Через СБП",
+    online_card: "Картой после подтверждения",
+    sbp: "СБП после подтверждения",
   };
   return map[method];
 }
 
 function paymentDescription(method: WebCheckoutPaymentMethod) {
   if (method === "online_card" || method === "sbp") {
-    return "После оформления откроется безопасная страница оплаты.";
+    return "После подтверждения заказа менеджером кнопка оплаты появится автоматически на странице заказа и в подключённых каналах.";
   }
   if (method === "cash_on_delivery") {
     return "Оплатите заказ при получении.";
   }
-  return "Менеджер подтвердит заказ и отправит реквизиты.";
+  return "Менеджер подтвердит заказ и отдельно отправит реквизиты для ручного перевода.";
 }
 
 function deliverySummary(data: CheckoutDraftSnapshot["data"], options: CheckoutOptions) {

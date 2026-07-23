@@ -1288,63 +1288,79 @@ async function queueCustomerOrderNotification(
     extraPayload?: Record<string, unknown>;
   }
 ) {
-  await client`
-    INSERT INTO notification_events (
-      shop_id,
-      order_id,
-      type,
-      channel,
-      recipient_type,
-      status,
-      payload,
-      created_at,
-      updated_at
-    )
-    SELECT
-      o.shop_id,
-      o.id,
-      ${params.type},
-      'telegram',
-      'customer',
-      'pending',
-      jsonb_build_object(
-        'orderId', o.id,
-        'orderNumber', o.order_number,
-        'status', COALESCE(${params.status || null}, o.status::text),
-        'paymentStatus', o.payment_status,
-        'totalAmount', o.total,
-        'customerName', c.name,
-        'customerPhone', c.phone,
-        'recipientName', o.recipient_name,
-        'recipientPhone', o.recipient_phone,
-        'deliveryAddressText', o.delivery_address_text,
-        'deliveryComment', o.delivery_comment,
-        'bouquetPhotoUrl', o.bouquet_photo_url,
-        'deliveryProofPhotoUrl', o.metadata #>> '{delivery,proofPhotoUrl}',
-        'trackingToken', o.tracking_token,
-        'trackingUrl', CASE
-          WHEN o.tracking_token IS NULL OR o.tracking_token = '' THEN NULL
-          ELSE '/order/track/' || o.tracking_token
-        END
-      ) || CAST(${JSON.stringify(params.extraPayload ?? {})} AS jsonb),
-      NOW(),
-      NOW()
-    FROM orders o
-    LEFT JOIN customers c ON c.id = o.customer_id
-    WHERE o.id = ${params.orderId}
-      AND o.shop_id = ${params.shopId}
-      AND o.customer_id IS NOT NULL
-      AND NOT EXISTS (
-        SELECT 1
-        FROM notification_events existing
-        WHERE existing.shop_id = o.shop_id
-          AND existing.order_id = o.id
-          AND existing.type = ${params.type}
-          AND existing.channel = 'telegram'
-          AND existing.recipient_type = 'customer'
-          AND existing.status IN ('pending', 'processing', 'sent')
+  const channels: Array<"telegram" | "max"> = ["telegram"];
+
+  if (env.MAX_BOT_TOKEN) {
+    channels.push("max");
+  }
+
+  for (const channel of channels) {
+    await client`
+      INSERT INTO notification_events (
+        shop_id,
+        order_id,
+        type,
+        channel,
+        recipient_type,
+        status,
+        payload,
+        created_at,
+        updated_at
       )
-  `;
+      SELECT
+        o.shop_id,
+        o.id,
+        ${params.type},
+        ${channel},
+        'customer',
+        'pending',
+        jsonb_build_object(
+          'orderId', o.id,
+          'orderNumber', o.order_number,
+          'status', COALESCE(${params.status || null}, o.status::text),
+          'paymentStatus', o.payment_status,
+          'totalAmount', o.total,
+          'customerName', c.name,
+          'customerPhone', c.phone,
+          'recipientName', o.recipient_name,
+          'recipientPhone', o.recipient_phone,
+          'deliveryAddressText', o.delivery_address_text,
+          'deliveryComment', o.delivery_comment,
+          'bouquetPhotoUrl', o.bouquet_photo_url,
+          'deliveryProofPhotoUrl', o.metadata #>> '{delivery,proofPhotoUrl}',
+          'trackingToken', o.tracking_token,
+          'trackingUrl', CASE
+            WHEN o.tracking_token IS NULL OR o.tracking_token = '' THEN NULL
+            ELSE '/order/track/' || o.tracking_token
+          END
+        ) || CAST(${JSON.stringify(params.extraPayload ?? {})} AS jsonb),
+        NOW(),
+        NOW()
+      FROM orders o
+      JOIN shops s ON s.id = o.shop_id
+      LEFT JOIN customers c ON c.id = o.customer_id
+      WHERE o.id = ${params.orderId}
+        AND o.shop_id = ${params.shopId}
+        AND o.customer_id IS NOT NULL
+        AND (
+          ${channel} = 'telegram'
+          OR (
+            LOWER(COALESCE(s.settings #>> '{features,maxEnabled}', 'false')) = 'true'
+            AND LOWER(COALESCE(s.settings #>> '{features,maxNotificationsEnabled}', 'false')) = 'true'
+          )
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM notification_events existing
+          WHERE existing.shop_id = o.shop_id
+            AND existing.order_id = o.id
+            AND existing.type = ${params.type}
+            AND existing.channel = ${channel}
+            AND existing.recipient_type = 'customer'
+            AND existing.status IN ('pending', 'processing', 'sent')
+        )
+    `;
+  }
 }
 
 async function addOrderOperationalHistory(
@@ -5941,8 +5957,7 @@ export async function adminRoutes(app: FastifyInstance) {
       let paymentUrl = "";
 
       if (
-        result.changed
-        && (result.paymentMethod === "online_card" || result.paymentMethod === "sbp")
+        (result.paymentMethod === "online_card" || result.paymentMethod === "sbp")
         && result.trackingToken
       ) {
         try {
@@ -5987,6 +6002,165 @@ export async function adminRoutes(app: FastifyInstance) {
         paymentUrl: paymentUrl || null,
         paymentWarning: paymentWarning || null,
         order: updatedRows[0] ?? null
+      };
+    } finally {
+      await client.end();
+    }
+  });
+
+
+  app.post("/api/admin/orders/:id/payment/yookassa", async (request, reply) => {
+    const params = z.object({
+      id: z.string().uuid()
+    }).parse(request.params ?? {});
+
+    const body = z.object({
+      method: z.enum(["online_card", "sbp"]).optional().default("online_card")
+    }).parse(request.body ?? {});
+
+    const adminContext = (request as AdminRequest).adminContext;
+
+    if (!adminContext?.userId) {
+      return reply.status(401).send({
+        ok: false,
+        message: "Требуется вход в CRM"
+      });
+    }
+
+    const { client } = createDb();
+
+    try {
+      const shop = await getShop(client);
+
+      const prepared = await client.begin(async (transaction) => {
+        const orderRows = await transaction<{
+          id: string;
+          status: string;
+          payment_status: string;
+          payment_method: string;
+          tracking_token: string;
+          total: number;
+        }[]>`
+          SELECT
+            id,
+            status::text AS status,
+            payment_status::text AS payment_status,
+            payment_method::text AS payment_method,
+            tracking_token,
+            total
+          FROM orders
+          WHERE shop_id = ${shop.id}
+            AND id = ${params.id}
+          LIMIT 1
+          FOR UPDATE
+        `;
+
+        const order = orderRows[0];
+
+        if (!order) {
+          throw new HttpError(404, "Заказ не найден");
+        }
+
+        if (order.status === "new") {
+          throw new HttpError(400, "Сначала подтвердите заказ");
+        }
+
+        if (order.status === "cancelled") {
+          throw new HttpError(400, "Отменённый заказ нельзя оплатить");
+        }
+
+        if (order.payment_status === "paid") {
+          throw new HttpError(409, "Заказ уже оплачен");
+        }
+
+        if (["refunded", "partially_refunded"].includes(order.payment_status)) {
+          throw new HttpError(409, "Для заказа с возвратом нельзя создавать новую оплату");
+        }
+
+        if (order.payment_method === "cash_on_delivery") {
+          throw new HttpError(
+            409,
+            "Для заказа выбрана оплата при получении. Измените способ оплаты отдельно."
+          );
+        }
+
+        const activeManualPayments = await transaction<{ count: number }[]>`
+          SELECT COUNT(*)::int AS count
+          FROM payments
+          WHERE shop_id = ${shop.id}
+            AND order_id = ${order.id}
+            AND provider = 'manual'
+            AND status IN ('created', 'pending', 'waiting_for_capture')
+            AND payment_url IS NOT NULL
+        `;
+
+        if (Number(activeManualPayments[0]?.count || 0) > 0) {
+          throw new HttpError(
+            409,
+            "У заказа уже есть активная ручная ссылка оплаты. Сначала завершите ручной сценарий."
+          );
+        }
+
+        const targetMethod =
+          order.payment_method === "online_card" || order.payment_method === "sbp"
+            ? order.payment_method
+            : body.method;
+        const converted = order.payment_method !== targetMethod;
+
+        if (converted) {
+          await transaction`
+            UPDATE orders
+            SET payment_method = ${targetMethod}::payment_method,
+                updated_at = NOW()
+            WHERE shop_id = ${shop.id}
+              AND id = ${order.id}
+          `;
+
+          await addOrderOperationalHistory(transaction, {
+            shopId: shop.id,
+            orderId: order.id,
+            status: order.status,
+            userId: adminContext.userId,
+            comment: targetMethod === "sbp"
+              ? "Способ оплаты изменён на автоматическую оплату через СБП"
+              : "Способ оплаты изменён на автоматическую оплату картой через ЮKassa"
+          });
+        }
+
+        return {
+          orderId: order.id,
+          trackingToken: order.tracking_token,
+          paymentMethod: targetMethod,
+          total: Number(order.total || 0),
+          converted
+        };
+      });
+
+      const payment = await createOrReuseYooKassaPayment(
+        client,
+        prepared.trackingToken
+      );
+      const paymentUrl = String(payment.paymentUrl || "");
+
+      if (paymentUrl) {
+        await queueCustomerOrderNotification(client, {
+          shopId: shop.id,
+          orderId: prepared.orderId,
+          type: "payment_link_added",
+          status: "confirmed",
+          extraPayload: {
+            paymentUrl,
+            amount: prepared.total,
+            provider: "yookassa"
+          }
+        });
+      }
+
+      return {
+        ok: true,
+        converted: prepared.converted,
+        paymentMethod: prepared.paymentMethod,
+        payment
       };
     } finally {
       await client.end();

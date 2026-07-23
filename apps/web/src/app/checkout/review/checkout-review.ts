@@ -143,9 +143,15 @@ export function availableWebCheckoutPaymentMethods(
   options: CheckoutPaymentOptions,
 ): WebCheckoutPaymentMethod[] {
   const methods: WebCheckoutPaymentMethod[] = [];
-  if (options.transfer || !options.online) methods.push("transfer_after_confirm");
-  if (options.cash) methods.push("cash_on_delivery");
+
+  // Онлайн-оплата должна быть основным сценарием, когда ЮKassa включена.
+  // Ручной перевод и оплата при получении остаются доступными как явный выбор.
   if (options.online) methods.push("online_card", "sbp");
+  if (options.transfer || (!options.online && !options.cash)) {
+    methods.push("transfer_after_confirm");
+  }
+  if (options.cash) methods.push("cash_on_delivery");
+
   return methods;
 }
 

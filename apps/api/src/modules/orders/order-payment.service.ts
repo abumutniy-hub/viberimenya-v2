@@ -1,4 +1,5 @@
 import type { createDb } from "@viberimenya/db";
+import { env } from "../../lib/env";
 import { HttpError } from "../../lib/http-error";
 import { recordPaymentEvent } from "../payments/payment-audit.service";
 
@@ -742,10 +743,118 @@ export async function markOrderPaid(
                   ${order.id}
                 AND existing_event.type =
                   'order_paid'
+                AND existing_event.channel =
+                  'telegram'
                 AND existing_event.recipient_type =
                   'customer'
             )
         `;
+
+
+        if (env.MAX_BOT_TOKEN) {
+          await transaction`
+          INSERT INTO notification_events (
+            shop_id,
+            order_id,
+            type,
+            channel,
+            recipient_type,
+            status,
+            payload,
+            created_at,
+            updated_at
+          )
+          SELECT
+            o.shop_id,
+            o.id,
+            'order_paid',
+            'max',
+            'customer',
+            'pending',
+            jsonb_build_object(
+              'orderId',
+                o.id,
+              'orderNumber',
+                o.order_number,
+              'status',
+                o.status::text,
+              'paymentStatus',
+                'paid',
+              'totalAmount',
+                o.total,
+              'bonusEarned',
+                CAST(
+                  ${earnedNow}
+                  AS integer
+                ),
+              'balanceAfter',
+                CAST(
+                  ${balanceAfter}
+                  AS integer
+                ),
+              'customerName',
+                c.name,
+              'customerPhone',
+                c.phone,
+              'recipientName',
+                o.recipient_name,
+              'recipientPhone',
+                o.recipient_phone,
+              'deliveryAddressText',
+                o.delivery_address_text,
+              'deliveryComment',
+                o.delivery_comment,
+              'bouquetPhotoUrl',
+                o.bouquet_photo_url,
+              'trackingToken',
+                o.tracking_token,
+              'trackingUrl',
+                CASE
+                  WHEN
+                    o.tracking_token
+                    IS NULL
+                    OR o.tracking_token
+                      = ''
+                  THEN NULL
+                  ELSE
+                    '/order/track/'
+                    || o.tracking_token
+                END
+            ),
+            NOW(),
+            NOW()
+          FROM orders o
+          JOIN shops s ON s.id = o.shop_id
+          LEFT JOIN customers c
+            ON c.id =
+              o.customer_id
+          WHERE o.shop_id =
+              ${params.shopId}
+            AND o.id =
+              ${order.id}
+            AND o.customer_id
+              IS NOT NULL
+            AND ${env.MAX_BOT_TOKEN !== ''}
+            AND LOWER(COALESCE(s.settings #>> '{features,maxEnabled}', 'false')) = 'true'
+            AND LOWER(COALESCE(s.settings #>> '{features,maxNotificationsEnabled}', 'false')) = 'true'
+            AND NOT EXISTS (
+              SELECT 1
+              FROM notification_events
+              existing_event
+              WHERE
+                existing_event.shop_id =
+                  ${params.shopId}
+                AND existing_event.order_id =
+                  ${order.id}
+                AND existing_event.type =
+                  'order_paid'
+                AND existing_event.channel =
+                  'max'
+                AND existing_event.recipient_type =
+                  'customer'
+            )
+          `;
+        }
       }
 
       const updatedRows =

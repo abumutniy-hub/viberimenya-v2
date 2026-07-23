@@ -543,6 +543,7 @@ export default async function AdminOrdersPage({ searchParams }: PageProps) {
                   orderId={String(row.id)}
                   status={String(row.status)}
                   paymentStatus={String(row.payment_status)}
+                  paymentMethod={String(row.payment_method || "")}
                   paymentUrl={String(row.payment_url || "")}
                   trackingToken={String(row.tracking_token || "")}
                   internalChatCount={Number(row.internal_chat_unread_count || 0)}
